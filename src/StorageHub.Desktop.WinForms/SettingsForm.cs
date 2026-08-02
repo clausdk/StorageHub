@@ -4,292 +4,225 @@ namespace StorageHub.Desktop;
 
 public sealed class SettingsForm : KryptonForm
 {
-    private readonly ListBox _categories;
-    private readonly TextBox _search;
-    private readonly Panel _content;
-    private readonly Label _categoryTitle;
-    private readonly Label _categorySummary;
+    private readonly DesktopUpdatePreferencesStore _store;
+    private readonly Action<DesktopUpdatePreferences>? _saved;
+    private readonly CheckBox _checkAutomatically;
+    private readonly CheckBox _downloadAutomatically;
+    private readonly CheckBox _restartAutomatically;
+    private readonly CheckBox _includePrereleases;
+    private readonly Button _apply;
 
     public SettingsForm()
+        : this(DesktopUpdatePreferencesStore.CreateDefault(), saved: null)
     {
+    }
+
+    internal SettingsForm(
+        DesktopUpdatePreferencesStore store,
+        Action<DesktopUpdatePreferences>? saved)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _saved = saved;
+
         Text = "Settings — StorageHub";
         AccessibleName = "StorageHub Settings";
-        AccessibleDescription = "Configure safe defaults for the desktop, providers, transfers, synchronization, and security.";
+        AccessibleDescription = "Configure automatic StorageHub updates.";
         StartPosition = FormStartPosition.CenterParent;
-        MinimumSize = new Size(900, 620);
-        Size = new Size(1060, 730);
+        MinimumSize = new Size(720, 520);
+        Size = new Size(820, 590);
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
 
-        _categories = new ListBox
-        {
-            Dock = DockStyle.Fill,
-            BorderStyle = BorderStyle.None,
-            IntegralHeight = false,
-            ItemHeight = 30,
-            AccessibleName = "Settings categories",
-            AccessibleDescription = "Choose a settings category."
-        };
-        _categories.Items.AddRange(SettingsPresentationCatalog.All.Cast<object>().ToArray());
-        _categories.SelectedIndexChanged += CategorySelected;
+        var preferences = _store.Load();
+        _checkAutomatically = CreateOption(
+            "Check GitHub for updates when StorageHub starts",
+            "Uses the fixed official StorageHub repository. Manual checks remain available when disabled.",
+            preferences.CheckAutomatically);
+        _downloadAutomatically = CreateOption(
+            "Download available updates automatically",
+            "Downloads the matching Velopack package silently after an automatic check.",
+            preferences.DownloadAutomatically);
+        _restartAutomatically = CreateOption(
+            "Install silently and restart automatically",
+            "Closes StorageHub after an integrity-checked download, applies the update, and reopens it. Disabled by default to avoid interrupting work.",
+            preferences.RestartAutomatically);
+        _includePrereleases = CreateOption(
+            "Include engineering preview releases",
+            "Keep enabled while using StorageHub preview builds. Disable it later to receive stable releases only.",
+            preferences.IncludePrereleases);
 
-        _search = new TextBox
+        _checkAutomatically.CheckedChanged += UpdateDependencies;
+        _downloadAutomatically.CheckedChanged += UpdateDependencies;
+        foreach (var option in new[]
+                 {
+                     _checkAutomatically,
+                     _downloadAutomatically,
+                     _restartAutomatically,
+                     _includePrereleases
+                 })
         {
-            Dock = DockStyle.Top,
-            PlaceholderText = "Search settings…",
-            AccessibleName = "Search settings"
-        };
-        _search.TextChanged += SearchTextChanged;
+            option.CheckedChanged += MarkDirty;
+        }
 
-        var leftHeader = new Panel { Dock = DockStyle.Top, Height = 76, Padding = new Padding(0, 0, 0, 10) };
-        var heading = UiControlFactory.CreateSectionTitle("Settings");
+        var heading = UiControlFactory.CreateSectionTitle("Updates");
         heading.Dock = DockStyle.Top;
-        _search.Dock = DockStyle.Bottom;
-        leftHeader.Controls.Add(_search);
-        leftHeader.Controls.Add(heading);
-
-        var left = new Panel
-        {
-            Dock = DockStyle.Fill,
-            Padding = new Padding(14),
-            BackColor = StorageHubTheme.Surface
-        };
-        left.Controls.Add(_categories);
-        left.Controls.Add(leftHeader);
-
-        _categoryTitle = new Label
+        heading.Height = 36;
+        var summary = new Label
         {
             Dock = DockStyle.Top,
-            Height = 34,
-            Font = StorageHubTheme.CreateSectionFont(),
-            ForeColor = StorageHubTheme.Text,
-            AccessibleName = "Selected settings category"
-        };
-        _categorySummary = new Label
-        {
-            Dock = DockStyle.Top,
-            Height = 38,
+            AutoSize = true,
+            MaximumSize = new Size(700, 0),
+            Text = "StorageHub checks the official GitHub release feed and uses the same package and lifecycle hooks as the verified installer pipeline.",
             ForeColor = StorageHubTheme.TextMuted,
-            AccessibleName = "Settings category summary"
+            Padding = new Padding(0, 0, 0, 12)
         };
-        _content = new Panel
+        var source = new Label
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            Text = $"Update source: {VelopackDesktopUpdateEngineFactory.TrustedRepositoryUrl}\nInstalled version: {DesktopApplicationVersion.Current}",
+            ForeColor = StorageHubTheme.TextMuted,
+            Padding = new Padding(0, 12, 0, 0),
+            AccessibleName = "Update source and installed version"
+        };
+
+        var options = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            BackColor = StorageHubTheme.Surface,
+            Padding = new Padding(0, 8, 0, 0)
+        };
+        options.Controls.Add(_checkAutomatically);
+        options.Controls.Add(_downloadAutomatically);
+        options.Controls.Add(_restartAutomatically);
+        options.Controls.Add(_includePrereleases);
+        options.Controls.Add(source);
+
+        var content = new Panel
         {
             Dock = DockStyle.Fill,
             AutoScroll = true,
             BackColor = StorageHubTheme.Surface,
-            AccessibleName = "Settings values"
+            Padding = new Padding(28, 24, 28, 18)
         };
+        content.Controls.Add(options);
+        content.Controls.Add(summary);
+        content.Controls.Add(heading);
 
-        var rightHeader = new Panel
+        var footer = new FlowLayoutPanel
         {
-            Dock = DockStyle.Top,
-            Height = 90,
-            Padding = new Padding(18, 14, 18, 4),
+            Dock = DockStyle.Bottom,
+            Height = 58,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(12, 9, 12, 8),
             BackColor = StorageHubTheme.Surface
         };
-        rightHeader.Controls.Add(_categorySummary);
-        rightHeader.Controls.Add(_categoryTitle);
+        var ok = new Button { Text = "OK" };
+        StorageHubTheme.StylePrimaryButton(ok);
+        ok.Click += SaveAndClose;
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel };
+        StorageHubTheme.StyleSecondaryButton(cancel);
+        _apply = new Button { Text = "Apply", Enabled = false };
+        StorageHubTheme.StyleSecondaryButton(_apply);
+        _apply.Click += SaveWithoutClosing;
+        footer.Controls.Add(ok);
+        footer.Controls.Add(cancel);
+        footer.Controls.Add(_apply);
 
-        var right = new Panel { Dock = DockStyle.Fill, BackColor = StorageHubTheme.Surface };
-        right.Controls.Add(_content);
-        right.Controls.Add(rightHeader);
-
-        var split = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            Size = new Size(950, 600),
-            SplitterDistance = 260,
-            FixedPanel = FixedPanel.Panel1,
-            Panel1MinSize = 210,
-            Panel2MinSize = 500,
-            BackColor = StorageHubTheme.Border,
-            AccessibleName = "Settings navigation and values"
-        };
-        split.Panel1.Padding = new Padding(0, 0, 3, 0);
-        split.Panel2.Padding = new Padding(3, 0, 0, 0);
-        split.Panel1.Controls.Add(left);
-        split.Panel2.Controls.Add(right);
-
-        var footer = BuildFooter();
-        Controls.Add(split);
+        Controls.Add(content);
         Controls.Add(footer);
-        _categories.SelectedIndex = 0;
+        AcceptButton = ok;
+        CancelButton = cancel;
+        UpdateDependencies(this, EventArgs.Empty);
     }
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
-            _categories.SelectedIndexChanged -= CategorySelected;
-            _search.TextChanged -= SearchTextChanged;
+            _checkAutomatically.CheckedChanged -= UpdateDependencies;
+            _downloadAutomatically.CheckedChanged -= UpdateDependencies;
+            foreach (var option in new[]
+                     {
+                         _checkAutomatically,
+                         _downloadAutomatically,
+                         _restartAutomatically,
+                         _includePrereleases
+                     })
+            {
+                option.CheckedChanged -= MarkDirty;
+            }
         }
 
         base.Dispose(disposing);
     }
 
-    private TableLayoutPanel BuildFooter()
-    {
-        var footer = new TableLayoutPanel
+    private static CheckBox CreateOption(string text, string description, bool isChecked) =>
+        new()
         {
-            Dock = DockStyle.Bottom,
-            Height = 58,
-            ColumnCount = 2,
-            Padding = new Padding(12, 8, 12, 8),
-            BackColor = StorageHubTheme.Surface
-        };
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var safety = new Label
-        {
-            Text = "Security-sensitive changes take effect in the background agent after Apply.",
+            Text = text,
+            Checked = isChecked,
             AutoSize = true,
-            ForeColor = StorageHubTheme.TextMuted,
-            Padding = new Padding(5, 9, 5, 0)
+            MaximumSize = new Size(700, 0),
+            Margin = new Padding(0, 8, 0, 8),
+            AccessibleName = text,
+            AccessibleDescription = description
         };
-        footer.Controls.Add(safety, 0, 0);
 
-        var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        var reset = new Button { Text = "Reset category" };
-        StorageHubTheme.StyleSecondaryButton(reset);
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel };
-        StorageHubTheme.StyleSecondaryButton(cancel);
-        var apply = new Button { Text = "Apply" };
-        StorageHubTheme.StyleSecondaryButton(apply);
-        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK };
-        StorageHubTheme.StylePrimaryButton(ok);
-        buttons.Controls.Add(reset);
-        buttons.Controls.Add(cancel);
-        buttons.Controls.Add(apply);
-        buttons.Controls.Add(ok);
-        footer.Controls.Add(buttons, 1, 0);
-        AcceptButton = ok;
-        CancelButton = cancel;
-        return footer;
+    private void UpdateDependencies(object? sender, EventArgs e)
+    {
+        _downloadAutomatically.Enabled = _checkAutomatically.Checked;
+        _restartAutomatically.Enabled =
+            _checkAutomatically.Checked && _downloadAutomatically.Checked;
     }
 
-    private void CategorySelected(object? sender, EventArgs e)
+    private void MarkDirty(object? sender, EventArgs e) => _apply.Enabled = true;
+
+    private void SaveAndClose(object? sender, EventArgs e)
     {
-        if (_categories.SelectedItem is SettingsCategoryDescriptor category)
+        if (TrySave())
         {
-            ShowCategory(category);
+            DialogResult = DialogResult.OK;
+            Close();
         }
     }
 
-    private void SearchTextChanged(object? sender, EventArgs e)
-    {
-        var query = _search.Text.Trim();
-        var filtered = string.IsNullOrEmpty(query)
-            ? SettingsPresentationCatalog.All
-            : SettingsPresentationCatalog.All.Where(category =>
-                    category.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-                    category.Summary.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-                    category.Settings.Any(setting =>
-                        setting.Label.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-                        setting.Description.Contains(query, StringComparison.CurrentCultureIgnoreCase)))
-                .ToArray();
+    private void SaveWithoutClosing(object? sender, EventArgs e) => _ = TrySave();
 
-        _categories.BeginUpdate();
+    private bool TrySave()
+    {
         try
         {
-            _categories.Items.Clear();
-            _categories.Items.AddRange(filtered.Cast<object>().ToArray());
-            if (_categories.Items.Count > 0)
+            var preferences = new DesktopUpdatePreferences(
+                _checkAutomatically.Checked,
+                _downloadAutomatically.Checked,
+                _restartAutomatically.Checked,
+                _includePrereleases.Checked);
+            if (_saved is null)
             {
-                _categories.SelectedIndex = 0;
+                _store.Save(preferences);
             }
             else
             {
-                ShowNoResults();
+                _saved(preferences);
             }
+            _apply.Enabled = false;
+            return true;
         }
-        finally
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            _categories.EndUpdate();
-        }
-    }
-
-    private void ShowCategory(SettingsCategoryDescriptor category)
-    {
-        _categoryTitle.Text = category.Name;
-        _categorySummary.Text = category.Summary;
-        DisposeChildren(_content);
-
-        var table = new TableLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 2,
-            Padding = new Padding(18, 4, 18, 18),
-            BackColor = StorageHubTheme.Surface
-        };
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 225));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        foreach (var setting in category.Settings)
-        {
-            UiControlFactory.AddLabeledRow(table, setting.Label, CreateSettingControl(setting), setting.Description);
-        }
-
-        _content.Controls.Add(table);
-    }
-
-    private void ShowNoResults()
-    {
-        _categoryTitle.Text = "No matching settings";
-        _categorySummary.Text = "Try a provider, transfer, sync, security, or interface term.";
-        DisposeChildren(_content);
-        _content.Controls.Add(new Label
-        {
-            Text = "No settings match this search.",
-            Dock = DockStyle.Top,
-            Height = 48,
-            Padding = new Padding(22, 14, 22, 8),
-            ForeColor = StorageHubTheme.TextMuted
-        });
-    }
-
-    private static Control CreateSettingControl(SettingDescriptor setting)
-    {
-        return setting.Kind switch
-        {
-            ConnectionFieldKind.Toggle => new CheckBox
-            {
-                Text = bool.TryParse(setting.DefaultValue, out var enabled) && enabled ? "Enabled" : "Disabled",
-                Checked = enabled,
-                AutoSize = true
-            },
-            ConnectionFieldKind.Number => new NumericUpDown
-            {
-                Minimum = 0,
-                Maximum = 100000,
-                Value = decimal.TryParse(setting.DefaultValue, out var number) ? number : 0,
-                Width = 140
-            },
-            ConnectionFieldKind.Choice => CreateChoice(setting),
-            _ => new TextBox { Text = setting.DefaultValue }
-        };
-    }
-
-    private static ComboBox CreateChoice(SettingDescriptor setting)
-    {
-        var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
-        combo.Items.AddRange(setting.Choices?.Cast<object>().ToArray() ?? []);
-        if (combo.Items.Count > 0)
-        {
-            var index = combo.FindStringExact(setting.DefaultValue);
-            combo.SelectedIndex = index >= 0 ? index : 0;
-        }
-
-        return combo;
-    }
-
-    private static void DisposeChildren(Control parent)
-    {
-        var children = parent.Controls.Cast<Control>().ToArray();
-        parent.Controls.Clear();
-        foreach (var child in children)
-        {
-            child.Dispose();
+            _ = MessageBox.Show(
+                this,
+                "StorageHub could not save update settings. Your previous settings are unchanged.",
+                "Settings",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return false;
         }
     }
 }

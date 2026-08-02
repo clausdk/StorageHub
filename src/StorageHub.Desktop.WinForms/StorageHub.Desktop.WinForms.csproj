@@ -19,4 +19,8 @@
     <ProjectReference Include="..\StorageHub.Agent\StorageHub.Agent.csproj" />
     <ProjectReference Include="..\StorageHub.Contracts\StorageHub.Contracts.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="StorageHub.Desktop.Tests" />
+  </ItemGroup>
 </Project>

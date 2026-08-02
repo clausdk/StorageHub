@@ -14,15 +14,33 @@ public sealed class MainForm : KryptonForm
     private readonly ToolStripStatusLabel _speedStatus = new();
     private readonly ToolStripStatusLabel _queueStatus = new();
     private readonly ToolStripStatusLabel _agentStatus = new() { AccessibleName = "Agent status" };
+    private readonly ToolStripStatusLabel _updateStatus = new()
+    {
+        AccessibleName = "Update status",
+        IsLink = true,
+        ToolTipText = "Check for StorageHub updates"
+    };
+    private readonly DesktopUpdatePreferencesStore _updatePreferencesStore;
+    private readonly DesktopUpdater _updater;
     private readonly TabControl _workspaceTabs;
     private readonly TransferQueueControl _transferQueue;
     private ShellStatusSnapshot _status = ShellStatusSnapshot.Initial;
     private BrowserPaneControl? _activePane;
     private bool _changingWorkspaceTabs;
     private bool _monitorStarted;
+    private bool _updaterStarted;
 
     public MainForm()
+        : this(DesktopUpdatePreferencesStore.CreateDefault())
     {
+    }
+
+    internal MainForm(
+        DesktopUpdatePreferencesStore updatePreferencesStore,
+        IDesktopUpdateEngineFactory? updateEngineFactory = null)
+    {
+        _updatePreferencesStore = updatePreferencesStore;
+        _updater = new DesktopUpdater(updatePreferencesStore, updateEngineFactory);
         Text = "StorageHub";
         AccessibleName = "StorageHub file manager";
         AccessibleDescription = "A secure dual-pane file manager for local and remote storage.";
@@ -82,6 +100,10 @@ public sealed class MainForm : KryptonForm
 
         ApplyStatus(_status);
         _agentMonitor.StatusChanged += AgentMonitorStatusChanged;
+        _updater.StatusChanged += UpdaterStatusChanged;
+        _updater.RestartRequested += UpdaterRestartRequested;
+        _updateStatus.Click += UpdateStatusClicked;
+        ApplyUpdateStatus(_updater.Snapshot);
     }
 
     protected override void OnShown(EventArgs e)
@@ -91,6 +113,12 @@ public sealed class MainForm : KryptonForm
         {
             _monitorStarted = true;
             _agentMonitor.Start();
+        }
+
+        if (!_updaterStarted)
+        {
+            _updaterStarted = true;
+            _ = RunAutomaticUpdaterAsync();
         }
     }
 
@@ -104,6 +132,10 @@ public sealed class MainForm : KryptonForm
             _workspaceTabs.DrawItem -= WorkspaceTabsDrawItem;
             _workspaceTabs.MouseDown -= WorkspaceTabsMouseDown;
             _agentMonitor.StatusChanged -= AgentMonitorStatusChanged;
+            _updater.StatusChanged -= UpdaterStatusChanged;
+            _updater.RestartRequested -= UpdaterRestartRequested;
+            _updateStatus.Click -= UpdateStatusClicked;
+            _updater.Dispose();
             _agentMonitor.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _manualTransfers.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _lifetime.Dispose();
@@ -218,6 +250,8 @@ public sealed class MainForm : KryptonForm
         status.Items.Add(_queueStatus);
         status.Items.Add(new ToolStripSeparator());
         status.Items.Add(_agentStatus);
+        status.Items.Add(new ToolStripSeparator());
+        status.Items.Add(_updateStatus);
         return status;
     }
 
@@ -280,7 +314,7 @@ public sealed class MainForm : KryptonForm
 
     private void WireCommand(ToolStripMenuItem item, string command)
     {
-        item.Click += (_, _) =>
+        item.Click += async (_, _) =>
         {
             switch (command)
             {
@@ -333,6 +367,17 @@ public sealed class MainForm : KryptonForm
                     {
                         _ = dialog.ShowDialog(this);
                     }
+                    break;
+                case "Settings...":
+                    using (var dialog = new SettingsForm(
+                               _updatePreferencesStore,
+                               _updater.SavePreferences))
+                    {
+                        _ = dialog.ShowDialog(this);
+                    }
+                    break;
+                case "Check for Updates...":
+                    await CheckForUpdatesManuallyAsync();
                     break;
                 case "About StorageHub":
                     _ = MessageBox.Show(
@@ -524,6 +569,8 @@ public sealed class MainForm : KryptonForm
         "Preview Sync..." or
         "Sync Profiles..." or
         "Schedules..." or
+        "Settings..." or
+        "Check for Updates..." or
         "About StorageHub";
 
     private enum PaneNavigation
@@ -797,6 +844,175 @@ public sealed class MainForm : KryptonForm
         {
             // The window handle can disappear between the guard and BeginInvoke during shutdown.
         }
+    }
+
+    private async Task RunAutomaticUpdaterAsync()
+    {
+        try
+        {
+            await _updater.RunAutomaticAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Window shutdown or an update-settings opt-out cancels background update work.
+        }
+    }
+
+    private async void UpdateStatusClicked(object? sender, EventArgs e) =>
+        await CheckForUpdatesManuallyAsync();
+
+    private async Task CheckForUpdatesManuallyAsync()
+    {
+        if (_updater.Snapshot.State == DesktopUpdateState.ReadyToRestart)
+        {
+            PromptToRestartForUpdate(_updater.Snapshot.Version);
+            return;
+        }
+
+        DesktopUpdateSnapshot snapshot;
+        try
+        {
+            snapshot = await _updater.CheckForUpdatesAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            return;
+        }
+
+        switch (snapshot.State)
+        {
+            case DesktopUpdateState.UpdateAvailable:
+                var download = MessageBox.Show(
+                    this,
+                    $"StorageHub {snapshot.Version} is available. Download it now?",
+                    "StorageHub update",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information);
+                if (download != DialogResult.Yes)
+                {
+                    return;
+                }
+
+                try
+                {
+                    snapshot = await _updater.DownloadAvailableAsync(_lifetime.Token);
+                }
+                catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (snapshot.State == DesktopUpdateState.ReadyToRestart)
+                {
+                    PromptToRestartForUpdate(snapshot.Version);
+                }
+                else if (snapshot.State == DesktopUpdateState.Failed)
+                {
+                    ShowUpdateMessage(snapshot.Message, MessageBoxIcon.Warning);
+                }
+
+                break;
+            case DesktopUpdateState.UpToDate:
+                ShowUpdateMessage("You already have the newest release available on your selected channel.", MessageBoxIcon.Information);
+                break;
+            case DesktopUpdateState.Unavailable:
+                ShowUpdateMessage(
+                    "Automatic updates are available only in an installed StorageHub build. Portable and developer builds are never modified.",
+                    MessageBoxIcon.Information);
+                break;
+            case DesktopUpdateState.Failed:
+                ShowUpdateMessage(snapshot.Message, MessageBoxIcon.Warning);
+                break;
+        }
+    }
+
+    private void PromptToRestartForUpdate(string? version)
+    {
+        var restart = MessageBox.Show(
+            this,
+            $"StorageHub {version ?? "update"} is downloaded and integrity-checked. Restart now to install it silently?\n\nDurable queued work is preserved.",
+            "StorageHub update ready",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Information);
+        if (restart == DialogResult.Yes && !_updater.ApplyAndRestart())
+        {
+            ShowUpdateMessage("StorageHub could not start the updater. Try again after reopening the application.", MessageBoxIcon.Warning);
+        }
+    }
+
+    private void ShowUpdateMessage(string message, MessageBoxIcon icon) =>
+        _ = MessageBox.Show(
+            this,
+            message,
+            "StorageHub updates",
+            MessageBoxButtons.OK,
+            icon);
+
+    private void UpdaterStatusChanged(object? sender, DesktopUpdateSnapshot snapshot)
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        if (!InvokeRequired)
+        {
+            ApplyUpdateStatus(snapshot);
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(new Action(() =>
+            {
+                if (!IsDisposed && !Disposing)
+                {
+                    ApplyUpdateStatus(snapshot);
+                }
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+            // The window handle can disappear between the guard and BeginInvoke during shutdown.
+        }
+    }
+
+    private void UpdaterRestartRequested(object? sender, EventArgs e)
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            try
+            {
+                BeginInvoke(new Action(Close));
+            }
+            catch (InvalidOperationException)
+            {
+                // The updater has already been staged; normal process shutdown will release it.
+            }
+
+            return;
+        }
+
+        Close();
+    }
+
+    private void ApplyUpdateStatus(DesktopUpdateSnapshot snapshot)
+    {
+        _updateStatus.Text = snapshot.Message;
+        _updateStatus.AccessibleDescription = snapshot.Message;
+        _updateStatus.ForeColor = snapshot.State switch
+        {
+            DesktopUpdateState.ReadyToRestart => StorageHubTheme.Success,
+            DesktopUpdateState.Installing => StorageHubTheme.Success,
+            DesktopUpdateState.UpdateAvailable => StorageHubTheme.Warning,
+            DesktopUpdateState.Failed => StorageHubTheme.Danger,
+            _ => StorageHubTheme.TextMuted
+        };
     }
 
     private void ApplyStatus(ShellStatusSnapshot status)

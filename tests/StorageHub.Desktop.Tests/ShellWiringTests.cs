@@ -50,8 +50,9 @@ public sealed class ShellWiringTests
             Assert.Contains("Connection Manager...", labels);
             Assert.Contains("Refresh", labels);
             Assert.Contains("Select All", labels);
+            Assert.Contains("Settings...", labels);
+            Assert.Contains("Check for Updates...", labels);
             Assert.DoesNotContain("Quick Connect...", labels);
-            Assert.DoesNotContain("Settings...", labels);
             Assert.DoesNotContain("Start Queue", labels);
             Assert.DoesNotContain("Pause All", labels);
             Assert.DoesNotContain("Compare Panes", labels);

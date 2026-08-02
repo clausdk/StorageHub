@@ -19,6 +19,18 @@ unelevated. It must not install the Agent as a Windows service because StorageHu
 secrets, instance ownership, and named pipes are scoped to the signed-in Windows
 user.
 
+Installed builds use Velopack's GitHub source against the fixed public repository
+`https://github.com/clausdk/StorageHub`, retain their packaged channel, reject
+downgrades, and can silently download and apply the exact package described by
+the release feed. Portable and developer builds fail closed without checking or
+modifying an installation. Automatic checks/downloads, preview inclusion, and
+automatic restart are persisted per user; automatic restart is opt-in. Because
+Velopack's framework-level apply-on-startup default is explicitly disabled, a
+pending download cannot bypass those persisted StorageHub preferences. Because
+preview packages are not yet Authenticode-signed, feed/package checksum
+verification provides integrity but is not a substitute for the production
+signing release gate.
+
 Uninstall removes program files and autostart registration but deliberately
 preserves `%LOCALAPPDATA%\StorageHub`. Deleting durable state, connection
 profiles, trust decisions, schedules, or the encrypted vault requires a separate

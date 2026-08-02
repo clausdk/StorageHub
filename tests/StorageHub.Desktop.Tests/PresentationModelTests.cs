@@ -125,25 +125,6 @@ public sealed class PresentationModelTests
     }
 
     [Fact]
-    public void SettingsCatalogCoversProvidersOperationsAndSecurity()
-    {
-        var names = SettingsPresentationCatalog.All.Select(category => category.Name).ToArray();
-
-        Assert.Contains("FTP / FTPS", names);
-        Assert.Contains("SFTP / SSH", names);
-        Assert.Contains("S3 / Object Storage", names);
-        Assert.Contains("Transfers", names);
-        Assert.Contains("Sync", names);
-        Assert.Contains("Scheduling", names);
-        Assert.Contains("Security", names);
-
-        var sync = SettingsPresentationCatalog.All.Single(category => category.Name == "Sync");
-        Assert.Equal("false", sync.Settings.Single(setting => setting.Key == "deletePropagation").DefaultValue);
-        var security = SettingsPresentationCatalog.All.Single(category => category.Name == "Security");
-        Assert.Equal("true", security.Settings.Single(setting => setting.Key == "diagnosticRedaction").DefaultValue);
-    }
-
-    [Fact]
     public void AgentMonitorUsesBoundedNonBlockingDefaults()
     {
         Assert.Equal(StorageHubIpcPipeNames.Normal, AgentStatusMonitor.DefaultPipeName);

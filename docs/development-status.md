@@ -17,8 +17,8 @@ tested foundations from UI concepts and planned production integration.
 | Sync | Three-way classifier, conflict categories, deletion guards, immutable digest-schema-v3 plans, durable profiles/baselines/plans/runs/conflicts, preview/apply orchestration, execution fencing, leased outbox worker, and desktop management |
 | Scheduling | Cron/time-zone/DST calculation, misfire decisions, SQLite optimistic revisions, profile-scoped fenced leases, post-lock authoritative timing, bounded renewal, idempotent/stale-completion handling, queue-one behavior, preview-only durable dispatch, management IPC, and desktop editor |
 | Agent | Guarded reparse-free/current-user-only data tree, one process per Windows user, real database/vault startup, protected CodeLogic discovery, transfer/sync/scheduler workers, health reporting, bounded normal and secret-only current-user pipes, browse/test/profile/trust/queue/sync/schedule/read-only-object-inspector commands, sanitized vault enrollment/rotation/deletion, and profile-bound trust enrollment/rejection/rollover |
-| Desktop | Dual-pane workspace tabs with direct close controls, active-pane navigation/history/bounded paging, saved-connection file copy/move enqueue, durable queue/sync/schedule surfaces, read-only versions/metadata/tags inspector, protocol-aware Connection Manager with saved profiles only, verified certificate/host-key enrollment, rejection, and rollover, explicit vault enrollment actions, and agent status polling; actions without an implemented controller or persistence path remain hidden |
-| Packaging | Self-contained win-x64 desktop/agent payload, per-user Velopack Setup and MSI, portable archive, graceful agent lifecycle, checksums, provenance attestation, disposable-runner smoke test, and prerelease publication after every successful main push |
+| Desktop | Dual-pane workspace tabs with direct close controls, active-pane navigation/history/bounded paging, saved-connection file copy/move enqueue, durable queue/sync/schedule surfaces, read-only versions/metadata/tags inspector, protocol-aware Connection Manager with saved profiles only, verified certificate/host-key enrollment, rejection, and rollover, explicit vault enrollment actions, agent status polling, and persisted automatic-update controls; actions without an implemented controller or persistence path remain hidden |
+| Packaging | Self-contained win-x64 desktop/agent payload, per-user Velopack Setup and MSI, portable archive, graceful agent lifecycle, fixed-source GitHub release checking, integrity-checked silent update/restart, checksums, provenance attestation, disposable-runner smoke test, and prerelease publication after every successful main push |
 | Diagnostics | Safe artifact manifest policy that excludes secret and durable-state files |
 
 The automated suite includes unit and contract coverage, local-browser and
@@ -46,10 +46,10 @@ or Connection Manager toolbar action to have a real handler.
 1. Extend pane transfers from saved-connection files to safely enumerated
    directories and deliberately modeled local/ad-hoc sources. Existing local
    destinations without an atomic version/ETag condition remain create-only.
-2. Add persisted settings and a bounded temporary-session contract before
-   restoring Settings or Quick Connect. Import/export, rename, pane comparison,
-   and global queue controls likewise remain hidden until their real command
-   paths and failure handling exist.
+2. Expand persisted settings beyond the implemented updater preferences and add
+   a bounded temporary-session contract before restoring Quick Connect.
+   Import/export, rename, pane comparison, and global queue controls likewise
+   remain hidden until their real command paths and failure handling exist.
 3. Add per-connection health snapshots and bounded session leasing. Aggregate
    CodeLogic health intentionally reports CL.Storage's disabled configuration
    bootstrap and is not a substitute for provider health.

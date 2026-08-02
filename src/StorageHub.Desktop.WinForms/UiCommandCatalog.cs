@@ -34,7 +34,7 @@ public static class UiCommandCatalog
             ["Transfer"] = ["Enqueue", "Start Queue", "Pause All", "Resume All", "Cancel Selected", "Speed Limits..."],
             ["Sync"] = ["Compare Panes", "Preview Sync...", "Run Sync", "Sync Profiles...", "Schedules..."],
             ["Tools"] = ["Search...", "Checksums...", "Settings...", "Logs...", "Diagnostics..."],
-            ["Help"] = ["Keyboard Shortcuts", "Documentation", "Report Issue", "About StorageHub"]
+            ["Help"] = ["Check for Updates...", "Keyboard Shortcuts", "Documentation", "Report Issue", "About StorageHub"]
         };
 
     private static readonly IReadOnlyDictionary<string, (Keys Shortcut, UiGlyph? Glyph, string Description)> Metadata =
@@ -61,7 +61,8 @@ public static class UiCommandCatalog
             ["Preview Sync..."] = (Keys.Control | Keys.Shift | Keys.P, UiGlyph.Compare, "Generate a reviewable sync plan without applying changes."),
             ["Schedules..."] = (Keys.Control | Keys.Shift | Keys.S, UiGlyph.Run, "Manage durable preview-only synchronization schedules."),
             ["Search..."] = (Keys.Control | Keys.F, UiGlyph.Search, "Search within the focused endpoint."),
-            ["Settings..."] = (Keys.Control | Keys.Oemcomma, null, "Configure StorageHub desktop and agent defaults.")
+            ["Settings..."] = (Keys.Control | Keys.Oemcomma, null, "Configure automatic StorageHub updates."),
+            ["Check for Updates..."] = (Keys.None, null, "Check the official StorageHub GitHub releases for an update.")
         };
 
     private static readonly IReadOnlyList<UiCommandDefinition> CommandDefinitions = BuildDefinitions();

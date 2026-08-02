@@ -87,6 +87,12 @@ public sealed class PackagedDesktopLifecycleTests
             fixture.AgentClient.ShutdownReasons);
     }
 
+    [Fact]
+    public void VelopackBootstrapDisablesFrameworkAutoApplySoUpdaterPreferencesRemainAuthoritative()
+    {
+        Assert.False(VelopackDesktopBootstrap.AutoApplyOnStartup);
+    }
+
     [Theory]
     [InlineData("--agent-only")]
     [InlineData("--AGENT-ONLY")]

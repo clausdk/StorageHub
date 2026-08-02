@@ -38,6 +38,13 @@ the Release build, full test suite, dependency audit, packaging, silent install,
 agent health, and silent uninstall checks pass. A failed check produces no
 release.
 
+Installed builds check the official StorageHub GitHub release feed at startup
+and silently download integrity-checked updates by default. Settings can disable
+automatic checks or downloads, exclude preview releases, or opt into silent
+install-and-restart. Manual **Help > Check for Updates...** remains available
+when automatic checks are disabled. Portable and developer builds never modify
+an installation.
+
 ## What is implemented
 
 - A root-safe storage model with strong identifiers, normalized relative paths,
@@ -104,9 +111,10 @@ release.
   enforces one agent per Windows user and verifies current-user-only ACLs
   throughout its reparse-free data tree.
 - A self-contained, per-user Windows distribution with coordinated desktop and
-  background-agent startup, graceful update/uninstall shutdown, portable and
-  installer artifacts, checksums, provenance attestation, and disposable-runner
-  install/uninstall smoke tests.
+  background-agent startup, fixed-source GitHub release checks, persisted updater
+  controls, integrity-checked silent update/restart, graceful update/uninstall
+  shutdown, portable and installer artifacts, checksums, provenance attestation,
+  and disposable-runner install/uninstall smoke tests.
 - A modern high-DPI WinForms/Krypton shell with top menus, dual browser panes,
   functional asynchronous local and remote browsing with history, filtering and
   bounded paging, saved-pane file transfer actions, durable queue/sync/schedule
