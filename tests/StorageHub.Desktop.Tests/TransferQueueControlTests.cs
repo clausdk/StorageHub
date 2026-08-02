@@ -8,40 +8,27 @@ public sealed class TransferQueueControlTests
     [Fact]
     public void Control_stays_inert_until_shown_and_renders_an_explicit_refresh()
     {
-        Exception? failure = null;
-        var thread = new Thread(() =>
+        SyncRunReviewControlTests.RunOnSta(() =>
         {
-            try
-            {
-                var client = new FakeQueueClient();
-                using var form = new Form();
-                using var control = new TransferQueueControl(client);
-                form.Controls.Add(control);
-                _ = form.Handle;
-                _ = control.Handle;
-                System.Windows.Forms.Application.DoEvents();
-                Assert.Equal(0, client.ListCount);
+            var client = new FakeQueueClient();
+            using var form = new Form();
+            using var control = new TransferQueueControl(client);
+            form.Controls.Add(control);
+            _ = form.Handle;
+            _ = control.Handle;
+            System.Windows.Forms.Application.DoEvents();
+            Assert.Equal(0, client.ListCount);
 
-                control.RefreshQueueAsync().GetAwaiter().GetResult();
+            control.RefreshQueueAsync().GetAwaiter().GetResult();
 
-                var tabs = Assert.Single(control.Controls.OfType<TabControl>());
-                Assert.Equal(8, tabs.TabPages.Count);
-                var grid = Assert.Single(tabs.SelectedTab!.Controls.OfType<DataGridView>());
-                Assert.Single(grid.Rows.Cast<DataGridViewRow>());
-                Assert.Equal(1, client.ListCount);
-                Assert.Contains(TransferQueueState.Preparing, client.LastStates!);
-                Assert.Contains(TransferQueueState.Transferring, client.LastStates!);
-            }
-            catch (Exception error)
-            {
-                failure = error;
-            }
+            var tabs = Assert.Single(control.Controls.OfType<TabControl>());
+            Assert.Equal(8, tabs.TabPages.Count);
+            var grid = Assert.Single(tabs.SelectedTab!.Controls.OfType<DataGridView>());
+            Assert.Single(grid.Rows.Cast<DataGridViewRow>());
+            Assert.Equal(1, client.ListCount);
+            Assert.Contains(TransferQueueState.Preparing, client.LastStates!);
+            Assert.Contains(TransferQueueState.Transferring, client.LastStates!);
         });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "The queue control check timed out.");
-        Assert.Null(failure);
     }
 
     private sealed class FakeQueueClient : ITransferQueueAgentClient

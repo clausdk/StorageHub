@@ -14,6 +14,7 @@ public sealed class NamedPipeIpcClient : IAsyncDisposable
     private HelloResponse? _serverHello;
     private long _lastReceivedSequence;
     private long _lastSentSequence;
+    private int _lastConnectionAttemptCount;
     private bool _disposed;
 
     public NamedPipeIpcClient(NamedPipeIpcClientOptions options)
@@ -27,7 +28,7 @@ public sealed class NamedPipeIpcClient : IAsyncDisposable
 
     public static bool UsesCurrentUserOnlySecurity => OperatingSystem.IsWindows();
 
-    public int LastConnectionAttemptCount { get; private set; }
+    public int LastConnectionAttemptCount => Volatile.Read(ref _lastConnectionAttemptCount);
 
     public HelloResponse? ServerHello => _serverHello;
 
@@ -254,12 +255,12 @@ public sealed class NamedPipeIpcClient : IAsyncDisposable
     {
         Exception? finalTransientError = null;
         var reconnectDelay = _options.InitialReconnectDelay;
-        LastConnectionAttemptCount = 0;
+        Volatile.Write(ref _lastConnectionAttemptCount, 0);
 
         for (var attempt = 1; attempt <= _options.MaxConnectAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            LastConnectionAttemptCount = attempt;
+            Volatile.Write(ref _lastConnectionAttemptCount, attempt);
             var candidate = CreateClientStream();
             using var attemptCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             attemptCancellation.CancelAfter(_options.ConnectTimeout);

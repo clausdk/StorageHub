@@ -182,14 +182,16 @@ public sealed class NamedPipeIpcTests
             static (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
         await using var client = new NamedPipeIpcClient(CreateClientOptions(options.PipeName) with
         {
-            ConnectTimeout = TimeSpan.FromMilliseconds(40),
-            InitialReconnectDelay = TimeSpan.FromMilliseconds(10),
-            MaximumReconnectDelay = TimeSpan.FromMilliseconds(20),
-            MaxConnectAttempts = 20
+            ConnectTimeout = TimeSpan.FromMilliseconds(250),
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(50),
+            MaximumReconnectDelay = TimeSpan.FromMilliseconds(100),
+            MaxConnectAttempts = 100
         });
 
         var connecting = client.ConnectAsync();
-        await Task.Delay(100);
+        await WaitUntilAsync(
+            () => client.LastConnectionAttemptCount >= 2,
+            TimeSpan.FromSeconds(10));
         await StartAsync(server);
         var hello = await connecting;
 
