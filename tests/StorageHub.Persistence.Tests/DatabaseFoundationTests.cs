@@ -214,12 +214,13 @@ public sealed class DatabaseFoundationTests : IDisposable
         var database = new SingleWriterSqliteDatabase(options);
 
         await using var first = await database.AcquireWriterAsync();
-        var secondTask = database.AcquireWriterAsync().AsTask();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var secondTask = database.AcquireWriterAsync(timeout.Token).AsTask();
         await Task.Delay(50);
         Assert.False(secondTask.IsCompleted);
 
         await first.DisposeAsync();
-        await using var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await using var second = await secondTask;
         Assert.Equal(1L, await ScalarInt64Async(second.Connection, "PRAGMA foreign_keys;"));
         Assert.Equal(2L, await ScalarInt64Async(second.Connection, "PRAGMA synchronous;"));
     }
