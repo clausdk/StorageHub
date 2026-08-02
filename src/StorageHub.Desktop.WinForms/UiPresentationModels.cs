@@ -245,13 +245,17 @@ public sealed record ConnectionCardModel(
     bool IsFavorite = false,
     Guid? ConnectionId = null,
     bool IsEnabled = true,
-    string? AccentColor = null)
+    string? AccentColor = null,
+    string? FolderPath = null,
+    string[]? Tags = null)
 {
     public ConnectionProviderDescriptor Descriptor => ConnectionProviderCatalog.Get(Provider);
 
     public string AccentHex => string.IsNullOrWhiteSpace(AccentColor)
         ? Descriptor.AccentHex
         : AccentColor;
+
+    public IReadOnlyList<string> DisplayTags => Tags ?? [];
 
     public override string ToString() => Name;
 }

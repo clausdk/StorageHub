@@ -18,6 +18,8 @@ public static class ConnectionTrustIpcMessageTypes
     public const string DecideResponse = "connection.trust.decide.response";
     public const string RolloverRequest = "connection.trust.rollover.request";
     public const string RolloverResponse = "connection.trust.rollover.response";
+    public const string DiscoverSshHostKeyRequest = "connection.trust.ssh-host-key.discover.request";
+    public const string DiscoverSshHostKeyResponse = "connection.trust.ssh-host-key.discover.response";
 }
 
 public static class ConnectionTrustIpcLimits
@@ -25,6 +27,7 @@ public static class ConnectionTrustIpcLimits
     public const int MaximumHostLength = 253;
     public const int MaximumFingerprintLength = 128;
     public const int MaximumTrustIdLength = 128;
+    public const int MaximumHostKeyAlgorithmLength = 64;
     public const int MaximumRecords = 64;
 
     public static bool IsValidFingerprint(string? value)
@@ -102,6 +105,35 @@ public sealed record ConnectionTrustTargetDocument(
         !CanonicalHost.Any(static character =>
             char.IsControl(character) || char.IsWhiteSpace(character) || character is '/' or '\\' or '@' or '?' or '#') &&
         Port is >= 1 and <= 65_535;
+}
+
+public sealed record ConnectionSshHostKeyDiscoveryRequest(
+    int ContractVersion,
+    string Host,
+    int Port)
+{
+    public bool HasValidBounds =>
+        ConnectionTrustIpcContract.IsSupported(ContractVersion) &&
+        new ConnectionTrustTargetDocument(ConnectionTrustArtifactKind.SshHostKey, Host, Port).HasValidBounds;
+}
+
+public sealed record ConnectionSshHostKeyDiscoveryResponse(
+    int ContractVersion,
+    ConnectionTrustTargetDocument? Target,
+    string? HostKeyAlgorithm,
+    string? Sha256Fingerprint,
+    StorageIpcFailure? Failure)
+{
+    public bool HasValidBounds =>
+        ConnectionTrustIpcContract.IsSupported(ContractVersion) &&
+        (Failure is null
+            ? Target is { HasValidBounds: true, ArtifactKind: ConnectionTrustArtifactKind.SshHostKey } &&
+              !string.IsNullOrWhiteSpace(HostKeyAlgorithm) &&
+              HostKeyAlgorithm.Length <= ConnectionTrustIpcLimits.MaximumHostKeyAlgorithmLength &&
+              !HostKeyAlgorithm.Any(static character => char.IsControl(character) || char.IsWhiteSpace(character)) &&
+              ConnectionTrustIpcLimits.IsValidFingerprint(Sha256Fingerprint)
+            : (Target is null or { HasValidBounds: true, ArtifactKind: ConnectionTrustArtifactKind.SshHostKey }) &&
+              HostKeyAlgorithm is null && Sha256Fingerprint is null);
 }
 
 public sealed record ConnectionTrustRecordDocument(

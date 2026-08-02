@@ -134,6 +134,60 @@ public sealed class ConnectionManagementAgentClientTests
     }
 
     [Fact]
+    public async Task ProfileClientRoundTripsBoundedSshHostKeyDiscovery()
+    {
+        const string host = "sftp.example.test";
+        var fingerprint = "SHA256:" + Convert.ToBase64String(new byte[32]).TrimEnd('=');
+        var transport = new FakeProfileTransport(request => IpcEnvelope.Create(
+            ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyResponse,
+            request.RequestId,
+            1,
+            new ConnectionSshHostKeyDiscoveryResponse(
+                ConnectionTrustIpcContract.CurrentVersion,
+                new ConnectionTrustTargetDocument(ConnectionTrustArtifactKind.SshHostKey, host, 22),
+                "ssh-ed25519",
+                fingerprint,
+                Failure: null)));
+        await using var client = new NamedPipeRemoteConnectionProfileClient(transport);
+
+        var response = await client.DiscoverSshHostKeyAsync(new ConnectionSshHostKeyDiscoveryRequest(
+            ConnectionTrustIpcContract.CurrentVersion,
+            host,
+            22));
+
+        Assert.Equal(fingerprint, response.Sha256Fingerprint);
+        Assert.Equal(ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyRequest, transport.LastRequest?.MessageType);
+    }
+
+    [Fact]
+    public async Task ProfileClientRejectsDiscoveryForSubstitutedEndpointAndDisconnects()
+    {
+        var fingerprint = "SHA256:" + Convert.ToBase64String(new byte[32]).TrimEnd('=');
+        var transport = new FakeProfileTransport(request => IpcEnvelope.Create(
+            ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyResponse,
+            request.RequestId,
+            1,
+            new ConnectionSshHostKeyDiscoveryResponse(
+                ConnectionTrustIpcContract.CurrentVersion,
+                new ConnectionTrustTargetDocument(
+                    ConnectionTrustArtifactKind.SshHostKey,
+                    "attacker.example.test",
+                    22),
+                "ssh-ed25519",
+                fingerprint,
+                Failure: null)));
+        await using var client = new NamedPipeRemoteConnectionProfileClient(transport);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.DiscoverSshHostKeyAsync(
+            new ConnectionSshHostKeyDiscoveryRequest(
+                ConnectionTrustIpcContract.CurrentVersion,
+                "sftp.example.test",
+                22)));
+
+        Assert.Equal(1, transport.DisconnectCount);
+    }
+
+    [Fact]
     public async Task SecretClientCopiesAndZerosOutboundMaterialAndCorrelatesResponse()
     {
         byte[]? observedMaterial = null;

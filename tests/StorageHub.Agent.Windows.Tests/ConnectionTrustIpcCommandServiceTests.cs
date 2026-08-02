@@ -21,6 +21,7 @@ public sealed class ConnectionTrustIpcCommandServiceTests : IAsyncLifetime
     private SqliteConnectionProfileRepository _profiles = null!;
     private SqliteTrustStore _trust = null!;
     private ConnectionTrustIpcCommandService _service = null!;
+    private FakeSshHostKeyDiscovery _discovery = null!;
 
     public async Task InitializeAsync()
     {
@@ -28,7 +29,12 @@ public sealed class ConnectionTrustIpcCommandServiceTests : IAsyncLifetime
         Assert.True((await new StorageHubDatabaseInitializer(_options).InitializeAsync()).IsReady);
         _profiles = new SqliteConnectionProfileRepository(_options, new FixedTimeProvider(Now));
         _trust = new SqliteTrustStore(new SingleWriterSqliteDatabase(_options));
-        _service = new ConnectionTrustIpcCommandService(_profiles, _trust, new FixedTimeProvider(Now));
+        _discovery = new FakeSshHostKeyDiscovery();
+        _service = new ConnectionTrustIpcCommandService(
+            _profiles,
+            _trust,
+            new FixedTimeProvider(Now),
+            _discovery);
     }
 
     public Task DisposeAsync()
@@ -180,6 +186,67 @@ public sealed class ConnectionTrustIpcCommandServiceTests : IAsyncLifetime
         Assert.Equal(TrustDecision.Trusted, stored.Decision);
     }
 
+    [Fact]
+    public async Task SshHostKeyDiscoveryReturnsOnlyTheBoundedPresentedIdentityWithoutStoringTrust()
+    {
+        var response = await DiscoverAsync(new ConnectionSshHostKeyDiscoveryRequest(
+            ConnectionTrustIpcContract.CurrentVersion,
+            "sftp.example.test",
+            2222));
+
+        Assert.Null(response.Failure);
+        Assert.Equal("ssh-ed25519", response.HostKeyAlgorithm);
+        Assert.Equal(_discovery.Fingerprint, response.Sha256Fingerprint);
+        Assert.Equal(("sftp.example.test", 2222), Assert.Single(_discovery.Requests));
+        Assert.Empty(await _trust.FindAsync(TrustArtifactKind.SshHostKey, "sftp.example.test", 2222));
+    }
+
+    [Fact]
+    public async Task InvalidDiscoveryTargetIsRejectedBeforeNetworkAccess()
+    {
+        var response = await DiscoverAsync(new ConnectionSshHostKeyDiscoveryRequest(
+            ConnectionTrustIpcContract.CurrentVersion,
+            "user@sftp.example.test",
+            22));
+
+        Assert.Equal("connection.trust.discovery.request.invalid", response.Failure?.Code);
+        Assert.Null(response.Target);
+        Assert.Empty(_discovery.Requests);
+    }
+
+    [Theory]
+    [InlineData("algorithm with spaces", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    [InlineData("ssh-ed25519", "MD5:not-allowed")]
+    public async Task InvalidDiscoveryResultIsSanitizedAndNeverReturned(string algorithm, string fingerprint)
+    {
+        _discovery.Result = new DiscoveredSshHostKey(algorithm, fingerprint);
+
+        var response = await DiscoverAsync(new ConnectionSshHostKeyDiscoveryRequest(
+            ConnectionTrustIpcContract.CurrentVersion,
+            "sftp.example.test",
+            22));
+
+        Assert.Equal("connection.trust.discovery.response.invalid", response.Failure?.Code);
+        Assert.Null(response.HostKeyAlgorithm);
+        Assert.Null(response.Sha256Fingerprint);
+    }
+
+    [Fact]
+    public async Task DiscoveryFailureDoesNotExposeRemoteOrLocalExceptionDetails()
+    {
+        _discovery.Error = new IOException("token=secret C:\\Users\\person\\private");
+
+        var response = await DiscoverAsync(new ConnectionSshHostKeyDiscoveryRequest(
+            ConnectionTrustIpcContract.CurrentVersion,
+            "sftp.example.test",
+            22));
+
+        Assert.Equal("connection.trust.discovery.unavailable", response.Failure?.Code);
+        Assert.DoesNotContain("secret", response.Failure!.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Users", response.Failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(response.Sha256Fingerprint);
+    }
+
     private async Task<ConnectionProfile> CreatePinnedProfileAsync(bool useFtps)
     {
         ConnectionEndpoint endpoint = useFtps
@@ -235,6 +302,18 @@ public sealed class ConnectionTrustIpcCommandServiceTests : IAsyncLifetime
             result.Payload.Deserialize<ConnectionTrustMutationResponse>());
     }
 
+    private async Task<ConnectionSshHostKeyDiscoveryResponse> DiscoverAsync(
+        ConnectionSshHostKeyDiscoveryRequest request)
+    {
+        var result = await _service.HandleAsync(IpcEnvelope.Create(
+            ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyRequest,
+            Guid.NewGuid(),
+            1,
+            request));
+        return Assert.IsType<ConnectionSshHostKeyDiscoveryResponse>(
+            result.Payload.Deserialize<ConnectionSshHostKeyDiscoveryResponse>());
+    }
+
     private static ConnectionOperationalOptions Options() => new(
         TimeSpan.FromSeconds(30),
         TimeSpan.FromSeconds(60),
@@ -246,5 +325,30 @@ public sealed class ConnectionTrustIpcCommandServiceTests : IAsyncLifetime
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+
+    private sealed class FakeSshHostKeyDiscovery : ISshHostKeyDiscovery
+    {
+        internal string Fingerprint { get; } = "SHA256:" + Convert.ToBase64String(new byte[32]).TrimEnd('=');
+
+        internal DiscoveredSshHostKey? Result { get; set; }
+
+        internal Exception? Error { get; set; }
+
+        internal List<(string Host, int Port)> Requests { get; } = [];
+
+        public Task<DiscoveredSshHostKey> DiscoverAsync(
+            string host,
+            int port,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add((host, port));
+            if (Error is not null)
+            {
+                throw Error;
+            }
+
+            return Task.FromResult(Result ?? new DiscoveredSshHostKey("ssh-ed25519", Fingerprint));
+        }
     }
 }

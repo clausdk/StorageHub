@@ -419,6 +419,7 @@
         "dependencies": {
           "CodeLogic": "[4.1.0, )",
           "CodeLogic.Storage": "[4.6.0, )",
+          "SSH.NET": "[2025.1.0, )",
           "StorageHub.Agent": "[0.1.0, )",
           "StorageHub.Application": "[0.1.0, )",
           "StorageHub.Infrastructure.Windows": "[0.1.0, )",

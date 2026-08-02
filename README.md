@@ -63,6 +63,10 @@ an installation.
 - Validated connection profiles for local storage, S3, FTP, FTPS, and SFTP,
   including favorites, folders, tags, per-connection options, PFX references,
   SSH private-key references, and optimistic concurrency in SQLite.
+- A grouped Connection Manager tree that keeps each saved profile in one clear
+  section (favorites, folder, provider, or disabled), sorts profiles by name,
+  preserves provider badges and tag pills, and searches names, endpoints,
+  folders, providers, states, and tags.
 - A fail-closed profile connector that resolves vault secrets and trust records
   immediately before runtime registration. Local, S3 with system trust, FTP,
   FTPS with system trust or verified pins, and SFTP with verified host-key pins
@@ -74,6 +78,12 @@ an installation.
   and SFTP host-key enrollment, explicit rejection, and atomic rollover. Trust
   targets are derived by the agent from the saved pinned profile; no certificate
   or host key is accepted on first contact.
+- A structured Settings center groups all current desktop preferences under
+  General, Connections & trust, Updates, and About. SFTP host-key discovery can
+  be manual, ask-before-fetch, or automatic; Connection Manager also exposes a
+  direct **Fetch from host** action. Discovery performs no authentication and
+  never stores trust—the presented SHA-256 fingerprint still requires explicit
+  verification through a separate trusted channel.
 - A Windows DPAPI current-user vault with versioned envelopes, atomic updates,
   rotation, corruption detection, and zeroed secret leases.
 - A WAL-mode SQLite foundation with cross-process-serialized migrations, foreign

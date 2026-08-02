@@ -253,6 +253,36 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "The SFTP integration suite failed with exit code $LASTEXITCODE."
     }
+
+    $discoveryProject = Join-Path $repositoryRoot `
+        'tests\StorageHub.Agent.Windows.Tests\StorageHub.Agent.Windows.Tests.csproj'
+    $discoveryArguments = @(
+        'test',
+        $discoveryProject,
+        '--configuration',
+        'Release',
+        '--no-build',
+        '--no-restore',
+        '--filter',
+        'Category=SftpHostKeyDiscoveryIntegration',
+        '--logger',
+        'trx;LogFileName=sftp-host-key-discovery.trx'
+    )
+    if (-not [string]::IsNullOrWhiteSpace($DotNetArtifactsPath)) {
+        $discoveryArguments += @('--artifacts-path', [IO.Path]::GetFullPath($DotNetArtifactsPath))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CLStorageProjectPath)) {
+        $discoveryArguments += "-p:CLStorageProjectPath=$([IO.Path]::GetFullPath($CLStorageProjectPath))"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CodeLogicLibsRoot)) {
+        $discoveryArguments += "-p:CodeLogicLibsRoot=$([IO.Path]::GetFullPath($CodeLogicLibsRoot))"
+    }
+
+    Write-Host 'Verifying unauthenticated SSH host-key discovery against the real loopback endpoint.'
+    & dotnet @discoveryArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "The SSH host-key discovery integration test failed with exit code $LASTEXITCODE."
+    }
 }
 finally {
     foreach ($name in $environmentNames) {

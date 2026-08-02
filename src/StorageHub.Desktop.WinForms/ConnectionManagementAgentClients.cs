@@ -27,6 +27,11 @@ public interface IRemoteConnectionProfileClient : IAsyncDisposable
         ConnectionTrustGetRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<ConnectionSshHostKeyDiscoveryResponse> DiscoverSshHostKeyAsync(
+        ConnectionSshHostKeyDiscoveryRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This profile client does not support SSH host-key discovery.");
+
     Task<ConnectionTrustMutationResponse> DecideTrustAsync(
         ConnectionTrustDecisionRequest request,
         CancellationToken cancellationToken = default);
@@ -133,6 +138,20 @@ public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionPr
             ConnectionTrustIpcMessageTypes.GetResponse,
             request,
             response => ValidateTrustGetResponse(request, response),
+            cancellationToken);
+    }
+
+    public Task<ConnectionSshHostKeyDiscoveryResponse> DiscoverSshHostKeyAsync(
+        ConnectionSshHostKeyDiscoveryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureTrustRequest(request.ContractVersion, request.HasValidBounds, nameof(request));
+        return ExecuteAsync<ConnectionSshHostKeyDiscoveryRequest, ConnectionSshHostKeyDiscoveryResponse>(
+            ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyRequest,
+            ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyResponse,
+            request,
+            response => ValidateDiscoveryResponse(request, response),
             cancellationToken);
     }
 
@@ -304,6 +323,19 @@ public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionPr
                 (!snapshot.HasValidBounds ||
                  snapshot.ConnectionId != request.ConnectionId ||
                  snapshot.ProfileVersion != request.ExpectedProfileVersion))
+        {
+            throw InvalidTrustResponse();
+        }
+    }
+
+    private static void ValidateDiscoveryResponse(
+        ConnectionSshHostKeyDiscoveryRequest request,
+        ConnectionSshHostKeyDiscoveryResponse response)
+    {
+        if (!response.HasValidBounds || !IsValidFailure(response.Failure) ||
+            response.Target is not { } target ||
+            !string.Equals(target.CanonicalHost, request.Host, StringComparison.OrdinalIgnoreCase) ||
+            target.Port != request.Port)
         {
             throw InvalidTrustResponse();
         }

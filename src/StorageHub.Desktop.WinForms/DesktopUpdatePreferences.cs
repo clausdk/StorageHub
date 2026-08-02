@@ -2,13 +2,21 @@ using System.Text.Json;
 
 namespace StorageHub.Desktop;
 
+public enum SshHostKeyDiscoveryMode
+{
+    Manual = 1,
+    AskBeforeFetching = 2,
+    Automatic = 3
+}
+
 internal sealed record DesktopUpdatePreferences(
     bool CheckAutomatically = true,
     bool DownloadAutomatically = true,
     bool RestartAutomatically = false,
-    bool IncludePrereleases = true)
+    bool IncludePrereleases = true,
+    SshHostKeyDiscoveryMode SshHostKeyDiscovery = SshHostKeyDiscoveryMode.AskBeforeFetching)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
@@ -63,12 +71,21 @@ internal sealed class DesktopUpdatePreferencesStore
                 bufferSize: 4096,
                 FileOptions.SequentialScan);
             var document = JsonSerializer.Deserialize<DesktopUpdatePreferencesDocument>(stream, JsonOptions);
-            return document is { SchemaVersion: DesktopUpdatePreferences.CurrentSchemaVersion }
+            if (document is null || document.SchemaVersion is not (1 or DesktopUpdatePreferences.CurrentSchemaVersion))
+            {
+                return DesktopUpdatePreferences.Defaults;
+            }
+
+            var discoveryMode = document.SchemaVersion == 1
+                ? SshHostKeyDiscoveryMode.AskBeforeFetching
+                : document.SshHostKeyDiscovery;
+            return Enum.IsDefined(discoveryMode)
                 ? new DesktopUpdatePreferences(
                     document.CheckAutomatically,
                     document.DownloadAutomatically,
                     document.RestartAutomatically,
-                    document.IncludePrereleases)
+                    document.IncludePrereleases,
+                    discoveryMode)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -99,7 +116,8 @@ internal sealed class DesktopUpdatePreferencesStore
                 preferences.CheckAutomatically,
                 preferences.DownloadAutomatically,
                 preferences.RestartAutomatically,
-                preferences.IncludePrereleases);
+                preferences.IncludePrereleases,
+                preferences.SshHostKeyDiscovery);
             using (var stream = new FileStream(
                 temporaryPath,
                 FileMode.CreateNew,
@@ -152,5 +170,6 @@ internal sealed class DesktopUpdatePreferencesStore
         bool CheckAutomatically,
         bool DownloadAutomatically,
         bool RestartAutomatically,
-        bool IncludePrereleases);
+        bool IncludePrereleases,
+        SshHostKeyDiscoveryMode SshHostKeyDiscovery = default);
 }

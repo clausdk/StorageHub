@@ -232,10 +232,14 @@ allow-list policy. Never attach the raw data directory to a bug report.
   writable by another security principal. The current-user threat boundary does
   not treat concurrently hostile local filesystem mutation as safe. StorageHub's
   random reserved staging ownership and cleanup rely on that same boundary.
-- Connection Manager requires users to obtain and verify certificate and SSH
-  host-key SHA-256 fingerprints through a separate trusted channel. StorageHub
-  does not probe or accept a candidate identity on first contact; pinned profiles
-  remain fail-closed until the verified fingerprint is explicitly saved.
+- Connection Manager requires users to verify certificate and SSH host-key
+  SHA-256 fingerprints through a separate trusted channel. For SFTP it can
+  retrieve the key presented during a bounded SSH negotiation manually, after a
+  prompt, or automatically. Discovery deliberately rejects the presented key,
+  sends no credentials, performs no authentication, and writes no trust record.
+  The displayed fingerprint is therefore an observation, not proof of identity;
+  pinned profiles remain fail-closed until the user explicitly confirms and
+  saves a fingerprint verified through a separate channel.
 - Manual pane transfer currently accepts files from saved connections only;
   directory recursion and ad-hoc/This PC queue identities are not yet modeled.
 - Aggregate CodeLogic health intentionally sees CL.Storage's persisted-provider

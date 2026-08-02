@@ -24,5 +24,6 @@
     <ProjectReference Include="$(CLStorageProjectPath)"
                       SetConfiguration="Configuration=$(Configuration)" />
     <PackageReference Include="CodeLogic" />
+    <PackageReference Include="SSH.NET" />
   </ItemGroup>
 </Project>

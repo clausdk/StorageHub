@@ -16,15 +16,18 @@ public sealed class ConnectionTrustIpcCommandService : IAgentIpcCommandHandler
     private readonly IConnectionProfileRepository _profiles;
     private readonly ITrustManagementStore _trust;
     private readonly TimeProvider _timeProvider;
+    private readonly ISshHostKeyDiscovery _sshHostKeyDiscovery;
 
     public ConnectionTrustIpcCommandService(
         IConnectionProfileRepository profiles,
         ITrustManagementStore trust,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ISshHostKeyDiscovery? sshHostKeyDiscovery = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _trust = trust ?? throw new ArgumentNullException(nameof(trust));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _sshHostKeyDiscovery = sshHostKeyDiscovery ?? new RenciSshHostKeyDiscovery();
     }
 
     public ConnectionTrustIpcCommandService(
@@ -33,14 +36,16 @@ public sealed class ConnectionTrustIpcCommandService : IAgentIpcCommandHandler
         : this(
             new SqliteConnectionProfileRepository(databaseOptions, timeProvider),
             new SqliteTrustStore(new SingleWriterSqliteDatabase(databaseOptions)),
-            timeProvider)
+            timeProvider,
+            new RenciSshHostKeyDiscovery())
     {
     }
 
     public bool CanHandle(string messageType) => messageType is
         ConnectionTrustIpcMessageTypes.GetRequest or
         ConnectionTrustIpcMessageTypes.DecideRequest or
-        ConnectionTrustIpcMessageTypes.RolloverRequest;
+        ConnectionTrustIpcMessageTypes.RolloverRequest or
+        ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyRequest;
 
     public ValueTask<AgentIpcCommandResponse> HandleAsync(
         IpcEnvelope request,
@@ -52,10 +57,70 @@ public sealed class ConnectionTrustIpcCommandService : IAgentIpcCommandHandler
             ConnectionTrustIpcMessageTypes.GetRequest => GetAsync(request, cancellationToken),
             ConnectionTrustIpcMessageTypes.DecideRequest => DecideAsync(request, cancellationToken),
             ConnectionTrustIpcMessageTypes.RolloverRequest => RolloverAsync(request, cancellationToken),
+            ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyRequest => DiscoverSshHostKeyAsync(request, cancellationToken),
             _ => ValueTask.FromResult(AgentIpcCommandResponse.Error(
                 "ipc.message.unsupported",
                 "The requested IPC operation is not supported by this agent version."))
         };
+    }
+
+    private async ValueTask<AgentIpcCommandResponse> DiscoverSshHostKeyAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        var request = envelope.DeserializePayload<ConnectionSshHostKeyDiscoveryRequest>();
+        if (!request.HasValidBounds)
+        {
+            return DiscoveryFailure(
+                target: null,
+                "connection.trust.discovery.request.invalid",
+                StorageIpcFailureCategory.Validation,
+                "The SSH host-key discovery target was invalid or outside the negotiated bounds.");
+        }
+
+        var target = new ConnectionTrustTargetDocument(
+            ConnectionTrustArtifactKind.SshHostKey,
+            request.Host,
+            request.Port);
+        try
+        {
+            var discovered = await _sshHostKeyDiscovery
+                .DiscoverAsync(request.Host, request.Port, cancellationToken)
+                .ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(discovered.HostKeyAlgorithm) ||
+                discovered.HostKeyAlgorithm.Length > ConnectionTrustIpcLimits.MaximumHostKeyAlgorithmLength ||
+                discovered.HostKeyAlgorithm.Any(static character => char.IsControl(character) || char.IsWhiteSpace(character)) ||
+                !ConnectionTrustIpcLimits.IsValidFingerprint(discovered.Sha256Fingerprint))
+            {
+                return DiscoveryFailure(
+                    target,
+                    "connection.trust.discovery.response.invalid",
+                    StorageIpcFailureCategory.Unavailable,
+                    "The SSH endpoint returned an invalid or unsupported host key.");
+            }
+
+            return AgentIpcCommandResponse.Create(
+                ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyResponse,
+                new ConnectionSshHostKeyDiscoveryResponse(
+                    ConnectionTrustIpcContract.CurrentVersion,
+                    target,
+                    discovered.HostKeyAlgorithm,
+                    discovered.Sha256Fingerprint,
+                    Failure: null));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return DiscoveryFailure(
+                target,
+                "connection.trust.discovery.unavailable",
+                StorageIpcFailureCategory.Unavailable,
+                "The SSH host key could not be fetched from the endpoint.",
+                isTransient: true);
+        }
     }
 
     private async ValueTask<AgentIpcCommandResponse> GetAsync(
@@ -497,6 +562,20 @@ public sealed class ConnectionTrustIpcCommandService : IAgentIpcCommandHandler
         new ConnectionTrustGetResponse(
             ConnectionTrustIpcContract.CurrentVersion,
             Snapshot: null,
+            new StorageIpcFailure(code, category, message, isTransient)));
+
+    private static AgentIpcCommandResponse DiscoveryFailure(
+        ConnectionTrustTargetDocument? target,
+        string code,
+        StorageIpcFailureCategory category,
+        string message,
+        bool isTransient = false) => AgentIpcCommandResponse.Create(
+        ConnectionTrustIpcMessageTypes.DiscoverSshHostKeyResponse,
+        new ConnectionSshHostKeyDiscoveryResponse(
+            ConnectionTrustIpcContract.CurrentVersion,
+            target,
+            HostKeyAlgorithm: null,
+            Sha256Fingerprint: null,
             new StorageIpcFailure(code, category, message, isTransient)));
 
     private static AgentIpcCommandResponse MapResolvedFailure(

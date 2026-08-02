@@ -8,6 +8,16 @@
         "resolved": "4.1.0",
         "contentHash": "zmlsOZ+kRGW62zyn7HdblpsOIeqZ74FeA757rcS1NJTyp40NUq6SIBmnKGotjUEAHz/uQZPVDIh98kJ8fhQGwQ=="
       },
+      "SSH.NET": {
+        "type": "Direct",
+        "requested": "[2025.1.0, )",
+        "resolved": "2025.1.0",
+        "contentHash": "jrnbtf0ItVaXAe6jE8X/kSLa6uC+0C+7W1vepcnRQB/rD88qy4IxG7Lf1FIbWmkoc4iVXv0pKrz+Wc6J4ngmHw==",
+        "dependencies": {
+          "BouncyCastle.Cryptography": "2.6.2",
+          "Microsoft.Extensions.Logging.Abstractions": "8.0.3"
+        }
+      },
       "AWSSDK.Core": {
         "type": "Transitive",
         "resolved": "4.0.100.9",
@@ -422,16 +432,6 @@
           "Microsoft.Data.Sqlite.Core": "9.0.18",
           "SQLitePCLRaw.bundle_e_sqlite3": "2.1.10",
           "SQLitePCLRaw.core": "2.1.10"
-        }
-      },
-      "SSH.NET": {
-        "type": "CentralTransitive",
-        "requested": "[2025.1.0, )",
-        "resolved": "2025.1.0",
-        "contentHash": "jrnbtf0ItVaXAe6jE8X/kSLa6uC+0C+7W1vepcnRQB/rD88qy4IxG7Lf1FIbWmkoc4iVXv0pKrz+Wc6J4ngmHw==",
-        "dependencies": {
-          "BouncyCastle.Cryptography": "2.6.2",
-          "Microsoft.Extensions.Logging.Abstractions": "8.0.3"
         }
       }
     },

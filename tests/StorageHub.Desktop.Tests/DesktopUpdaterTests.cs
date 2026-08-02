@@ -10,7 +10,8 @@ public sealed class DesktopUpdaterTests
             CheckAutomatically: false,
             DownloadAutomatically: false,
             RestartAutomatically: true,
-            IncludePrereleases: false);
+            IncludePrereleases: false,
+            SshHostKeyDiscoveryMode.Automatic);
 
         fixture.Store.Save(expected);
 
@@ -49,6 +50,52 @@ public sealed class DesktopUpdaterTests
     {
         _ = Assert.Throws<ArgumentException>(() =>
             new DesktopUpdatePreferencesStore("settings.json"));
+    }
+
+    [Fact]
+    public void VersionOnePreferencesMigrateWithoutLosingUpdateChoices()
+    {
+        using var fixture = new SettingsFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Path)!);
+        File.WriteAllText(
+            fixture.Path,
+            """
+            {
+              "schemaVersion": 1,
+              "checkAutomatically": false,
+              "downloadAutomatically": false,
+              "restartAutomatically": false,
+              "includePrereleases": false
+            }
+            """);
+
+        var migrated = fixture.Store.Load();
+
+        Assert.False(migrated.CheckAutomatically);
+        Assert.False(migrated.DownloadAutomatically);
+        Assert.False(migrated.IncludePrereleases);
+        Assert.Equal(SshHostKeyDiscoveryMode.AskBeforeFetching, migrated.SshHostKeyDiscovery);
+    }
+
+    [Fact]
+    public void UndefinedDiscoveryModeFailsSafeToDefaults()
+    {
+        using var fixture = new SettingsFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Path)!);
+        File.WriteAllText(
+            fixture.Path,
+            """
+            {
+              "schemaVersion": 2,
+              "checkAutomatically": false,
+              "downloadAutomatically": false,
+              "restartAutomatically": false,
+              "includePrereleases": false,
+              "sshHostKeyDiscovery": 999
+            }
+            """);
+
+        Assert.Equal(DesktopUpdatePreferences.Defaults, fixture.Store.Load());
     }
 
     [Fact]
