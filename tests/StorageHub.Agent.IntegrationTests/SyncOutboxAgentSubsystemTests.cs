@@ -74,7 +74,7 @@ public sealed class SyncOutboxAgentSubsystemTests : IDisposable
             "test-sync-worker",
             1,
             now,
-            now.AddSeconds(1)));
+            now.AddMinutes(1)));
         var processor = new BlockingProcessor();
         await using var worker = new SyncOutboxAgentSubsystem(
             store,
