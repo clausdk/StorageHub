@@ -27,14 +27,14 @@ jobs:
 
     steps:
       - name: Check out StorageHub
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # StorageHub references the all-in-one library as source until its package
       # release is the canonical dependency. Pin the exact reviewed revision.
       - name: Check out CodeLogic.Libs
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Media2A/CodeLogic.Libs
           ref: 25d357b7e3896e2ff3d6c29875178a6b0f12ed60
