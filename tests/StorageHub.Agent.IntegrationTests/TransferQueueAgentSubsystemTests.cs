@@ -75,9 +75,11 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
             StorageFailureKind.Unavailable,
             "Endpoint unavailable.",
             isTransient: true));
-        await using var worker = CreateWorker(fixture.Store, connector);
+        var timeProvider = new MutableUtcTimeProvider(DateTimeOffset.UtcNow);
+        await using var worker = CreateWorker(fixture.Store, connector, timeProvider: timeProvider);
 
         await worker.InitializeAsync(CancellationToken.None);
+        fixture.Store.AfterRecovery = () => timeProvider.Advance(TimeSpan.FromMinutes(3));
         Assert.True(await worker.RunClaimOnceAsync());
 
         var retrying = Assert.IsType<DurableTransferJob>(
@@ -375,17 +377,19 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
     private static TransferQueueAgentSubsystem CreateWorker(
         ITransferJobStore store,
         ITransferEndpointConnector connector,
-        TransferQueueWorkerOptions? options = null) => new(
+        TransferQueueWorkerOptions? options = null,
+        TimeProvider? timeProvider = null) => new(
         store,
         connector,
         options ?? Options(),
+        timeProvider,
         ownerId: $"test-worker-{Guid.NewGuid():N}");
 
     private static TransferQueueWorkerOptions Options() => new()
     {
         MaximumConcurrency = 1,
         PollInterval = TimeSpan.FromMilliseconds(10),
-        LeaseDuration = TimeSpan.FromSeconds(2),
+        LeaseDuration = TimeSpan.FromMinutes(2),
         LeaseRenewalInterval = TimeSpan.FromMilliseconds(250),
         CheckpointInterval = TimeSpan.FromMilliseconds(5),
         InitialRetryDelay = TimeSpan.FromMilliseconds(200),
@@ -468,6 +472,20 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
             ConnectionProfileId profileId,
             CancellationToken cancellationToken = default) => ValueTask.FromResult(
             StorageResult<ITransferEndpointConnection>.Fail(failure));
+    }
+
+    private sealed class MutableUtcTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private long _utcTicks = utcNow.UtcTicks;
+
+        public override DateTimeOffset GetUtcNow() =>
+            new(Interlocked.Read(ref _utcTicks), TimeSpan.Zero);
+
+        public void Advance(TimeSpan elapsed)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(elapsed, TimeSpan.Zero);
+            _ = Interlocked.Add(ref _utcTicks, elapsed.Ticks);
+        }
     }
 
     private sealed class FakeConnection(FakeSession session) : ITransferEndpointConnection
@@ -693,6 +711,7 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
         public int SaveCheckpointCalls;
         public TransferCheckpoint? LastCheckpoint;
         public bool LoseRenewals { get; set; }
+        public Action? AfterRecovery { get; set; }
 
         public ValueTask<bool> TryEnqueueAsync(TransferIntent intent, int priority = 0, CancellationToken cancellationToken = default) =>
             inner.TryEnqueueAsync(intent, priority, cancellationToken);
@@ -727,7 +746,14 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
         public ValueTask<TransferStoreMutationStatus> TryClearCheckpointAsync(TransferCheckpointClearRequest request, CancellationToken cancellationToken = default) =>
             inner.TryClearCheckpointAsync(request, cancellationToken);
 
-        public ValueTask<int> RecoverInterruptedAsync(DateTimeOffset observedAtUtc, CancellationToken cancellationToken = default) =>
-            inner.RecoverInterruptedAsync(observedAtUtc, cancellationToken);
+        public async ValueTask<int> RecoverInterruptedAsync(
+            DateTimeOffset observedAtUtc,
+            CancellationToken cancellationToken = default)
+        {
+            var recovered = await inner.RecoverInterruptedAsync(observedAtUtc, cancellationToken)
+                .ConfigureAwait(false);
+            AfterRecovery?.Invoke();
+            return recovered;
+        }
     }
 }

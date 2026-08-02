@@ -176,12 +176,15 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
         TransferJobClaim? claim;
         try
         {
-            var observedAt = _timeProvider.GetUtcNow();
-            var recovered = await _store.RecoverInterruptedAsync(observedAt, cancellationToken)
+            var recoveryObservedAt = _timeProvider.GetUtcNow();
+            var recovered = await _store.RecoverInterruptedAsync(recoveryObservedAt, cancellationToken)
                 .ConfigureAwait(false);
             _ = Interlocked.Add(ref _recoveredInterruptedCount, recovered);
+            // Recovery can wait behind durable-store work. A claim must start from a fresh
+            // observation or a slow recovery could issue a lease that is already expired.
+            var claimObservedAt = _timeProvider.GetUtcNow();
             claim = await _store.TryClaimNextAsync(
-                new TransferClaimRequest(_ownerId, observedAt, _options.LeaseDuration),
+                new TransferClaimRequest(_ownerId, claimObservedAt, _options.LeaseDuration),
                 cancellationToken).ConfigureAwait(false);
             Volatile.Write(ref _lastInfrastructureFailure, null);
         }
