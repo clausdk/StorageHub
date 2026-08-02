@@ -25,7 +25,7 @@ public static class ConnectionEditorDraftFactory
             metadata,
             endpoint,
             authentication,
-            new ConnectionOperationalOptionsDocument());
+            BuildOperationalOptions(provider));
         if (!draft.HasValidBounds)
         {
             throw new ArgumentException(
@@ -35,6 +35,18 @@ public static class ConnectionEditorDraftFactory
 
         return draft;
     }
+
+    private static ConnectionOperationalOptionsDocument BuildOperationalOptions(StorageProviderKind provider) =>
+        provider switch
+        {
+            StorageProviderKind.Local => new ConnectionOperationalOptionsDocument(),
+            StorageProviderKind.S3 => new ConnectionOperationalOptionsDocument(OperationTimeoutSeconds: 30),
+            StorageProviderKind.Ftp or StorageProviderKind.Ftps or StorageProviderKind.Sftp =>
+                new ConnectionOperationalOptionsDocument(
+                    OperationTimeoutSeconds: 30,
+                    MaximumRetryAttempts: 0),
+            _ => throw new ArgumentOutOfRangeException(nameof(provider))
+        };
 
     public static IReadOnlyDictionary<string, string> ToEditorValues(ConnectionProfileDocument profile)
     {

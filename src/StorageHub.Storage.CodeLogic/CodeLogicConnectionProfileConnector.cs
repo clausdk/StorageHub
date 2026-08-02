@@ -101,15 +101,18 @@ internal sealed class CodeLogicConnectionConfigurationBuilder
                 "The selected CL.Storage provider cannot enforce this connection's bandwidth limits yet.");
         }
 
+        var usesHistoricalEditorDefaults = UsesHistoricalEditorDefaults(profile.OperationalOptions);
         if (profile.Provider is ConnectionProviderKind.Ftp or ConnectionProviderKind.Ftps or ConnectionProviderKind.Sftp &&
-            profile.OperationalOptions.Retry.MaximumAttempts != 0)
+            profile.OperationalOptions.Retry.MaximumAttempts != 0 &&
+            !usesHistoricalEditorDefaults)
         {
             return Unsupported("storage.retry.unsupported",
                 "The selected CL.Storage provider cannot safely apply this retry policy yet.");
         }
 
         if (profile.Provider is not ConnectionProviderKind.Local &&
-            profile.OperationalOptions.ConnectTimeout != profile.OperationalOptions.OperationTimeout)
+            profile.OperationalOptions.ConnectTimeout != profile.OperationalOptions.OperationTimeout &&
+            !usesHistoricalEditorDefaults)
         {
             return Unsupported("storage.timeout.unsupported",
                 "The selected CL.Storage provider exposes one timeout, so connect and operation timeouts must match.");
@@ -522,6 +525,17 @@ internal sealed class CodeLogicConnectionConfigurationBuilder
         profile.Provider == ConnectionProviderKind.Local
             ? profile.OperationalOptions.OperationTimeout.TotalSeconds
             : profile.OperationalOptions.ConnectTimeout.TotalSeconds));
+
+    private static bool UsesHistoricalEditorDefaults(ConnectionOperationalOptions options) =>
+        options.ConnectTimeout == TimeSpan.FromSeconds(30) &&
+        options.OperationTimeout == TimeSpan.FromSeconds(60) &&
+        options.Retry.MaximumAttempts == 3 &&
+        options.Retry.InitialDelay == TimeSpan.FromMilliseconds(250) &&
+        options.Retry.MaximumDelay == TimeSpan.FromSeconds(5) &&
+        options.Proxy is null &&
+        options.Bandwidth.UploadBytesPerSecond is null &&
+        options.Bandwidth.DownloadBytesPerSecond is null &&
+        string.Equals(options.EncodingName, "utf-8", StringComparison.OrdinalIgnoreCase);
 
     private static string CreateRootIdentity(
         ConnectionProfile profile,

@@ -490,6 +490,45 @@ public sealed class CodeLogicConnectionConfigurationBuilderTests : IAsyncLifetim
         Assert.Equal("storage.timeout.unsupported", (await CreateBuilder().BuildAsync(splitTimeout)).Error?.Code);
     }
 
+    [Fact]
+    public async Task HistoricalConnectionManagerDefaultsOpenButNearMatchesRemainFailClosed()
+    {
+        var password = await StoreTextAsync("sftp-password");
+        _trust.Records.Add(TrustedRecord(TrustArtifactKind.SshHostKey, "sftp.example.test", 22));
+        var historicalDefaults = new ConnectionOperationalOptions(
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(60),
+            new ConnectionRetryPolicy(3, TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5)),
+            proxy: null,
+            new ConnectionBandwidthLimits(null, null),
+            "utf-8");
+        var nearMatch = new ConnectionOperationalOptions(
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(60),
+            new ConnectionRetryPolicy(3, TimeSpan.FromMilliseconds(251), TimeSpan.FromSeconds(5)),
+            proxy: null,
+            new ConnectionBandwidthLimits(null, null),
+            "utf-8");
+        var endpoint = new SftpEndpoint("sftp.example.test", 22, SshHostKeyPolicy.Pinned);
+        var authentication = new UsernamePasswordAuthentication("operator", password);
+
+        var compatible = await CreateBuilder().BuildAsync(CreateProfile(
+            endpoint,
+            authentication,
+            operationalOptions: historicalDefaults));
+        var rejected = await CreateBuilder().BuildAsync(CreateProfile(
+            endpoint,
+            authentication,
+            operationalOptions: nearMatch));
+
+        Assert.True(compatible.IsSuccess);
+        await using var prepared = compatible.Value;
+        var configuration = Assert.IsType<SftpConnectionConfig>(prepared.Configuration);
+        Assert.Equal(30, configuration.TimeoutSeconds);
+        Assert.True(rejected.IsFailure);
+        Assert.Equal("storage.retry.unsupported", rejected.Error.Code);
+    }
+
     private CodeLogicConnectionConfigurationBuilder CreateBuilder() => new(
         _vault,
         _trust,
@@ -508,7 +547,8 @@ public sealed class CodeLogicConnectionConfigurationBuilderTests : IAsyncLifetim
         int maximumAttempts = 0,
         bool proxy = false,
         bool bandwidth = false,
-        bool splitTimeouts = false)
+        bool splitTimeouts = false,
+        ConnectionOperationalOptions? operationalOptions = null)
     {
         var now = DateTimeOffset.UtcNow;
         return ConnectionProfile.Create(
@@ -516,7 +556,7 @@ public sealed class CodeLogicConnectionConfigurationBuilderTests : IAsyncLifetim
             new ConnectionProfileMetadata("Test connection"),
             endpoint,
             authentication,
-            new ConnectionOperationalOptions(
+            operationalOptions ?? new ConnectionOperationalOptions(
                 TimeSpan.FromSeconds(30),
                 splitTimeouts ? TimeSpan.FromMinutes(2) : TimeSpan.FromSeconds(30),
                 new ConnectionRetryPolicy(maximumAttempts, TimeSpan.Zero, TimeSpan.Zero),
