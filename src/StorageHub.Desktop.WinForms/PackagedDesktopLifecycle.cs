@@ -144,7 +144,6 @@ public sealed record PackagedDesktopLifecycleOptions
 /// </summary>
 public sealed class PackagedDesktopLifecycle
 {
-    private const string PackagedDesktopStubName = "StorageHub.exe";
     private readonly string _desktopExecutablePath;
     private readonly string _agentDirectory;
     private readonly string _agentExecutablePath;
@@ -238,11 +237,10 @@ public sealed class PackagedDesktopLifecycle
             return executablePath;
         }
 
-        // vpk names the root execution stub from --packTitle ("StorageHub"),
-        // while the managed entry point inside current remains
-        // StorageHub.Desktop.exe. Point logon startup at the root stub so it
-        // remains valid while Velopack replaces the current directory.
-        var stableExecutable = Path.Combine(rootDirectory, PackagedDesktopStubName);
+        // Velopack gives the root execution stub the same filename as the
+        // packaged main executable. Point logon startup at that stable root
+        // stub so it remains valid while Velopack replaces current.
+        var stableExecutable = Path.Combine(rootDirectory, Path.GetFileName(executablePath));
         return File.Exists(stableExecutable) ? stableExecutable : executablePath;
     }
 

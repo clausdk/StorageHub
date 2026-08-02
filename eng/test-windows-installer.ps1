@@ -380,7 +380,7 @@ try {
     $desktopExe = Join-Path $installDirectory 'current\StorageHub.Desktop.exe'
     $agentExe = Join-Path $installDirectory 'current\Agent\StorageHub.Agent.Windows.exe'
     $updateExe = Join-Path $installDirectory 'Update.exe'
-    $stableDesktopExe = Join-Path $installDirectory 'StorageHub.exe'
+    $stableDesktopExe = Join-Path $installDirectory 'StorageHub.Desktop.exe'
     Wait-ForCondition `
         -Condition {
             (Test-Path -LiteralPath $desktopExe -PathType Leaf) -and
