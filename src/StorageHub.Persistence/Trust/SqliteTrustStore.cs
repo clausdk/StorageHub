@@ -10,7 +10,7 @@ public sealed class TrustRecordConcurrencyException(string trustId) : InvalidOpe
     $"Trust record '{trustId}' changed or conflicts with an existing fingerprint.");
 
 /// <summary>Persists non-secret certificate and host-key trust decisions in the authoritative database.</summary>
-public sealed partial class SqliteTrustStore(SingleWriterSqliteDatabase database) : ITrustStore
+public sealed partial class SqliteTrustStore(SingleWriterSqliteDatabase database) : ITrustManagementStore
 {
     private readonly SingleWriterSqliteDatabase _database =
         database ?? throw new ArgumentNullException(nameof(database));
@@ -126,6 +126,94 @@ public sealed partial class SqliteTrustStore(SingleWriterSqliteDatabase database
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
     }
 
+    public async ValueTask RolloverAsync(
+        TrustRecord revokedRecord,
+        TrustRecord replacementRecord,
+        CancellationToken cancellationToken = default)
+    {
+        var revoked = ValidateAndNormalize(revokedRecord);
+        var replacement = ValidateAndNormalize(replacementRecord);
+        if (revoked.Decision != TrustDecision.Revoked ||
+            replacement.Decision != TrustDecision.Trusted ||
+            replacement.Version != 1 ||
+            revoked.Version <= 1 ||
+            !SameEndpoint(revoked, replacement) ||
+            string.Equals(revoked.Sha256Fingerprint, replacement.Sha256Fingerprint, StringComparison.Ordinal) ||
+            !string.Equals(replacement.PreviousFingerprint, revoked.Sha256Fingerprint, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("A rollover must revoke one fingerprint and trust a distinct replacement for the same endpoint.", nameof(replacementRecord));
+        }
+
+        await using var lease = await _database.AcquireWriterAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await lease.Connection
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var sqliteTransaction = (SqliteTransaction)transaction;
+        await ValidateRevisionAsync(lease.Connection, sqliteTransaction, revoked, cancellationToken)
+            .ConfigureAwait(false);
+
+        await using (var revokeCommand = lease.Connection.CreateCommand())
+        {
+            revokeCommand.Transaction = sqliteTransaction;
+            revokeCommand.CommandText = """
+                UPDATE trust_records
+                SET decision = $decision,
+                    last_seen_utc = $last_seen,
+                    expires_utc = $expires,
+                    previous_fingerprint = $previous,
+                    record_version = $version
+                WHERE trust_id = $id
+                  AND record_version = $expected_version
+                  AND decision = 'trusted';
+                """;
+            revokeCommand.Parameters.AddWithValue("$decision", ToStorage(revoked.Decision));
+            revokeCommand.Parameters.AddWithValue("$last_seen", FormatTimestamp(revoked.LastSeenUtc));
+            revokeCommand.Parameters.AddWithValue("$expires", revoked.ExpiresUtc is { } expires
+                ? FormatTimestamp(expires)
+                : DBNull.Value);
+            revokeCommand.Parameters.AddWithValue("$previous", revoked.PreviousFingerprint ?? (object)DBNull.Value);
+            revokeCommand.Parameters.AddWithValue("$version", revoked.Version);
+            revokeCommand.Parameters.AddWithValue("$id", revoked.TrustId);
+            revokeCommand.Parameters.AddWithValue("$expected_version", revoked.Version - 1);
+            if (await revokeCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            {
+                throw new TrustRecordConcurrencyException(revoked.TrustId);
+            }
+        }
+
+        await using (var replacementCommand = lease.Connection.CreateCommand())
+        {
+            replacementCommand.Transaction = sqliteTransaction;
+            replacementCommand.CommandText = """
+                INSERT INTO trust_records
+                (
+                    trust_id, profile_id, artifact_kind, canonical_host, port, algorithm,
+                    sha256_fingerprint, decision, decision_source, first_seen_utc,
+                    last_seen_utc, expires_utc, previous_fingerprint, record_version
+                )
+                VALUES
+                (
+                    $id, NULL, $kind, $host, $port, $algorithm, $fingerprint, $decision,
+                    $source, $first_seen, $last_seen, $expires, $previous, $version
+                );
+                """;
+            AddParameters(replacementCommand, replacement);
+            try
+            {
+                if (await replacementCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                {
+                    throw new TrustRecordConcurrencyException(replacement.TrustId);
+                }
+            }
+            catch (SqliteException error) when (error.SqliteErrorCode == 19)
+            {
+                throw new TrustRecordConcurrencyException(replacement.TrustId);
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static async ValueTask ValidateRevisionAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -199,6 +287,12 @@ public sealed partial class SqliteTrustStore(SingleWriterSqliteDatabase database
         };
     }
 
+    private static bool SameEndpoint(TrustRecord left, TrustRecord right) =>
+        left.ArtifactKind == right.ArtifactKind &&
+        string.Equals(left.CanonicalHost, right.CanonicalHost, StringComparison.Ordinal) &&
+        left.Port == right.Port &&
+        string.Equals(left.Algorithm, right.Algorithm, StringComparison.Ordinal);
+
     private static TrustRecord ReadRecord(SqliteDataReader reader) => new(
         reader.GetString(0),
         ParseArtifactKind(reader.GetString(1)),
@@ -262,6 +356,11 @@ public sealed partial class SqliteTrustStore(SingleWriterSqliteDatabase database
     private static string NormalizeFingerprint(string fingerprint, string parameterName)
     {
         var original = ValidateBounded(fingerprint, 128, "fingerprint");
+        if (original.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("The fingerprint cannot contain whitespace.", parameterName);
+        }
+
         var hexadecimal = original.Replace(":", string.Empty, StringComparison.Ordinal);
         if (HexSha256().IsMatch(hexadecimal))
         {

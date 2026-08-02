@@ -61,6 +61,27 @@ public sealed class PresentationModelTests
     }
 
     [Fact]
+    public void ProviderEditorsOnlyOfferOptionsRepresentedByRuntimeProfiles()
+    {
+        var local = ConnectionProviderCatalog.Get(StorageProviderKind.Local);
+        var s3 = ConnectionProviderCatalog.Get(StorageProviderKind.S3);
+        var ftp = ConnectionProviderCatalog.Get(StorageProviderKind.Ftp);
+        var ftps = ConnectionProviderCatalog.Get(StorageProviderKind.Ftps);
+        var sftp = ConnectionProviderCatalog.Get(StorageProviderKind.Sftp);
+
+        Assert.Equal(["rootPath"], local.GeneralFields.Select(field => field.Key));
+        Assert.Empty(local.AuthenticationFields);
+        Assert.Empty(local.SecurityFields);
+        Assert.Empty(s3.SecurityFields);
+        Assert.DoesNotContain(ftp.GeneralFields, field => field.Key == "passiveMode");
+        Assert.DoesNotContain(ftps.GeneralFields, field => field.Key == "passiveMode");
+        Assert.DoesNotContain(sftp.GeneralFields, field => field.Key == "keepAliveSeconds");
+        Assert.DoesNotContain(sftp.SecurityFields, field => field.Key == "hostKeyPolicy");
+        var authentication = Assert.Single(sftp.AuthenticationFields, field => field.Key == "authenticationMode");
+        Assert.Equal(["Private key reference", "Password reference"], authentication.Choices);
+    }
+
+    [Fact]
     public void QuickConnectValidationRejectsMissingEndpointsAndWarnsAboutPlainFtp()
     {
         var missingSftp = new QuickConnectDraft(StorageProviderKind.Sftp, "", 22, "user", true);

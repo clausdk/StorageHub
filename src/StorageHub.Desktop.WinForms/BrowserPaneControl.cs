@@ -403,6 +403,35 @@ public sealed class BrowserPaneControl : UserControl
         ApplyFilter();
     }
 
+    /// <summary>Navigates the currently selected local or saved-connection surface backward.</summary>
+    public void NavigateBack() => BackClicked(this, EventArgs.Empty);
+
+    /// <summary>Navigates the currently selected local or saved-connection surface forward.</summary>
+    public void NavigateForward() => ForwardClicked(this, EventArgs.Empty);
+
+    /// <summary>Navigates to the parent of the currently selected location.</summary>
+    public void NavigateUp() => UpClicked(this, EventArgs.Empty);
+
+    /// <summary>Reloads the current location or the saved-connections home.</summary>
+    public void Reload() => RefreshClicked(this, EventArgs.Empty);
+
+    /// <summary>Selects every visible item in the pane without selecting filtered-out items.</summary>
+    public void SelectAllVisibleItems()
+    {
+        _fileList.BeginUpdate();
+        try
+        {
+            for (var index = 0; index < _fileList.VirtualListSize; index++)
+            {
+                _fileList.SelectedIndices.Add(index);
+            }
+        }
+        finally
+        {
+            _fileList.EndUpdate();
+        }
+    }
+
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);

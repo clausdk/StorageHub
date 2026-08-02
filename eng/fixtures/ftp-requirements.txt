@@ -1,0 +1,17 @@
+--only-binary=:all:
+--require-hashes
+
+cffi==2.1.0 \
+    --hash=sha256:c97f080ea627e2863524c5af3836e2270b5f5dfff1f104392b959f8df0c5d384
+cryptography==49.0.0 \
+    --hash=sha256:e5dfc1e64de5677cec922ffa8da89c546d0415bf6efdf081842e5d44c84e1f0e
+pyasynchat==1.0.5 \
+    --hash=sha256:35b7859515693e479e8d95ebe9f32cbf4d6312ab7599ced39fc24699e51de46f
+pyasyncore==1.0.5 \
+    --hash=sha256:269bbc5252671827387636822841a1fb721ec6e858b23a3e12cf92eb1f97da2a
+pycparser==3.0 \
+    --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+pyOpenSSL==26.3.0 \
+    --hash=sha256:46367f8f66b92271e6d218da9c87607e1ef5a0bc5c8dea5bb3db82f395c385a3
+typing_extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8

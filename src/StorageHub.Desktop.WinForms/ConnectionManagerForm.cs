@@ -62,13 +62,7 @@ public sealed class ConnectionManagerForm : KryptonForm
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
 
         var toolbar = BuildToolbar();
-        _allCards = ConnectionProviderCatalog.All
-            .Select(provider => new ConnectionCardModel(
-                $"New {provider.DisplayName}",
-                provider.Kind,
-                provider.EndpointExample,
-                "Template"))
-            .ToList();
+        _allCards = [];
 
         _profileCards = new ListBox
         {
@@ -78,7 +72,7 @@ public sealed class ConnectionManagerForm : KryptonForm
             ItemHeight = 58,
             IntegralHeight = false,
             AccessibleName = "Connection profiles",
-            AccessibleDescription = "Saved profiles and provider-colored new connection templates."
+            AccessibleDescription = "Saved connection profiles. Use New connection to create another profile."
         };
         _profileCards.Items.AddRange(_allCards.Cast<object>().ToArray());
         _profileCards.DrawItem += DrawProfileCard;
@@ -99,7 +93,7 @@ public sealed class ConnectionManagerForm : KryptonForm
             Height = 62,
             Padding = new Padding(0, 0, 0, 8)
         };
-        var connectionsLabel = UiControlFactory.CreateSectionTitle(quickConnectMode ? "Provider templates" : "Connections");
+        var connectionsLabel = UiControlFactory.CreateSectionTitle("Saved connections");
         connectionsLabel.Dock = DockStyle.Top;
         _searchBox.Dock = DockStyle.Bottom;
         leftHeader.Controls.Add(_searchBox);
@@ -148,12 +142,6 @@ public sealed class ConnectionManagerForm : KryptonForm
         tabs.TabPages.Add(_generalPage);
         tabs.TabPages.Add(_authenticationPage);
         tabs.TabPages.Add(_securityPage);
-        tabs.TabPages.Add(BuildAdvancedPage());
-        tabs.TabPages.Add(BuildTransferPage());
-        tabs.TabPages.Add(BuildProxyPage());
-        tabs.TabPages.Add(BuildCharacterSetPage());
-        tabs.TabPages.Add(BuildSyncDefaultsPage());
-        tabs.TabPages.Add(BuildNotesPage());
 
         var editor = new Panel { Dock = DockStyle.Fill, BackColor = StorageHubTheme.Surface };
         editor.Controls.Add(tabs);
@@ -175,6 +163,7 @@ public sealed class ConnectionManagerForm : KryptonForm
         split.Panel2.Padding = new Padding(3, 0, 0, 0);
         split.Panel1.Controls.Add(left);
         split.Panel2.Controls.Add(editor);
+        split.Panel1Collapsed = quickConnectMode;
 
         _testState = new Label
         {
@@ -191,10 +180,6 @@ public sealed class ConnectionManagerForm : KryptonForm
         Controls.Add(toolbar);
 
         UpdateProviderEditor(ConnectionProviderCatalog.Get(initialProvider));
-        var initialCardIndex = ConnectionProviderCatalog.All
-            .Select((provider, index) => (provider, index))
-            .First(pair => pair.provider.Kind == initialProvider).index;
-        _profileCards.SelectedIndex = initialCardIndex;
     }
 
     protected override void Dispose(bool disposing)
@@ -249,11 +234,6 @@ public sealed class ConnectionManagerForm : KryptonForm
             AccessibleName = "Connection Manager commands"
         };
         toolbar.Items.Add(CreateToolbarButton(UiGlyph.Add, "New connection", (_, _) => StartNewProfile()));
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Folder, "New folder"));
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Compare, "Duplicate profile"));
-        toolbar.Items.Add(new ToolStripSeparator());
-        toolbar.Items.Add(new ToolStripButton("Import") { AccessibleName = "Import profiles" });
-        toolbar.Items.Add(new ToolStripButton("Export") { AccessibleName = "Export profiles" });
         toolbar.Items.Add(new ToolStripSeparator());
         toolbar.Items.Add(CreateToolbarButton(UiGlyph.Test, "Test connection", async (_, _) =>
             await TestSelectedConnectionAsync(_formLifetime.Token)));
@@ -347,93 +327,6 @@ public sealed class ConnectionManagerForm : KryptonForm
         BackColor = StorageHubTheme.Surface,
         Padding = new Padding(8)
     };
-
-    private static TabPage BuildAdvancedPage()
-    {
-        var page = NewPage("Advanced");
-        page.Controls.Add(BuildStaticSettingsPanel(
-            "Connection behavior",
-            "Bounded timeouts and provider-safe retry behavior apply to this profile.",
-            ("Connect timeout (seconds)", Numeric(30, 1, 300), "Handshake and authentication deadline."),
-            ("Command timeout (seconds)", Numeric(60, 1, 3600), "Maximum time for one metadata command."),
-            ("Retry policy", Choice("Exponential backoff", "Exponential backoff", "Fixed delay", "No automatic retry"), "Retries never bypass certificate or host-key failures."),
-            ("Read-only profile", Toggle(false, "Prevent writes and destructive actions"), "Useful for archives and audit sources.")));
-        return page;
-    }
-
-    private static TabPage BuildTransferPage()
-    {
-        var page = NewPage("Transfer");
-        page.Controls.Add(BuildStaticSettingsPanel(
-            "Transfer policy",
-            "Overrides the global queue defaults only for this connection.",
-            ("Concurrency", Numeric(2, 1, 32), "Maximum simultaneous operations for this endpoint."),
-            ("Bandwidth limit", new TextBox { PlaceholderText = "Unlimited or e.g. 20 MiB/s" }, "Leave blank to use the global limit."),
-            ("Verification", Choice("Balanced", "Fast", "Balanced", "Full checksum"), "Uses provider checksums when their semantics are trustworthy."),
-            ("Temporary targets", Toggle(true, "Commit only after successful transfer"), "Prevents incomplete downloads from looking complete.")));
-        return page;
-    }
-
-    private static TabPage BuildProxyPage()
-    {
-        var page = NewPage("Proxy");
-        page.Controls.Add(BuildStaticSettingsPanel(
-            "Proxy",
-            "Proxy credentials are stored as vault references, never inline.",
-            ("Mode", Choice("System proxy", "System proxy", "HTTP CONNECT", "SOCKS5", "Direct"), "Provider support is validated when the connection is tested."),
-            ("Proxy endpoint", new TextBox { PlaceholderText = "proxy.example.com:8080" }, "Required only for an explicit proxy."),
-            ("Credential reference", ReferencePicker("Select a vault entry", "Select…"), "Optional vault reference.")));
-        return page;
-    }
-
-    private static TabPage BuildCharacterSetPage()
-    {
-        var page = NewPage("Character Set");
-        page.Controls.Add(BuildStaticSettingsPanel(
-            "Names and timestamps",
-            "UTF-8 is used wherever the protocol supports it.",
-            ("Filename encoding", Choice("UTF-8 (recommended)", "UTF-8 (recommended)", "Server default", "Windows-1252"), "Legacy encodings apply to FTP only."),
-            ("Unicode normalization", Choice("Preserve", "Preserve", "NFC", "NFD"), "Preserve avoids unexpected remote renames."),
-            ("Timestamp zone", Choice("Provider default", "Provider default", "UTC", "Local time"), "StorageHub stores normalized instants when available.")));
-        return page;
-    }
-
-    private static TabPage BuildSyncDefaultsPage()
-    {
-        var page = NewPage("Sync Defaults");
-        page.Controls.Add(BuildStaticSettingsPanel(
-            "Safe sync defaults",
-            "Every run still produces an immutable preview plan before changes are applied.",
-            ("Role", Choice("No default", "No default", "Preferred source", "Preferred destination"), "Used only when creating a new profile from this connection."),
-            ("Delete propagation", Toggle(false, "Disabled (safe default)"), "Deletes require an explicit profile choice and mass-delete guard."),
-            ("Conflict policy", Choice("Pause and ask", "Pause and ask", "Keep both", "Newest wins"), "Pause and ask preserves both sides until reviewed.")));
-        return page;
-    }
-
-    private static TabPage BuildNotesPage()
-    {
-        var page = NewPage("Notes");
-        var note = new TextBox
-        {
-            Dock = DockStyle.Fill,
-            Multiline = true,
-            ScrollBars = ScrollBars.Vertical,
-            PlaceholderText = "Operational notes, owner, maintenance window…",
-            AccessibleName = "Connection notes",
-            AccessibleDescription = "Do not enter passwords, private keys, or recovery codes."
-        };
-        var warning = new Label
-        {
-            Dock = DockStyle.Top,
-            Height = 38,
-            Text = "Notes are profile metadata. Never place secrets or private-key material here.",
-            ForeColor = StorageHubTheme.Warning,
-            Padding = new Padding(6, 8, 6, 4)
-        };
-        page.Controls.Add(note);
-        page.Controls.Add(warning);
-        return page;
-    }
 
     private void ProviderSelectionChanged(object? sender, EventArgs e)
     {
@@ -554,11 +447,6 @@ public sealed class ConnectionManagerForm : KryptonForm
                 "Connection badge",
                 badge,
                 "The provider glyph and accent make concurrent connections easy to distinguish.");
-            UiControlFactory.AddLabeledRow(
-                table,
-                "Default local folder",
-                ReferencePicker("Optional starting folder", "Browse…", readOnly: false),
-                "Used when this profile opens opposite a local pane.");
         }
 
         foreach (var field in fields)
@@ -637,11 +525,7 @@ public sealed class ConnectionManagerForm : KryptonForm
             case ConnectionFieldKind.CertificateReference:
                 return VaultReferencePicker(field);
             case ConnectionFieldKind.Fingerprint:
-                return new TextBox
-                {
-                    PlaceholderText = field.Placeholder,
-                    AccessibleDescription = "Verify this fingerprint through a separate trusted channel before saving."
-                };
+                return FingerprintPicker(field);
             case ConnectionFieldKind.Path:
                 return ReferencePicker(field.Placeholder, "Browse…", readOnly: false, initialText: ResolveInitialValue(field));
             default:
@@ -687,20 +571,6 @@ public sealed class ConnectionManagerForm : KryptonForm
         table.SetColumnSpan(summary, 2);
         table.RowCount = 2;
         panel.Controls.Add(table);
-        return panel;
-    }
-
-    private static Panel BuildStaticSettingsPanel(
-        string title,
-        string description,
-        params (string Label, Control Control, string Help)[] rows)
-    {
-        var panel = CreateScrollableContent(title, description, out var table);
-        foreach (var row in rows)
-        {
-            UiControlFactory.AddLabeledRow(table, row.Label, row.Control, row.Help);
-        }
-
         return panel;
     }
 
@@ -758,6 +628,24 @@ public sealed class ConnectionManagerForm : KryptonForm
         var select = new Button { Text = buttonText, AutoSize = true };
         StorageHubTheme.StyleSecondaryButton(select);
         select.Margin = new Padding(6, 0, 0, 0);
+        if (!readOnly)
+        {
+            select.Click += (_, _) =>
+            {
+                using var dialog = new FolderBrowserDialog
+                {
+                    Description = "Choose the connection root folder",
+                    InitialDirectory = Directory.Exists(value.Text) ? value.Text : string.Empty,
+                    ShowNewFolderButton = false,
+                    UseDescriptionForTitle = true
+                };
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    value.Text = dialog.SelectedPath;
+                }
+            };
+        }
+
         panel.Controls.Add(value, 0, 0);
         panel.Controls.Add(select, 1, 0);
         return panel;
@@ -797,7 +685,39 @@ public sealed class ConnectionManagerForm : KryptonForm
         return panel;
     }
 
-    private ToolStripButton CreateToolbarButton(UiGlyph glyph, string tooltip, EventHandler? click = null)
+    private TableLayoutPanel FingerprintPicker(ConnectionFieldDescriptor field)
+    {
+        var panel = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 2,
+            Dock = DockStyle.Top,
+            Margin = Padding.Empty
+        };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var value = new TextBox
+        {
+            PlaceholderText = field.Placeholder,
+            Dock = DockStyle.Fill,
+            AccessibleName = field.Label,
+            AccessibleDescription = "Verify this SHA-256 fingerprint through a separate trusted channel before saving."
+        };
+        var reject = new Button
+        {
+            Text = "Reject…",
+            AutoSize = true,
+            AccessibleDescription = "Record this exact fingerprint as rejected for the saved endpoint."
+        };
+        StorageHubTheme.StyleSecondaryButton(reject);
+        reject.Margin = new Padding(6, 0, 0, 0);
+        reject.Click += async (_, _) => await RejectFingerprintAsync(value, _formLifetime.Token);
+        panel.Controls.Add(value, 0, 0);
+        panel.Controls.Add(reject, 1, 0);
+        return panel;
+    }
+
+    private ToolStripButton CreateToolbarButton(UiGlyph glyph, string tooltip, EventHandler click)
     {
         var image = CreateOwnedImage(glyph, StorageHubTheme.Text);
         var button = new ToolStripButton
@@ -808,10 +728,7 @@ public sealed class ConnectionManagerForm : KryptonForm
             ToolTipText = tooltip,
             AccessibleName = tooltip
         };
-        if (click is not null)
-        {
-            button.Click += click;
-        }
+        button.Click += click;
 
         return button;
     }
@@ -885,20 +802,7 @@ public sealed class ConnectionManagerForm : KryptonForm
 
             var selectedId = _selectedProfile?.ConnectionId;
             _allCards.Clear();
-            _allCards.AddRange(response.Connections.Select(connection => new ConnectionCardModel(
-                connection.DisplayName,
-                MapProvider(connection.Provider),
-                connection.FolderPath ?? ConnectionProviderCatalog.Get(MapProvider(connection.Provider)).EndpointExample,
-                connection.IsEnabled ? "Saved" : "Disabled",
-                connection.IsFavorite,
-                connection.ConnectionId,
-                connection.IsEnabled,
-                connection.AccentColor)));
-            _allCards.AddRange(ConnectionProviderCatalog.All.Select(provider => new ConnectionCardModel(
-                $"New {provider.DisplayName}",
-                provider.Kind,
-                provider.EndpointExample,
-                "Template")));
+            _allCards.AddRange(response.Connections.Select(CreateSavedConnectionCard));
             RefreshProfileCards(selectedId);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -937,6 +841,9 @@ public sealed class ConnectionManagerForm : KryptonForm
                         SetControlValue(control, pair.Value);
                     }
                 }
+
+
+                await LoadTrustIntoEditorAsync(response.Profile, cancellationToken);
             }
             finally
             {
@@ -979,6 +886,24 @@ public sealed class ConnectionManagerForm : KryptonForm
             }
 
             _selectedProfile = response.Profile;
+            var fingerprint = GetPinnedFingerprint(response.Profile, ReadEditorValues());
+            if (fingerprint is not null)
+            {
+                ShowStatus("Saving verified server trust…", StorageHubTheme.TextMuted);
+                var trustResponse = await _controller.TrustOrRolloverAsync(
+                    response.Profile,
+                    fingerprint,
+                    cancellationToken);
+                if (trustResponse.Status != ConnectionTrustMutationStatus.Succeeded)
+                {
+                    ShowStatus(
+                        trustResponse.Failure?.Message ??
+                        "The profile was saved, but its pin was not enrolled. It remains fail-closed.",
+                        StorageHubTheme.Warning);
+                    return;
+                }
+            }
+
             await ReloadProfilesAsync(cancellationToken);
             ShowStatus($"Saved version {response.Profile.Version}", StorageHubTheme.Success);
         }
@@ -1258,8 +1183,107 @@ public sealed class ConnectionManagerForm : KryptonForm
         return values;
     }
 
+    private async Task LoadTrustIntoEditorAsync(
+        ConnectionProfileDocument profile,
+        CancellationToken cancellationToken)
+    {
+        var fieldKey = TrustFingerprintField(profile);
+        if (fieldKey is null || !_editorFields.TryGetValue(fieldKey, out var control))
+        {
+            return;
+        }
+
+        var response = await _controller.GetTrustAsync(profile, cancellationToken);
+        if (response.Snapshot is null)
+        {
+            throw new InvalidDataException(
+                response.Failure?.Message ?? "The saved server trust state could not be loaded.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var active = response.Snapshot.Records
+            .Where(record => record.Decision == ConnectionTrustDecision.Trusted &&
+                (record.ExpiresUtc is null || record.ExpiresUtc > now))
+            .ToArray();
+        SetControlValue(control, active.Length == 1 ? active[0].Sha256Fingerprint : string.Empty);
+        if (active.Length > 1)
+        {
+            throw new InvalidDataException(
+                "Multiple active server trust records require reconciliation before editing this profile.");
+        }
+    }
+
+    private async Task RejectFingerprintAsync(TextBox value, CancellationToken cancellationToken)
+    {
+        if (_selectedProfile is null)
+        {
+            ShowStatus("Save the connection before recording a rejected fingerprint.", StorageHubTheme.Warning);
+            return;
+        }
+
+        var fingerprint = value.Text.Trim();
+        if (!ConnectionTrustIpcLimits.IsValidFingerprint(fingerprint))
+        {
+            ShowStatus("Enter a valid SHA-256 fingerprint before rejecting it.", StorageHubTheme.Warning);
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                "Record this exact server identity as rejected? Connections will continue to fail closed unless a different verified identity is trusted.",
+                "Reject server identity",
+                MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Warning) != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            ShowStatus("Recording rejected server identity…", StorageHubTheme.TextMuted);
+            var response = await _controller.RejectAsync(_selectedProfile, fingerprint, cancellationToken);
+            if (response.Status != ConnectionTrustMutationStatus.Succeeded)
+            {
+                ShowStatus(response.Failure?.Message ?? "The rejected identity could not be recorded.", StorageHubTheme.Warning);
+                return;
+            }
+
+            value.Clear();
+            ShowStatus("Rejected server identity recorded; the profile remains fail-closed.", StorageHubTheme.Success);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            ShowStatus("The rejected identity could not be recorded through the background agent.", StorageHubTheme.Warning);
+        }
+    }
+
+    private static string? GetPinnedFingerprint(
+        ConnectionProfileDocument profile,
+        Dictionary<string, string> values)
+    {
+        var key = TrustFingerprintField(profile);
+        return key is not null && values.TryGetValue(key, out var fingerprint) &&
+            !string.IsNullOrWhiteSpace(fingerprint)
+                ? fingerprint.Trim()
+                : null;
+    }
+
+    private static string? TrustFingerprintField(ConnectionProfileDocument profile) =>
+        profile.Draft.Endpoint switch
+        {
+            { Provider: StorageConnectionProvider.Ftps, TlsPolicy: ConnectionTlsCertificatePolicy.Pinned } =>
+                "certificatePin",
+            { Provider: StorageConnectionProvider.Sftp, SshHostKeyPolicy: ConnectionSshHostKeyPolicy.Pinned } =>
+                "hostKeyFingerprint",
+            _ => null
+        };
+
     private void StartNewProfile()
     {
+        _profileCards.ClearSelected();
         _selectedProfile = null;
         if (_providerSelector.SelectedItem is ConnectionProviderDescriptor provider)
         {
@@ -1279,14 +1303,32 @@ public sealed class ConnectionManagerForm : KryptonForm
             _profileCards.Items.AddRange(_allCards.Cast<object>().ToArray());
             var selectedIndex = selectedId is { } id
                 ? _allCards.FindIndex(card => card.ConnectionId == id)
-                : _allCards.FindIndex(static card => card.ConnectionId is null);
-            _profileCards.SelectedIndex = selectedIndex >= 0 ? selectedIndex : 0;
+                : -1;
+            _profileCards.SelectedIndex = selectedIndex;
         }
         finally
         {
             _profileCards.EndUpdate();
             _loadingEditor = false;
         }
+    }
+
+    private static ConnectionCardModel CreateSavedConnectionCard(ConnectionSummary connection)
+    {
+        var provider = MapProvider(connection.Provider);
+        var providerName = ConnectionProviderCatalog.Get(provider).DisplayName;
+        var summary = string.IsNullOrWhiteSpace(connection.FolderPath)
+            ? $"{providerName} saved profile"
+            : $"{providerName} · {connection.FolderPath}";
+        return new ConnectionCardModel(
+            connection.DisplayName,
+            provider,
+            summary,
+            connection.IsEnabled ? "Saved" : "Disabled",
+            connection.IsFavorite,
+            connection.ConnectionId,
+            connection.IsEnabled,
+            connection.AccentColor);
     }
 
     private void ShowStatus(string message, Color color)

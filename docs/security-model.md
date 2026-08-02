@@ -58,6 +58,10 @@ machine is not a supported recovery mechanism.
   the provider boundary cannot capture a candidate key safely.
 - Trust records normalize host, port, artifact kind, and SHA-256 fingerprint and
   use optimistic versions.
+- Connection Manager trust mutations name a saved profile and its exact revision;
+  the agent derives the enforceable artifact kind, canonical host, and port from
+  that pinned profile. Enrollment and rejection are optimistic, while rollover
+  atomically revokes the old identity and trusts the verified replacement.
 - Plain FTP and HTTP S3 endpoints require an explicit insecure-transport
   acknowledgement in the domain model.
 - Endpoint and proxy URLs reject embedded credentials, query strings, and
@@ -173,6 +177,10 @@ approval or trigger unattended apply.
   revisions and accept only validated provider documents whose credential fields
   are opaque vault references. They contain no secret-value or free-form notes
   member; existing notes never cross profile IPC.
+- Versioned trust get/decide/rollover commands expose only bounded non-secret
+  identity history. They reject stale profile or trust revisions, non-pinned
+  profiles, malformed fingerprints, cross-record identity substitution, and
+  same-identity rollover before changing the authoritative store.
 - Secret-prefixed messages are rejected on the normal IPC channel. Enrollment,
   rotation, and deletion use the separate account-scoped secret pipe,
   typed secret envelopes, the 32 MiB secret-frame ceiling, and a 16 MiB material
@@ -197,17 +205,35 @@ allow-list policy. Never attach the raw data directory to a bug report.
 
 ## Known preview limitations
 
-- Remote S3/FTP(S)/SFTP interoperability and hostile-server tests are not yet in
-  the repository.
+- S3-compatible storage is exercised against a disposable,
+  SHA-256-pinned MinIO process on random loopback ports with ephemeral
+  credentials; the fixture rejects non-loopback endpoints and verifies mounted
+  prefix containment, cross-profile/root substitution, hostile tokens,
+  create-only collision safety, abort behavior, and sanitized credential
+  failures. FTP and explicit/implicit FTPS use hash-locked user-space servers,
+  random loopback control/passive ports, generated credentials and short-lived
+  CA/server/client certificates, encrypted data channels, an encrypted server
+  key, and an encrypted client PFX. The CA private key remains memory-only.
+  Negative cases cover wrong pins, private-CA system trust, missing
+  or invalid client-PFX authentication, bad credentials, and plaintext/TLS
+  downgrade attempts without logging secrets. SFTP uses hash-locked AsyncSSH
+  endpoints on random loopback ports with per-run password, encrypted RSA host
+  keys, encrypted authorized and unauthorized client keys, and mounted roots.
+  It covers password-only and public-key-only authentication, changed host keys,
+  malformed/missing pins, wrong passwords/passphrases/keys, authentication-mode
+  substitution, bounded transfer/listing/abort behavior, and root/address
+  containment. Fixture output is drained and its exact processes, key files,
+  data, and run directory are removed after the test.
 - The pinned CL.Storage local provider validates reparse-point containment before
   later path-based I/O; it does not yet use handle-relative no-follow traversal.
   Until that upstream race is closed, use local provider roots that are not
   writable by another security principal. The current-user threat boundary does
   not treat concurrently hostile local filesystem mutation as safe. StorageHub's
   random reserved staging ownership and cleanup rely on that same boundary.
-- Certificate-pin and SSH host-key trust-record enrollment is not yet exposed by
-  Connection Manager IPC. Pinned profiles remain fail-closed until a verified
-  trust record exists in the authoritative trust store.
+- Connection Manager requires users to obtain and verify certificate and SSH
+  host-key SHA-256 fingerprints through a separate trusted channel. StorageHub
+  does not probe or accept a candidate identity on first contact; pinned profiles
+  remain fail-closed until the verified fingerprint is explicitly saved.
 - Manual pane transfer currently accepts files from saved connections only;
   directory recursion and ad-hoc/This PC queue identities are not yet modeled.
 - Aggregate CodeLogic health intentionally sees CL.Storage's persisted-provider

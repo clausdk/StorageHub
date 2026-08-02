@@ -12,8 +12,8 @@ CodeLogic application lifecycle, and adapts the all-in-one `CL.Storage`
 > [!IMPORTANT]
 > StorageHub is currently an engineering preview, not a finished file-manager
 > release. Core browsing, saved-pane file transfers, queue execution, sync, and
-> preview scheduling are wired, but provider interoperability, trust enrollment,
-> directory jobs, code signing, and production stress/security gates remain. Do not
+> preview scheduling and explicit server-trust management are wired, but provider
+> interoperability, directory jobs, code signing, and production stress/security gates remain. Do not
 > use this revision as the only copy of important data.
 
 ## Install
@@ -46,7 +46,13 @@ release.
   and error mapping, runtime-only connections, explicit streamed SHA-256,
   exact-version/metadata/tag adapters, atomic local publication through a
   reserved/scavenged staging namespace, and a real local-provider integration
-  test. Opaque provider ETags are never treated as content hashes.
+  test. A disposable, SHA-256-pinned MinIO fixture applies the shared provider
+  conformance and hostile-input suite to S3-compatible storage. Hash-locked
+  user-space FTP fixtures cover plaintext FTP, explicit and implicit FTPS,
+  generated certificate pins, and client-PFX authentication. A hash-locked
+  AsyncSSH fixture covers SFTP password and encrypted-private-key authentication,
+  host-key rotation, authentication substitution, and malformed pins. Opaque
+  provider ETags are never treated as content hashes.
 - Validated connection profiles for local storage, S3, FTP, FTPS, and SFTP,
   including favorites, folders, tags, per-connection options, PFX references,
   SSH private-key references, and optimistic concurrency in SQLite.
@@ -57,6 +63,10 @@ release.
   identities bind the profile revision, endpoint namespace, authentication
   principal/mode, vault revisions, and selected trust revisions without
   including credential values.
+- Profile-revision-bound Connection Manager flows for verified FTPS certificate
+  and SFTP host-key enrollment, explicit rejection, and atomic rollover. Trust
+  targets are derived by the agent from the saved pinned profile; no certificate
+  or host key is accepted on first contact.
 - A Windows DPAPI current-user vault with versioned envelopes, atomic updates,
   rotation, corruption detection, and zeroed secret leases.
 - A WAL-mode SQLite foundation with cross-process-serialized migrations, foreign
@@ -118,9 +128,9 @@ library.
 | Provider | In `CL.Storage` | StorageHub profile model | End-to-end StorageHub coverage |
 | --- | :---: | :---: | --- |
 | Local directories and UNC paths | Yes | Yes | Real integration test |
-| Amazon S3 and S3-compatible services | Yes | Yes | Runtime binding implemented; remote test pending |
-| FTP, explicit FTPS, implicit FTPS | Yes | Yes | Runtime binding implemented; remote test pending |
-| SFTP | Yes, via SSH.NET | Yes | Runtime binding implemented; remote test pending |
+| Amazon S3 and S3-compatible services | Yes | Yes | Hermetic MinIO interoperability and hostile-input test |
+| FTP, explicit FTPS, implicit FTPS | Yes | Yes | Hermetic interoperability, pin/downgrade, and client-PFX tests |
+| SFTP | Yes, via SSH.NET | Yes | Hermetic password/key interoperability and hostile host-key tests |
 | WebDAV | Yes | Not yet | Pending |
 | Azure Blob Storage | Yes | Not yet | Pending |
 | Google Cloud Storage | Yes | Not yet | Pending |
@@ -132,6 +142,7 @@ library.
 - [.NET SDK 10.0.302](global.json), or a later 10.0 patch accepted by
   `global.json`
 - Git
+- CPython 3.12 when running the local FTP/FTPS or SFTP fixtures; CI pins 3.12.13
 - A checkout of [Media2A/CodeLogic.Libs](https://github.com/Media2A/CodeLogic.Libs)
   containing `CL.Storage`
 
@@ -144,7 +155,7 @@ looks here:
 ```
 
 StorageHub pins that source checkout to CodeLogic.Libs commit
-`25d357b7e3896e2ff3d6c29875178a6b0f12ed60`. Source-dependent projects run an
+`c70fefe4420279af8bec45e55a37f4acd5204ee3`. Source-dependent projects run an
 MSBuild pre-build check and fail if `git rev-parse HEAD` for `CodeLogicLibsRoot`
 does not equal that revision or the `CL.Storage` subtree is dirty. For any other
 location, pass both MSBuild properties shown below. `CLStorageProjectPath`

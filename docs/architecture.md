@@ -28,6 +28,7 @@ StorageHub.Agent.Windows (CodeLogic lifecycle)
 The desktop is intended to be disposable presentation state. The agent owns
 long-running work and durable state. It exposes status, request-scoped saved
 connection discovery/testing, paged storage listing, optimistic profile CRUD,
+profile-bound certificate/host-key trust decisions and atomic rollover,
 durable transfer queue commands, sync preview/apply management, and preview-only
 schedule management. A separate current-user-only channel owns secret enrollment
 and rotation. The desktop uses these operations for bounded remote browsing,
@@ -170,7 +171,10 @@ schema v4 adds immutable lease-keyed scheduler completion records; schemas v5-v7
 add sync durability, orchestration, and fenced execution; and schema v8 adds
 portable checksum evidence plus digest-schema tracking.
 
-Connection-profile and trust repositories use optimistic versions. Scheduler,
+Connection-profile and trust repositories use optimistic versions. Trust
+rollover revokes the old identity and inserts the verified replacement in one
+SQLite transaction, while IPC binds the mutation to the exact saved profile
+revision and derives the artifact kind, host, and port server-side. Scheduler,
 transfer, sync, execution, and outbox repositories implement their durable
 concurrency protocols. Transfer, sync-outbox, and scheduler workers are composed
 into the agent; schema presence alone is still not treated as feature completion.
@@ -187,9 +191,35 @@ PuTTY, WinSCP, FileZilla, rsync, or other transfer executables. `CL.Storage` use
 managed/open-source provider packages such as SSH.NET and FluentFTP.
 
 The source-integrated `CL.Storage` dependency is pinned to CodeLogic.Libs commit
-`25d357b7e3896e2ff3d6c29875178a6b0f12ed60`. An MSBuild pre-build target resolves
+`c70fefe4420279af8bec45e55a37f4acd5204ee3`. An MSBuild pre-build target resolves
 the checkout's Git `HEAD` and rejects source-dependent builds at any other
 revision.
+
+Provider integration fixtures run outside the application process lifecycle.
+The first fixture downloads an exact MinIO release only from the official
+archive, verifies its reviewed SHA-256 before execution, binds it to random
+loopback ports with ephemeral credentials and data, and removes only the run
+directory and process it created. CI applies a shared S3 conformance and
+hostile-input suite before packaging; the installer jobs remain independent of
+the fixture.
+
+The FTP fixture similarly downloads an exact pyftpdlib source archive and
+verifies its reviewed SHA-256, while every binary Python TLS dependency is
+version- and hash-locked. It generates a memory-only private CA plus a server
+certificate, encrypted server key, client certificate, and encrypted PFX for
+each run; starts separate plaintext,
+explicit-TLS, implicit-TLS, and mutual-TLS servers on random loopback control
+and passive ports; requires encrypted FTPS data channels; and removes only its
+own processes and run directory. The shared conformance suite adapts to FTP's
+advertised lack of atomic conditional create instead of silently emulating it.
+
+The SFTP fixture installs only version- and hash-locked binary Python packages,
+generates encrypted RSA host and client OpenSSH keys for every run, and starts
+separate password-only, public-key-only, and rotated-host-key AsyncSSH endpoints
+on random loopback ports. The shared bounded conformance suite uses unique-path
+overwrite because SFTP does not advertise atomic conditional create. Host-key,
+credential, passphrase, key, authentication-mode, address, and mounted-root
+substitution cases must fail closed without disclosing fixture secrets.
 
 New providers should first join `CL.Storage`, then receive a StorageHub profile
 model, secure credential/trust mapping, capability conformance tests, and a

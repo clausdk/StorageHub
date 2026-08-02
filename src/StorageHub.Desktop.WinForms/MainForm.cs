@@ -17,6 +17,8 @@ public sealed class MainForm : KryptonForm
     private readonly TabControl _workspaceTabs;
     private readonly TransferQueueControl _transferQueue;
     private ShellStatusSnapshot _status = ShellStatusSnapshot.Initial;
+    private BrowserPaneControl? _activePane;
+    private bool _changingWorkspaceTabs;
     private bool _monitorStarted;
 
     public MainForm()
@@ -42,7 +44,8 @@ public sealed class MainForm : KryptonForm
             AccessibleName = "Workspace tabs",
             AccessibleDescription = "Each tab contains independent source and destination browser panes.",
             Padding = new Point(16, 5),
-            HotTrack = true
+            HotTrack = true,
+            DrawMode = TabDrawMode.OwnerDrawFixed
         };
         _workspaceTabs.TabPages.Add(CreateWorkspace("Local ↔ Connections"));
         _workspaceTabs.TabPages.Add(new TabPage("+")
@@ -51,6 +54,8 @@ public sealed class MainForm : KryptonForm
             AccessibleName = "New workspace tab"
         });
         _workspaceTabs.SelectedIndexChanged += WorkspaceTabsSelectedIndexChanged;
+        _workspaceTabs.DrawItem += WorkspaceTabsDrawItem;
+        _workspaceTabs.MouseDown += WorkspaceTabsMouseDown;
 
         var mainSplit = new SplitContainer
         {
@@ -96,6 +101,8 @@ public sealed class MainForm : KryptonForm
             _lifetime.Cancel();
             _manualTransfers.TransfersEnqueued -= ManualTransfersEnqueued;
             _workspaceTabs.SelectedIndexChanged -= WorkspaceTabsSelectedIndexChanged;
+            _workspaceTabs.DrawItem -= WorkspaceTabsDrawItem;
+            _workspaceTabs.MouseDown -= WorkspaceTabsMouseDown;
             _agentMonitor.StatusChanged -= AgentMonitorStatusChanged;
             _agentMonitor.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _manualTransfers.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -133,6 +140,11 @@ public sealed class MainForm : KryptonForm
             };
             foreach (var command in UiCommandCatalog.Commands[menuName])
             {
+                if (!IsAvailableCommand(command))
+                {
+                    continue;
+                }
+
                 var definition = UiCommandCatalog.GetDefinition(menuName, command);
                 var item = new ToolStripMenuItem(command)
                 {
@@ -146,7 +158,14 @@ public sealed class MainForm : KryptonForm
                 root.DropDownItems.Add(item);
             }
 
-            menu.Items.Add(root);
+            if (root.DropDownItems.Count > 0)
+            {
+                menu.Items.Add(root);
+            }
+            else
+            {
+                root.Dispose();
+            }
         }
 
         return menu;
@@ -160,7 +179,7 @@ public sealed class MainForm : KryptonForm
             GripStyle = ToolStripGripStyle.Hidden,
             ImageScalingSize = new Size(20, 20),
             AccessibleName = "Main toolbar",
-            AccessibleDescription = "Navigation, connection, compare, and transfer commands.",
+            AccessibleDescription = "Workspace, navigation, and connection commands.",
             BackColor = StorageHubTheme.Surface,
             ForeColor = StorageHubTheme.Text,
             Renderer = StorageHubTheme.CreateToolStripRenderer(),
@@ -170,54 +189,10 @@ public sealed class MainForm : KryptonForm
         toolbar.Items.Add(CreateToolbarButton(UiGlyph.Add, "New tab", (_, _) => AddWorkspace()));
         toolbar.Items.Add(CreateToolbarButton(UiGlyph.Connections, "Connection Manager", (_, _) => ShowConnectionManager()));
         toolbar.Items.Add(new ToolStripSeparator());
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Back, "Back"));
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Forward, "Forward"));
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Up, "Up"));
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Refresh, "Refresh"));
-        toolbar.Items.Add(new ToolStripSeparator());
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Compare, "Compare panes"));
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Run, "Start queue"));
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Pause, "Pause all"));
-        toolbar.Items.Add(new ToolStripSeparator());
-        toolbar.Items.Add(new ToolStripLabel("Quick connect:")
-        {
-            ForeColor = StorageHubTheme.TextMuted,
-            AccessibleName = "Quick connect"
-        });
-
-        var provider = new ToolStripComboBox
-        {
-            Name = "QuickConnectProvider",
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            Width = 92,
-            AccessibleName = "Quick-connect provider"
-        };
-        provider.Items.AddRange(ConnectionProviderCatalog.All.Cast<object>().ToArray());
-        provider.SelectedItem = ConnectionProviderCatalog.Get(StorageProviderKind.Sftp);
-        toolbar.Items.Add(provider);
-
-        var endpoint = new ToolStripTextBox
-        {
-            Name = "QuickConnectEndpoint",
-            AutoSize = false,
-            Width = 190,
-            AccessibleName = "Quick-connect host or path",
-            ToolTipText = "Host, S3 endpoint, or local/UNC path"
-        };
-        endpoint.KeyDown += (_, args) =>
-        {
-            if (args.KeyCode == Keys.Enter)
-            {
-                OpenQuickConnect(provider, endpoint);
-                args.Handled = true;
-                args.SuppressKeyPress = true;
-            }
-        };
-        toolbar.Items.Add(endpoint);
-        toolbar.Items.Add(CreateToolbarButton(
-            UiGlyph.Connections,
-            "Open quick connect",
-            (_, _) => OpenQuickConnect(provider, endpoint)));
+        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Back, "Back", (_, _) => NavigateActivePane(PaneNavigation.Back)));
+        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Forward, "Forward", (_, _) => NavigateActivePane(PaneNavigation.Forward)));
+        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Up, "Up", (_, _) => NavigateActivePane(PaneNavigation.Up)));
+        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Refresh, "Refresh", (_, _) => NavigateActivePane(PaneNavigation.Refresh)));
         return toolbar;
     }
 
@@ -268,6 +243,8 @@ public sealed class MainForm : KryptonForm
         split.Panel2.Padding = new Padding(3, 0, 0, 0);
         var source = new BrowserPaneControl("Source", showLocalDefault: true);
         var destination = new BrowserPaneControl("Destination", showLocalDefault: false);
+        source.Enter += ActivePaneEntered;
+        destination.Enter += ActivePaneEntered;
         source.TransferRequested += (_, args) =>
             _ = EnqueueManualTransferAsync(source, destination, args.Operation);
         destination.TransferRequested += (_, args) =>
@@ -283,7 +260,7 @@ public sealed class MainForm : KryptonForm
     private ToolStripButton CreateToolbarButton(
         UiGlyph glyph,
         string toolTip,
-        EventHandler? click = null)
+        EventHandler click)
     {
         var image = UiIconFactory.Create(glyph, StorageHubTheme.Text, 20, DeviceDpi / 96F);
         _ownedImages.Add(image);
@@ -296,10 +273,7 @@ public sealed class MainForm : KryptonForm
             AccessibleDescription = toolTip,
             AutoToolTip = true
         };
-        if (click is not null)
-        {
-            button.Click += click;
-        }
+        button.Click += click;
 
         return button;
     }
@@ -319,18 +293,6 @@ public sealed class MainForm : KryptonForm
                 case "Connection Manager...":
                     ShowConnectionManager();
                     break;
-                case "Quick Connect...":
-                    using (var dialog = new ConnectionManagerForm(StorageProviderKind.Sftp, quickConnectMode: true))
-                    {
-                        _ = dialog.ShowDialog(this);
-                    }
-                    break;
-                case "Settings...":
-                    using (var dialog = new SettingsForm())
-                    {
-                        _ = dialog.ShowDialog(this);
-                    }
-                    break;
                 case "Sync Profiles...":
                 case "Preview Sync...":
                     using (var dialog = new SyncProfileEditorForm())
@@ -347,6 +309,21 @@ public sealed class MainForm : KryptonForm
                     break;
                 case "Properties":
                     ShowObjectInspectorFromFocusedPane();
+                    break;
+                case "Select All":
+                    GetActivePane()?.SelectAllVisibleItems();
+                    break;
+                case "Refresh":
+                    NavigateActivePane(PaneNavigation.Refresh);
+                    break;
+                case "Back":
+                    NavigateActivePane(PaneNavigation.Back);
+                    break;
+                case "Forward":
+                    NavigateActivePane(PaneNavigation.Forward);
+                    break;
+                case "Up":
+                    NavigateActivePane(PaneNavigation.Up);
                     break;
                 case "Run Sync":
                     _transferQueue.SelectSyncRunsTab();
@@ -374,10 +351,68 @@ public sealed class MainForm : KryptonForm
 
     private void WorkspaceTabsSelectedIndexChanged(object? sender, EventArgs e)
     {
-        if (_workspaceTabs.SelectedIndex == _workspaceTabs.TabPages.Count - 1)
+        if (!_changingWorkspaceTabs &&
+            _workspaceTabs.SelectedIndex == _workspaceTabs.TabPages.Count - 1)
         {
             AddWorkspace();
         }
+    }
+
+    private void WorkspaceTabsDrawItem(object? sender, DrawItemEventArgs e)
+    {
+        var page = _workspaceTabs.TabPages[e.Index];
+        var selected = e.Index == _workspaceTabs.SelectedIndex;
+        var bounds = _workspaceTabs.GetTabRect(e.Index);
+        var background = selected ? StorageHubTheme.Surface : StorageHubTheme.SurfaceMuted;
+        using var brush = new SolidBrush(background);
+        e.Graphics.FillRectangle(brush, bounds);
+
+        if (page == _workspaceTabs.TabPages[^1])
+        {
+            TextRenderer.DrawText(
+                e.Graphics,
+                page.Text,
+                Font,
+                bounds,
+                StorageHubTheme.Text,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            return;
+        }
+
+        var closeBounds = GetWorkspaceCloseBounds(bounds);
+        var textBounds = Rectangle.FromLTRB(bounds.Left + 8, bounds.Top, closeBounds.Left - 5, bounds.Bottom);
+        TextRenderer.DrawText(
+            e.Graphics,
+            page.Text,
+            Font,
+            textBounds,
+            StorageHubTheme.Text,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        using var pen = new Pen(StorageHubTheme.TextMuted, Math.Max(1F, DeviceDpi / 96F * 1.4F));
+        e.Graphics.DrawLine(pen, closeBounds.Left + 4, closeBounds.Top + 4, closeBounds.Right - 4, closeBounds.Bottom - 4);
+        e.Graphics.DrawLine(pen, closeBounds.Right - 4, closeBounds.Top + 4, closeBounds.Left + 4, closeBounds.Bottom - 4);
+    }
+
+    private void WorkspaceTabsMouseDown(object? sender, MouseEventArgs e)
+    {
+        for (var index = 0; index < _workspaceTabs.TabPages.Count - 1; index++)
+        {
+            if (GetWorkspaceCloseBounds(_workspaceTabs.GetTabRect(index)).Contains(e.Location))
+            {
+                CloseWorkspaceAt(index);
+                return;
+            }
+        }
+    }
+
+    private static Rectangle GetWorkspaceCloseBounds(Rectangle tabBounds)
+    {
+        const int closeSize = 16;
+        return new Rectangle(
+            tabBounds.Right - closeSize - 6,
+            tabBounds.Top + Math.Max(0, (tabBounds.Height - closeSize) / 2),
+            closeSize,
+            closeSize);
     }
 
     private void AddWorkspace()
@@ -391,13 +426,42 @@ public sealed class MainForm : KryptonForm
     private void CloseActiveWorkspace()
     {
         var selected = _workspaceTabs.SelectedTab;
-        if (selected is null || selected == _workspaceTabs.TabPages[^1] || _workspaceTabs.TabPages.Count <= 2)
+        if (selected is null || selected == _workspaceTabs.TabPages[^1])
         {
             return;
         }
 
-        _workspaceTabs.TabPages.Remove(selected);
-        selected.Dispose();
+        CloseWorkspaceAt(_workspaceTabs.TabPages.IndexOf(selected));
+    }
+
+    private void CloseWorkspaceAt(int index)
+    {
+        if ((uint)index >= (uint)(_workspaceTabs.TabPages.Count - 1))
+        {
+            return;
+        }
+
+        var page = _workspaceTabs.TabPages[index];
+        _changingWorkspaceTabs = true;
+        try
+        {
+            _workspaceTabs.TabPages.RemoveAt(index);
+            if (_workspaceTabs.TabPages.Count == 1)
+            {
+                _workspaceTabs.SelectedIndex = -1;
+            }
+        }
+        finally
+        {
+            _changingWorkspaceTabs = false;
+        }
+
+        if (_activePane is not null && page.Contains(_activePane))
+        {
+            _activePane = null;
+        }
+
+        page.Dispose();
     }
 
     private void ShowConnectionManager()
@@ -406,12 +470,68 @@ public sealed class MainForm : KryptonForm
         _ = dialog.ShowDialog(this);
     }
 
-    private void OpenQuickConnect(ToolStripComboBox providerSelector, ToolStripTextBox endpointBox)
+    private void ActivePaneEntered(object? sender, EventArgs e)
     {
-        var provider = providerSelector.SelectedItem as ConnectionProviderDescriptor
-            ?? ConnectionProviderCatalog.Get(StorageProviderKind.Sftp);
-        using var dialog = new ConnectionManagerForm(provider.Kind, quickConnectMode: true, endpointBox.Text.Trim());
-        _ = dialog.ShowDialog(this);
+        _activePane = sender as BrowserPaneControl;
+    }
+
+    private BrowserPaneControl? GetActivePane()
+    {
+        if (!TryGetActiveWorkspacePanes(out var source, out var destination))
+        {
+            return null;
+        }
+
+        return _activePane == destination || destination.ContainsFocus
+            ? destination
+            : source;
+    }
+
+    private void NavigateActivePane(PaneNavigation navigation)
+    {
+        var pane = GetActivePane();
+        switch (navigation)
+        {
+            case PaneNavigation.Back:
+                pane?.NavigateBack();
+                break;
+            case PaneNavigation.Forward:
+                pane?.NavigateForward();
+                break;
+            case PaneNavigation.Up:
+                pane?.NavigateUp();
+                break;
+            case PaneNavigation.Refresh:
+                pane?.Reload();
+                break;
+        }
+    }
+
+    private static bool IsAvailableCommand(string command) => command is
+        "New Workspace Tab" or
+        "Close Tab" or
+        "Exit" or
+        "Cut" or
+        "Copy" or
+        "Select All" or
+        "Properties" or
+        "Refresh" or
+        "Back" or
+        "Forward" or
+        "Up" or
+        "Connection Manager..." or
+        "Enqueue" or
+        "Preview Sync..." or
+        "Sync Profiles..." or
+        "Schedules..." or
+        "About StorageHub";
+
+    private enum PaneNavigation
+    {
+        Back,
+        Forward,
+        Up,
+        Refresh
     }
 
     private void EnqueueFromFocusedPane(TransferQueueOperation operation)

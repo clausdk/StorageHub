@@ -106,6 +106,122 @@ public sealed class SqliteTrustStoreTests : IAsyncLifetime
         Assert.True(await _store.RemoveAsync(record.TrustId, expectedVersion: 1));
     }
 
+    [Fact]
+    public async Task RolloverAtomicallyRevokesOldFingerprintAndTrustsReplacement()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = CreateRecord(now);
+        await _store.UpsertAsync(current);
+        var replacement = CreateRecord(now.AddMinutes(1)) with
+        {
+            TrustId = $"trust-{Guid.NewGuid():N}",
+            Sha256Fingerprint = new string('B', 64),
+            PreviousFingerprint = current.Sha256Fingerprint
+        };
+
+        await _store.RolloverAsync(
+            current with
+            {
+                Decision = TrustDecision.Revoked,
+                LastSeenUtc = now.AddMinutes(1),
+                Version = 2
+            },
+            replacement);
+
+        var records = await _store.FindAsync(TrustArtifactKind.SshHostKey, current.CanonicalHost, current.Port);
+        Assert.Equal(2, records.Count);
+        Assert.Equal(TrustDecision.Revoked, records.Single(record => record.TrustId == current.TrustId).Decision);
+        var trusted = records.Single(record => record.TrustId == replacement.TrustId);
+        Assert.Equal(TrustDecision.Trusted, trusted.Decision);
+        Assert.Equal(current.Sha256Fingerprint, trusted.PreviousFingerprint);
+    }
+
+    [Fact]
+    public async Task ConflictingReplacementRollsBackRevocation()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = CreateRecord(now);
+        var conflicting = CreateRecord(now.AddMinutes(1)) with
+        {
+            TrustId = $"trust-{Guid.NewGuid():N}",
+            Sha256Fingerprint = new string('B', 64),
+            Decision = TrustDecision.Rejected
+        };
+        await _store.UpsertAsync(current);
+        await _store.UpsertAsync(conflicting);
+
+        await Assert.ThrowsAsync<TrustRecordConcurrencyException>(async () => await _store.RolloverAsync(
+            current with
+            {
+                Decision = TrustDecision.Revoked,
+                LastSeenUtc = now.AddMinutes(2),
+                Version = 2
+            },
+            conflicting with
+            {
+                TrustId = $"trust-{Guid.NewGuid():N}",
+                Decision = TrustDecision.Trusted,
+                FirstSeenUtc = now.AddMinutes(2),
+                LastSeenUtc = now.AddMinutes(2),
+                PreviousFingerprint = current.Sha256Fingerprint
+            }));
+
+        var records = await _store.FindAsync(TrustArtifactKind.SshHostKey, current.CanonicalHost, current.Port);
+        Assert.Equal(TrustDecision.Trusted, records.Single(record => record.TrustId == current.TrustId).Decision);
+        Assert.Equal(1, records.Single(record => record.TrustId == current.TrustId).Version);
+    }
+
+    [Fact]
+    public async Task RolloverRejectsCrossEndpointReplacementBeforeWriting()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = CreateRecord(now);
+        await _store.UpsertAsync(current);
+
+        await Assert.ThrowsAsync<ArgumentException>(async () => await _store.RolloverAsync(
+            current with
+            {
+                Decision = TrustDecision.Revoked,
+                LastSeenUtc = now.AddMinutes(1),
+                Version = 2
+            },
+            CreateRecord(now.AddMinutes(1)) with
+            {
+                TrustId = $"trust-{Guid.NewGuid():N}",
+                CanonicalHost = "attacker.example.test",
+                Sha256Fingerprint = new string('B', 64),
+                PreviousFingerprint = current.Sha256Fingerprint
+            }));
+
+        Assert.Equal(TrustDecision.Trusted, Assert.Single(
+            await _store.FindAsync(TrustArtifactKind.SshHostKey, current.CanonicalHost, current.Port)).Decision);
+    }
+
+    [Fact]
+    public async Task RejectedRecordCannotBeUsedAsRolloverSource()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var rejected = CreateRecord(now) with { Decision = TrustDecision.Rejected };
+        await _store.UpsertAsync(rejected);
+
+        await Assert.ThrowsAsync<TrustRecordConcurrencyException>(async () => await _store.RolloverAsync(
+            rejected with
+            {
+                Decision = TrustDecision.Revoked,
+                LastSeenUtc = now.AddMinutes(1),
+                Version = 2
+            },
+            CreateRecord(now.AddMinutes(1)) with
+            {
+                TrustId = $"trust-{Guid.NewGuid():N}",
+                Sha256Fingerprint = new string('B', 64),
+                PreviousFingerprint = rejected.Sha256Fingerprint
+            }));
+
+        Assert.Equal(TrustDecision.Rejected, Assert.Single(
+            await _store.FindAsync(TrustArtifactKind.SshHostKey, rejected.CanonicalHost, rejected.Port)).Decision);
+    }
+
     private static TrustRecord CreateRecord(DateTimeOffset now) => new(
         $"trust-{Guid.NewGuid():N}",
         TrustArtifactKind.SshHostKey,

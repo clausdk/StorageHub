@@ -7,6 +7,7 @@ using StorageHub.Storage.Models;
 
 namespace StorageHub.Storage.CodeLogic.Tests;
 
+[Collection(ProviderIntegrationFixtureGroup.Name)]
 public sealed class LocalProviderIntegrationTests
 {
     [Fact]

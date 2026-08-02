@@ -63,7 +63,7 @@ public static class ConnectionProviderCatalog
         Array.AsReadOnly(new[] { "System trust + hostname", "System trust + certificate pin" });
 
     private static readonly ReadOnlyCollection<string> SshAuthenticationModes =
-        Array.AsReadOnly(new[] { "Private key reference", "Password reference", "SSH agent" });
+        Array.AsReadOnly(new[] { "Private key reference", "Password reference" });
 
     private static readonly ReadOnlyCollection<ConnectionProviderDescriptor> Providers = Array.AsReadOnly(
     new ConnectionProviderDescriptor[]
@@ -77,20 +77,12 @@ public static class ConnectionProviderCatalog
             true,
             "Local disks, mapped drives, and Windows network shares.",
             @"C:\Data or \\server\share",
-            "UNC credentials are stored in the StorageHub vault by reference; passwords are never written into the connection profile.",
+            "The current Windows identity is used. Operations remain restricted to the configured root.",
             [
-                Field("rootPath", "Root path", ConnectionFieldKind.Path, required: true, placeholder: @"C:\Data or \\server\share"),
-                Field("followLinks", "Follow symbolic links", ConnectionFieldKind.Toggle, defaultValue: "false", help: "Disabled by default to prevent traversal outside the selected root."),
-                Field("watchChanges", "Watch for changes", ConnectionFieldKind.Toggle, defaultValue: "true")
+                Field("rootPath", "Root path", ConnectionFieldKind.Path, required: true, placeholder: @"C:\Data or \\server\share")
             ],
-            [
-                Field("windowsIdentity", "Windows identity", ConnectionFieldKind.Choice, defaultValue: "Current Windows user", choices: ["Current Windows user", "Credential vault reference"]),
-                Field("credentialReference", "Credential reference", ConnectionFieldKind.SecretReference, placeholder: "Select a vault entry", help: "A reference only; StorageHub does not display or persist the password here.")
-            ],
-            [
-                Field("restrictToRoot", "Restrict operations to root", ConnectionFieldKind.Toggle, defaultValue: "true"),
-                Field("allowReparsePoints", "Allow reparse points", ConnectionFieldKind.Toggle, defaultValue: "false", help: "Enable only for trusted roots after reviewing link targets.")
-            ]),
+            [],
+            []),
         new(
             StorageProviderKind.S3,
             "S3 / Object Storage",
@@ -113,10 +105,7 @@ public static class ConnectionProviderCatalog
                 Field("secretAccessKeyReference", "Secret access key reference", ConnectionFieldKind.SecretReference, placeholder: "Select a vault entry"),
                 Field("sessionTokenReference", "Session token reference", ConnectionFieldKind.SecretReference, placeholder: "Optional vault entry")
             ],
-            [
-                Field("useTls", "Require TLS", ConnectionFieldKind.Toggle, defaultValue: "true"),
-                Field("trustMode", "Server trust", ConnectionFieldKind.Choice, defaultValue: "System trust + hostname", choices: ["System trust + hostname"])
-            ]),
+            []),
         new(
             StorageProviderKind.Ftp,
             "FTP",
@@ -130,8 +119,7 @@ public static class ConnectionProviderCatalog
             [
                 Field("host", "Host", ConnectionFieldKind.Text, required: true, placeholder: "ftp.example.com"),
                 Field("port", "Port", ConnectionFieldKind.Number, required: true, defaultValue: "21"),
-                Field("initialPath", "Initial path", ConnectionFieldKind.Text, defaultValue: "/"),
-                Field("passiveMode", "Passive mode", ConnectionFieldKind.Toggle, defaultValue: "true")
+                Field("initialPath", "Initial path", ConnectionFieldKind.Text, defaultValue: "/")
             ],
             [
                 Field("username", "Username", ConnectionFieldKind.Text, required: true),
@@ -154,8 +142,7 @@ public static class ConnectionProviderCatalog
                 Field("host", "Host", ConnectionFieldKind.Text, required: true, placeholder: "ftps.example.com"),
                 Field("port", "Port", ConnectionFieldKind.Number, required: true, defaultValue: "21"),
                 Field("initialPath", "Initial path", ConnectionFieldKind.Text, defaultValue: "/"),
-                Field("tlsMode", "TLS mode", ConnectionFieldKind.Choice, defaultValue: FtpTlsModes[0], choices: FtpTlsModes),
-                Field("passiveMode", "Passive mode", ConnectionFieldKind.Toggle, defaultValue: "true")
+                Field("tlsMode", "TLS mode", ConnectionFieldKind.Choice, defaultValue: FtpTlsModes[0], choices: FtpTlsModes)
             ],
             [
                 Field("username", "Username", ConnectionFieldKind.Text, required: true),
@@ -180,8 +167,7 @@ public static class ConnectionProviderCatalog
             [
                 Field("host", "Host", ConnectionFieldKind.Text, required: true, placeholder: "sftp.example.com"),
                 Field("port", "Port", ConnectionFieldKind.Number, required: true, defaultValue: "22"),
-                Field("initialPath", "Initial path", ConnectionFieldKind.Text, defaultValue: "/"),
-                Field("keepAliveSeconds", "Keep-alive (seconds)", ConnectionFieldKind.Number, defaultValue: "30")
+                Field("initialPath", "Initial path", ConnectionFieldKind.Text, defaultValue: "/")
             ],
             [
                 Field("username", "Username", ConnectionFieldKind.Text, required: true),
@@ -191,7 +177,6 @@ public static class ConnectionProviderCatalog
                 Field("privateKeyPassphraseReference", "Private-key passphrase reference", ConnectionFieldKind.SecretReference, required: true, placeholder: "Required vault entry", help: "Only encrypted private keys are accepted.")
             ],
             [
-                Field("hostKeyPolicy", "Host-key policy", ConnectionFieldKind.Choice, defaultValue: "Require pinned SHA-256 fingerprint", choices: ["Require pinned SHA-256 fingerprint", "System SSH known-hosts + pin"]),
                 Field("hostKeyFingerprint", "SSH host-key SHA-256 fingerprint", ConnectionFieldKind.Fingerprint, required: true, placeholder: "SHA256:...")
             ])
     });

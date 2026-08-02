@@ -22,6 +22,18 @@ public interface IRemoteConnectionProfileClient : IAsyncDisposable
     Task<ConnectionProfileWriteResponse> DeleteAsync(
         ConnectionProfileDeleteRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<ConnectionTrustGetResponse> GetTrustAsync(
+        ConnectionTrustGetRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<ConnectionTrustMutationResponse> DecideTrustAsync(
+        ConnectionTrustDecisionRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<ConnectionTrustMutationResponse> RolloverTrustAsync(
+        ConnectionTrustRolloverRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionProfileClient
@@ -107,6 +119,54 @@ public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionPr
                 request.ConnectionId,
                 checked(request.ExpectedVersion + 1),
                 requireProfile: false),
+            cancellationToken);
+    }
+
+    public Task<ConnectionTrustGetResponse> GetTrustAsync(
+        ConnectionTrustGetRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureTrustRequest(request.ContractVersion, request.HasValidBounds, nameof(request));
+        return ExecuteAsync<ConnectionTrustGetRequest, ConnectionTrustGetResponse>(
+            ConnectionTrustIpcMessageTypes.GetRequest,
+            ConnectionTrustIpcMessageTypes.GetResponse,
+            request,
+            response => ValidateTrustGetResponse(request, response),
+            cancellationToken);
+    }
+
+    public Task<ConnectionTrustMutationResponse> DecideTrustAsync(
+        ConnectionTrustDecisionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureTrustRequest(request.ContractVersion, request.HasValidBounds, nameof(request));
+        return ExecuteAsync<ConnectionTrustDecisionRequest, ConnectionTrustMutationResponse>(
+            ConnectionTrustIpcMessageTypes.DecideRequest,
+            ConnectionTrustIpcMessageTypes.DecideResponse,
+            request,
+            response => ValidateTrustMutationResponse(
+                request.ConnectionId,
+                request.ExpectedProfileVersion,
+                response),
+            cancellationToken);
+    }
+
+    public Task<ConnectionTrustMutationResponse> RolloverTrustAsync(
+        ConnectionTrustRolloverRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureTrustRequest(request.ContractVersion, request.HasValidBounds, nameof(request));
+        return ExecuteAsync<ConnectionTrustRolloverRequest, ConnectionTrustMutationResponse>(
+            ConnectionTrustIpcMessageTypes.RolloverRequest,
+            ConnectionTrustIpcMessageTypes.RolloverResponse,
+            request,
+            response => ValidateTrustMutationResponse(
+                request.ConnectionId,
+                request.ExpectedProfileVersion,
+                response),
             cancellationToken);
     }
 
@@ -233,12 +293,64 @@ public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionPr
         }
     }
 
+    private static void ValidateTrustGetResponse(
+        ConnectionTrustGetRequest request,
+        ConnectionTrustGetResponse response)
+    {
+        ValidateTrustContract(response.ContractVersion);
+        if (!IsValidFailure(response.Failure) ||
+            response.Failure is null != (response.Snapshot is not null) ||
+            response.Snapshot is { } snapshot &&
+                (!snapshot.HasValidBounds ||
+                 snapshot.ConnectionId != request.ConnectionId ||
+                 snapshot.ProfileVersion != request.ExpectedProfileVersion))
+        {
+            throw InvalidTrustResponse();
+        }
+    }
+
+    private static void ValidateTrustMutationResponse(
+        Guid expectedConnectionId,
+        long expectedProfileVersion,
+        ConnectionTrustMutationResponse response)
+    {
+        ValidateTrustContract(response.ContractVersion);
+        if (!Enum.IsDefined(response.Status) || !IsValidFailure(response.Failure))
+        {
+            throw InvalidTrustResponse();
+        }
+
+        if (response.Status == ConnectionTrustMutationStatus.Succeeded)
+        {
+            if (response.Failure is not null || response.Snapshot is not { HasValidBounds: true } snapshot ||
+                snapshot.ConnectionId != expectedConnectionId ||
+                snapshot.ProfileVersion != expectedProfileVersion)
+            {
+                throw InvalidTrustResponse();
+            }
+        }
+        else if (response.Failure is null || response.Snapshot is not null)
+        {
+            throw InvalidTrustResponse();
+        }
+    }
+
     private static void EnsureRequest(int contractVersion, bool hasValidBounds, string parameterName)
     {
         if (!ConnectionProfileIpcContract.IsSupported(contractVersion) || !hasValidBounds)
         {
             throw new ArgumentException(
                 "The profile request is outside the connection-management contract bounds.",
+                parameterName);
+        }
+    }
+
+    private static void EnsureTrustRequest(int contractVersion, bool hasValidBounds, string parameterName)
+    {
+        if (!ConnectionTrustIpcContract.IsSupported(contractVersion) || !hasValidBounds)
+        {
+            throw new ArgumentException(
+                "The trust request is outside the connection-trust contract bounds.",
                 parameterName);
         }
     }
@@ -257,6 +369,14 @@ public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionPr
         if (!ConnectionProfileIpcContract.IsSupported(version))
         {
             throw InvalidResponse();
+        }
+    }
+
+    private static void ValidateTrustContract(int version)
+    {
+        if (!ConnectionTrustIpcContract.IsSupported(version))
+        {
+            throw InvalidTrustResponse();
         }
     }
 
@@ -282,6 +402,9 @@ public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionPr
 
     private static InvalidDataException InvalidResponse() =>
         new("The local agent returned a profile response outside the negotiated bounds.");
+
+    private static InvalidDataException InvalidTrustResponse() =>
+        new("The local agent returned a trust response outside the negotiated bounds.");
 
     private static void ValidateTimeout(TimeSpan timeout)
     {

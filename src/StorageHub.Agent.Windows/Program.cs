@@ -118,6 +118,7 @@ var storageCommands = new StorageIpcCommandService(
         Libraries.Get<StorageLibrary>() ??
         throw new InvalidOperationException("CL.Storage is not configured.")));
 var profileCommands = new ConnectionProfileIpcCommandService(databaseOptions);
+var trustCommands = new ConnectionTrustIpcCommandService(databaseOptions);
 var transferCommands = new TransferQueueIpcCommandService(
     transferStore,
     transferStore,
@@ -171,6 +172,7 @@ var requestHandler = new AgentIpcRequestHandler(
     new CompositeAgentIpcCommandHandler(
         storageCommands,
         profileCommands,
+        trustCommands,
         transferCommands,
         syncCommands,
         scheduleCommands,

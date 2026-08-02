@@ -21,6 +21,8 @@ coverage/
 packages/
 *.nupkg
 *.snupkg
+__pycache__/
+*.py[cod]
 
 ## StorageHub runtime state and secrets
 *.db

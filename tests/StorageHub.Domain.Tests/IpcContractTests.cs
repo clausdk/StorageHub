@@ -132,6 +132,63 @@ public sealed class IpcContractTests
     }
 
     [Fact]
+    public void TrustMutationsRequireProfileRevisionStrongFingerprintAndPairedRecordVersion()
+    {
+        var connectionId = Guid.NewGuid();
+        var valid = new ConnectionTrustDecisionRequest(
+            ConnectionTrustIpcContract.CurrentVersion,
+            connectionId,
+            ExpectedProfileVersion: 3,
+            new string('A', 64),
+            ConnectionTrustDecision.Trusted);
+
+        Assert.True(valid.HasValidBounds);
+        Assert.False((valid with { ExpectedProfileVersion = 0 }).HasValidBounds);
+        Assert.False((valid with { Sha256Fingerprint = "MD5:unsafe" }).HasValidBounds);
+        Assert.False((valid with { Decision = ConnectionTrustDecision.Revoked }).HasValidBounds);
+        Assert.False((valid with { ExistingTrustId = "record", ExpectedTrustVersion = null }).HasValidBounds);
+        Assert.False(new ConnectionTrustRolloverRequest(
+            ConnectionTrustIpcContract.CurrentVersion,
+            connectionId,
+            ExpectedProfileVersion: 3,
+            PreviousTrustId: "record",
+            ExpectedPreviousTrustVersion: 1,
+            NewSha256Fingerprint: new string('A', 64)) with
+        {
+            NewSha256Fingerprint = "SHA256:not-base64"
+        } is { HasValidBounds: true });
+    }
+
+    [Fact]
+    public void TrustSnapshotRejectsDuplicateIdsAndNonUtcHistory()
+    {
+        var record = new ConnectionTrustRecordDocument(
+            "record-1",
+            new string('A', 64),
+            ConnectionTrustDecision.Trusted,
+            DateTimeOffset.Parse("2026-08-02T12:00:00Z", CultureInfo.InvariantCulture),
+            DateTimeOffset.Parse("2026-08-02T12:00:00Z", CultureInfo.InvariantCulture),
+            ExpiresUtc: null,
+            PreviousFingerprint: null,
+            Version: 1);
+        var snapshot = new ConnectionTrustSnapshot(
+            Guid.NewGuid(),
+            ProfileVersion: 1,
+            new ConnectionTrustTargetDocument(
+                ConnectionTrustArtifactKind.SshHostKey,
+                "sftp.example.test",
+                22),
+            [record]);
+
+        Assert.True(snapshot.HasValidBounds);
+        Assert.False((snapshot with { Records = [record, record] }).HasValidBounds);
+        Assert.False((snapshot with
+        {
+            Records = [record with { LastSeenUtc = record.LastSeenUtc.ToOffset(TimeSpan.FromHours(2)) }]
+        }).HasValidBounds);
+    }
+
+    [Fact]
     public void Transfer_enqueue_round_trips_bounded_version_and_entity_tag_identity()
     {
         var request = new TransferEnqueueRequest(

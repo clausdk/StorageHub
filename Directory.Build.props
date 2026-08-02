@@ -20,7 +20,7 @@
     <CLStorageProjectPath Condition="'$(CLStorageProjectPath)' == ''">$(CodeLogicLibsRoot)\CL.Storage\CL.Storage.csproj</CLStorageProjectPath>
     <CLStorageProjectFullPath>$([MSBuild]::NormalizePath('$(CLStorageProjectPath)'))</CLStorageProjectFullPath>
     <CLStorageExpectedProjectFullPath>$([MSBuild]::NormalizePath('$(CodeLogicLibsRoot)', 'CL.Storage', 'CL.Storage.csproj'))</CLStorageExpectedProjectFullPath>
-    <CLStorageExpectedRevision>25d357b7e3896e2ff3d6c29875178a6b0f12ed60</CLStorageExpectedRevision>
+    <CLStorageExpectedRevision>c70fefe4420279af8bec45e55a37f4acd5204ee3</CLStorageExpectedRevision>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(IsTestProject)' == 'true'">

@@ -364,6 +364,25 @@ public sealed class CodeLogicConnectionConfigurationBuilderTests : IAsyncLifetim
     }
 
     [Fact]
+    public async Task ExplicitlyRejectedHostKeyNeverSatisfiesPinnedProfile()
+    {
+        _trust.Records.Add(TrustedRecord(
+            TrustArtifactKind.SshHostKey,
+            "sftp.example.test",
+            22) with
+        { Decision = TrustDecision.Rejected });
+        var profile = CreateProfile(
+            new SftpEndpoint("sftp.example.test", 22, SshHostKeyPolicy.Pinned),
+            new UsernamePasswordAuthentication("operator", SecretReference.Create()));
+
+        var result = await CreateBuilder().BuildAsync(profile);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("storage.trust.approval_required", result.Error.Code);
+        Assert.Equal(StorageFailureKind.Security, result.Error.Kind);
+    }
+
+    [Fact]
     public async Task Unencrypted_private_key_is_rejected_before_runtime_materialization()
     {
         _trust.Records.Add(TrustedRecord(TrustArtifactKind.SshHostKey, "sftp.example.test", 22));

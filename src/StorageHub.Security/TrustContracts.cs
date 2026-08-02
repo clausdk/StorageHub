@@ -50,3 +50,12 @@ public interface ITrustStore
         int expectedVersion,
         CancellationToken cancellationToken = default);
 }
+
+/// <summary>Authoritative mutation boundary for atomic server-identity rollover.</summary>
+public interface ITrustManagementStore : ITrustStore
+{
+    ValueTask RolloverAsync(
+        TrustRecord revokedRecord,
+        TrustRecord replacementRecord,
+        CancellationToken cancellationToken = default);
+}

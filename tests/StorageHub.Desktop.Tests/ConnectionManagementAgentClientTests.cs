@@ -55,6 +55,85 @@ public sealed class ConnectionManagementAgentClientTests
     }
 
     [Fact]
+    public async Task ProfileClientRoundTripsProfileBoundTrustDecision()
+    {
+        var connectionId = Guid.NewGuid();
+        var snapshot = TrustSnapshot(connectionId, profileVersion: 4);
+        var transport = new FakeProfileTransport(request => IpcEnvelope.Create(
+            ConnectionTrustIpcMessageTypes.DecideResponse,
+            request.RequestId,
+            1,
+            new ConnectionTrustMutationResponse(
+                ConnectionTrustIpcContract.CurrentVersion,
+                ConnectionTrustMutationStatus.Succeeded,
+                snapshot)));
+        await using var client = new NamedPipeRemoteConnectionProfileClient(transport);
+
+        var response = await client.DecideTrustAsync(new ConnectionTrustDecisionRequest(
+            ConnectionTrustIpcContract.CurrentVersion,
+            connectionId,
+            ExpectedProfileVersion: 4,
+            new string('A', 64),
+            ConnectionTrustDecision.Trusted));
+
+        Assert.Equal(ConnectionTrustMutationStatus.Succeeded, response.Status);
+        Assert.Equal(ConnectionTrustIpcMessageTypes.DecideRequest, transport.LastRequest?.MessageType);
+    }
+
+    [Fact]
+    public async Task ProfileClientRejectsCrossProfileTrustSnapshotAndDisconnects()
+    {
+        var requestedId = Guid.NewGuid();
+        var transport = new FakeProfileTransport(request => IpcEnvelope.Create(
+            ConnectionTrustIpcMessageTypes.GetResponse,
+            request.RequestId,
+            1,
+            new ConnectionTrustGetResponse(
+                ConnectionTrustIpcContract.CurrentVersion,
+                TrustSnapshot(Guid.NewGuid(), profileVersion: 2))));
+        await using var client = new NamedPipeRemoteConnectionProfileClient(transport);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GetTrustAsync(
+            new ConnectionTrustGetRequest(
+                ConnectionTrustIpcContract.CurrentVersion,
+                requestedId,
+                ExpectedProfileVersion: 2)));
+
+        Assert.Equal(1, transport.DisconnectCount);
+    }
+
+    [Fact]
+    public async Task ProfileClientRejectsTrustSuccessThatAlsoCarriesFailure()
+    {
+        var connectionId = Guid.NewGuid();
+        var transport = new FakeProfileTransport(request => IpcEnvelope.Create(
+            ConnectionTrustIpcMessageTypes.RolloverResponse,
+            request.RequestId,
+            1,
+            new ConnectionTrustMutationResponse(
+                ConnectionTrustIpcContract.CurrentVersion,
+                ConnectionTrustMutationStatus.Succeeded,
+                TrustSnapshot(connectionId, profileVersion: 2),
+                new StorageIpcFailure(
+                    "injected.failure",
+                    StorageIpcFailureCategory.Security,
+                    "This mixed response must be rejected.",
+                    IsTransient: false))));
+        await using var client = new NamedPipeRemoteConnectionProfileClient(transport);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.RolloverTrustAsync(
+            new ConnectionTrustRolloverRequest(
+                ConnectionTrustIpcContract.CurrentVersion,
+                connectionId,
+                ExpectedProfileVersion: 2,
+                PreviousTrustId: "record-1",
+                ExpectedPreviousTrustVersion: 1,
+                NewSha256Fingerprint: new string('B', 64))));
+
+        Assert.Equal(1, transport.DisconnectCount);
+    }
+
+    [Fact]
     public async Task SecretClientCopiesAndZerosOutboundMaterialAndCorrelatesResponse()
     {
         byte[]? observedMaterial = null;
@@ -106,6 +185,25 @@ public sealed class ConnectionManagementAgentClientTests
         new ConnectionEndpointDocument(StorageConnectionProvider.Local, RootPath: "C:\\Data"),
         new ConnectionAuthenticationDocument(ConnectionAuthenticationKind.None),
         new ConnectionOperationalOptionsDocument());
+
+    private static ConnectionTrustSnapshot TrustSnapshot(Guid connectionId, long profileVersion) => new(
+        connectionId,
+        profileVersion,
+        new ConnectionTrustTargetDocument(
+            ConnectionTrustArtifactKind.SshHostKey,
+            "sftp.example.test",
+            22),
+        [
+            new ConnectionTrustRecordDocument(
+                "record-1",
+                new string('A', 64),
+                ConnectionTrustDecision.Trusted,
+                new DateTimeOffset(2026, 8, 2, 12, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 8, 2, 12, 0, 0, TimeSpan.Zero),
+                ExpiresUtc: null,
+                PreviousFingerprint: null,
+                Version: 1)
+        ]);
 
     private sealed class FakeProfileTransport(Func<IpcEnvelope, IpcEnvelope> responseFactory)
         : IStorageIpcTransport

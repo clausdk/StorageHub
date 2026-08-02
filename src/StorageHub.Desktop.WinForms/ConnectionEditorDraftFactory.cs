@@ -59,14 +59,23 @@ public static class ConnectionEditorDraftFactory
             StorageProviderKind.S3 => BuildS3Endpoint(values),
             StorageProviderKind.Ftp => BuildFtpEndpoint(values),
             StorageProviderKind.Ftps => BuildFtpsEndpoint(values),
-            StorageProviderKind.Sftp => new ConnectionEndpointDocument(
-                StorageConnectionProvider.Sftp,
-                RootPath: NormalizeProviderRoot(Get(values, "initialPath")),
-                Host: Require(values, "host", "An SFTP host is required."),
-                Port: ParsePort(values, 22),
-                SshHostKeyPolicy: ConnectionSshHostKeyPolicy.Pinned),
+            StorageProviderKind.Sftp => BuildSftpEndpoint(values),
             _ => throw new ArgumentOutOfRangeException(nameof(provider))
         };
+
+    private static ConnectionEndpointDocument BuildSftpEndpoint(IReadOnlyDictionary<string, string> values)
+    {
+        ValidateFingerprint(Require(
+            values,
+            "hostKeyFingerprint",
+            "A verified SSH host-key SHA-256 fingerprint is required."));
+        return new ConnectionEndpointDocument(
+            StorageConnectionProvider.Sftp,
+            RootPath: NormalizeProviderRoot(Get(values, "initialPath")),
+            Host: Require(values, "host", "An SFTP host is required."),
+            Port: ParsePort(values, 22),
+            SshHostKeyPolicy: ConnectionSshHostKeyPolicy.Pinned);
+    }
 
     private static ConnectionEndpointDocument BuildS3Endpoint(IReadOnlyDictionary<string, string> values)
     {
@@ -107,25 +116,37 @@ public static class ConnectionEditorDraftFactory
             AllowInsecureTransport: true);
     }
 
-    private static ConnectionEndpointDocument BuildFtpsEndpoint(IReadOnlyDictionary<string, string> values) => new(
-        StorageConnectionProvider.Ftps,
-        RootPath: NormalizeProviderRoot(Get(values, "initialPath")),
-        Host: Require(values, "host", "An FTPS host is required."),
-        Port: ParsePort(values, 21),
-        TlsPolicy: string.Equals(
+    private static ConnectionEndpointDocument BuildFtpsEndpoint(IReadOnlyDictionary<string, string> values)
+    {
+        var pinned = string.Equals(
             Get(values, "trustMode"),
             "System trust + certificate pin",
-            StringComparison.Ordinal)
+            StringComparison.Ordinal);
+        if (pinned)
+        {
+            ValidateFingerprint(Require(
+                values,
+                "certificatePin",
+                "A verified certificate SHA-256 pin is required for pinned FTPS."));
+        }
+
+        return new ConnectionEndpointDocument(
+            StorageConnectionProvider.Ftps,
+            RootPath: NormalizeProviderRoot(Get(values, "initialPath")),
+            Host: Require(values, "host", "An FTPS host is required."),
+            Port: ParsePort(values, 21),
+            TlsPolicy: pinned
                 ? ConnectionTlsCertificatePolicy.Pinned
                 : ConnectionTlsCertificatePolicy.SystemTrust,
-        FtpsTlsMode: string.Equals(
-            Get(values, "tlsMode"),
-            "Implicit TLS",
-            StringComparison.Ordinal)
-                ? ConnectionFtpsTlsMode.Implicit
-                : ConnectionFtpsTlsMode.Explicit,
-        ClientCertificatePfxReference: Get(values, "clientCertificateReference"),
-        ClientCertificatePasswordReference: Get(values, "clientCertificatePasswordReference"));
+            FtpsTlsMode: string.Equals(
+                Get(values, "tlsMode"),
+                "Implicit TLS",
+                StringComparison.Ordinal)
+                    ? ConnectionFtpsTlsMode.Implicit
+                    : ConnectionFtpsTlsMode.Explicit,
+            ClientCertificatePfxReference: Get(values, "clientCertificateReference"),
+            ClientCertificatePasswordReference: Get(values, "clientCertificatePasswordReference"));
+    }
 
     private static ConnectionAuthenticationDocument BuildAuthentication(
         StorageProviderKind provider,
@@ -315,6 +336,16 @@ public static class ConnectionEditorDraftFactory
 
     private static bool ParseBoolean(IReadOnlyDictionary<string, string> values, string key) =>
         bool.TryParse(Get(values, key), out var result) && result;
+
+    private static void ValidateFingerprint(string value)
+    {
+        if (!ConnectionTrustIpcLimits.IsValidFingerprint(value))
+        {
+            throw new ArgumentException(
+                "The server identity fingerprint must be SHA-256 hexadecimal or SHA256 base64.",
+                nameof(value));
+        }
+    }
 
     private static string Require(
         IReadOnlyDictionary<string, string> values,

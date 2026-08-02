@@ -50,7 +50,9 @@ Outside CI, both `-AllowOutsideCi` and
 
 The CI workflow uses a least-privilege job chain:
 
-1. build, test, and audit with read-only repository access;
+1. build, test, audit NuGet and hash-locked Python dependencies, and run the
+   SHA-256-pinned MinIO/S3 plus FTP/FTPS and SFTP fixtures with read-only repository
+   access;
 2. package and silently install/test/uninstall on a disposable Windows runner;
 3. attest the exact same-run artifacts after a successful `main` push; and
 4. create or verify the prerelease for the exact commit without checking out or

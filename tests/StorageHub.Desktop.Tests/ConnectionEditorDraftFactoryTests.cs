@@ -16,7 +16,8 @@ public sealed class ConnectionEditorDraftFactoryTests
             ["username"] = "backup",
             ["authenticationMode"] = "Private key reference",
             ["privateKeyReference"] = "shs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            ["privateKeyPassphraseReference"] = "shs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+            ["privateKeyPassphraseReference"] = "shs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            ["hostKeyFingerprint"] = new string('A', 64)
         };
 
         var draft = ConnectionEditorDraftFactory.Build(StorageProviderKind.Sftp, values);
@@ -45,5 +46,43 @@ public sealed class ConnectionEditorDraftFactoryTests
             ConnectionEditorDraftFactory.Build(StorageProviderKind.Ftp, values));
 
         Assert.Contains("acknowledgement", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("MD5:unsafe")]
+    [InlineData("AAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    public void PinnedSftpRequiresStrictVerifiedSha256Fingerprint(string fingerprint)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["profileName"] = "SFTP",
+            ["host"] = "sftp.example.test",
+            ["port"] = "22",
+            ["username"] = "operator",
+            ["authenticationMode"] = "Password reference",
+            ["passwordReference"] = "shs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ["hostKeyFingerprint"] = fingerprint
+        };
+
+        Assert.Throws<ArgumentException>(() =>
+            ConnectionEditorDraftFactory.Build(StorageProviderKind.Sftp, values));
+    }
+
+    [Fact]
+    public void PinnedFtpsRequiresCertificateFingerprintBeforeProfileCanBeSaved()
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["profileName"] = "FTPS",
+            ["host"] = "ftps.example.test",
+            ["port"] = "21",
+            ["username"] = "operator",
+            ["passwordReference"] = "shs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ["trustMode"] = "System trust + certificate pin"
+        };
+
+        Assert.Throws<ArgumentException>(() =>
+            ConnectionEditorDraftFactory.Build(StorageProviderKind.Ftps, values));
     }
 }
