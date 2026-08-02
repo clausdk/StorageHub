@@ -142,7 +142,7 @@ library.
 - [.NET SDK 10.0.302](global.json), or a later 10.0 patch accepted by
   `global.json`
 - Git
-- CPython 3.12 when running the local FTP/FTPS or SFTP fixtures; CI pins 3.12.13
+- CPython 3.12 when running the local FTP/FTPS or SFTP fixtures; CI pins 3.12.10
 - A checkout of [Media2A/CodeLogic.Libs](https://github.com/Media2A/CodeLogic.Libs)
   containing `CL.Storage`
 
