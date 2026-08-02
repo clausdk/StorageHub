@@ -89,7 +89,7 @@ function Start-FtpFixtureProcess(
     [bool] $requireClientCertificate) {
     $serverScript = Join-Path $repositoryRoot 'eng\fixtures\ftp_fixture_server.py'
     $arguments =
-        "`"$serverScript`" --mode $mode --port $port --passive-ports $($passivePorts -join ',') " +
+        "-S `"$serverScript`" --mode $mode --port $port --passive-ports $($passivePorts -join ',') " +
         "--root `"$root`" --ready-file `"$readyFile`""
     if ($mode -ne 'plain') {
         $arguments +=
@@ -180,7 +180,7 @@ try {
         throw "The hash-locked FTP fixture dependencies failed to install."
     }
 
-    & $pythonPath (Join-Path $repositoryRoot 'eng\fixtures\extract_pinned_archive.py') `
+    & $pythonPath -S (Join-Path $repositoryRoot 'eng\fixtures\extract_pinned_archive.py') `
         --archive $archivePath `
         --output $sourceContainer
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $sourceRoot -PathType Container)) {
@@ -196,7 +196,7 @@ try {
     [Environment]::SetEnvironmentVariable(
         'STORAGEHUB_FTP_SERVER_KEY_PASSWORD', $serverKeyPassword, 'Process')
     $env:PYTHONPATH = "$dependencyRoot;$sourceRoot"
-    & $pythonPath (Join-Path $repositoryRoot 'eng\fixtures\generate_ftp_certificates.py') `
+    & $pythonPath -S (Join-Path $repositoryRoot 'eng\fixtures\generate_ftp_certificates.py') `
         --output $certificateRoot
     if ($LASTEXITCODE -ne 0) {
         throw 'The FTP fixture certificates could not be generated.'

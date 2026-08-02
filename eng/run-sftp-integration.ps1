@@ -83,7 +83,7 @@ function Start-SftpFixtureProcess(
     $serverScript = Join-Path $repositoryRoot 'eng\fixtures\sftp_fixture_server.py'
     $authorizedKey = Join-Path $keyRoot 'client.pub'
     $arguments =
-        "`"$serverScript`" --mode $mode --port $port --root `"$root`" " +
+        "-S `"$serverScript`" --mode $mode --port $port --root `"$root`" " +
         "--ready-file `"$readyFile`" --host-key `"$hostKey`" " +
         "--authorized-key `"$authorizedKey`""
 
@@ -162,7 +162,7 @@ try {
     [Environment]::SetEnvironmentVariable(
         'STORAGEHUB_SFTP_ALTERNATE_KEY_PASSPHRASE', $alternateKeyPassphrase, 'Process')
     $env:PYTHONPATH = $dependencyRoot
-    & $pythonPath (Join-Path $repositoryRoot 'eng\fixtures\generate_sftp_keys.py') `
+    & $pythonPath -S (Join-Path $repositoryRoot 'eng\fixtures\generate_sftp_keys.py') `
         --output $keyRoot
     if ($LASTEXITCODE -ne 0) {
         throw 'The SFTP fixture keys could not be generated.'

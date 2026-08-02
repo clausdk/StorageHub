@@ -3,6 +3,8 @@
 
 asyncssh==2.24.0 \
     --hash=sha256:9abd46300adcb6d4b73269b34c53cd0d17a138b9a22b5b38008ce7d5808734b7
+bcrypt==5.0.0 \
+    --hash=sha256:64ee8434b0da054d830fa8e89e1c8bf30061d539044a39524ff7dec90481e5c2
 cffi==2.1.0 \
     --hash=sha256:c97f080ea627e2863524c5af3836e2270b5f5dfff1f104392b959f8df0c5d384
 cryptography==49.0.0 \

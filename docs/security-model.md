@@ -222,8 +222,10 @@ allow-list policy. Never attach the raw data directory to a bug report.
   It covers password-only and public-key-only authentication, changed host keys,
   malformed/missing pins, wrong passwords/passphrases/keys, authentication-mode
   substitution, bounded transfer/listing/abort behavior, and root/address
-  containment. Fixture output is drained and its exact processes, key files,
-  data, and run directory are removed after the test.
+  containment. Python fixture processes run without system site packages and
+  resolve only their hash-locked per-run dependency trees; encrypted OpenSSH key
+  generation declares bcrypt explicitly. Fixture output is drained and its exact
+  processes, key files, data, and run directory are removed after the test.
 - The pinned CL.Storage local provider validates reparse-point containment before
   later path-based I/O; it does not yet use handle-relative no-follow traversal.
   Until that upstream race is closed, use local provider roots that are not
