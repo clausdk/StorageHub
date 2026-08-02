@@ -56,6 +56,15 @@ public sealed class SqliteMigrator
                 throw new NewerDatabaseSchemaException(currentVersion, LatestVersion);
             }
 
+            if (await LegacyPreviewDatabaseCompatibility.TryArchiveAsync(
+                    connection,
+                    transaction,
+                    currentVersion,
+                    cancellationToken).ConfigureAwait(false))
+            {
+                currentVersion = 0;
+            }
+
             await ValidateMigrationJournalAsync(connection, transaction, currentVersion, cancellationToken)
                 .ConfigureAwait(false);
 

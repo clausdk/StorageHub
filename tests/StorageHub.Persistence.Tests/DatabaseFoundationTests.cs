@@ -1,4 +1,7 @@
 using Microsoft.Data.Sqlite;
+using StorageHub.Application.Connections;
+using StorageHub.Domain.Identifiers;
+using StorageHub.Persistence.Connections;
 using Xunit;
 
 namespace StorageHub.Persistence.Tests;
@@ -162,6 +165,66 @@ public sealed class DatabaseFoundationTests : IDisposable
         Assert.Equal(1L, await ScalarInt64Async(
             connection,
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'sync_schedule_completions';"));
+    }
+
+    [Fact]
+    public async Task Legacy_preview_version_collision_is_archived_and_upgraded_without_losing_rows()
+    {
+        var options = Options();
+        await CreateLegacyPreviewDatabaseAsync(options.DatabasePath);
+
+        var result = await new StorageHubDatabaseInitializer(options).InitializeAsync();
+
+        Assert.True(result.IsReady, result.Message);
+        Assert.Equal(PortableChecksumEvidenceSchemaMigration.SchemaVersion, result.SchemaVersion);
+        await using var connection = await OpenConfiguredAsync(options.DatabasePath);
+        Assert.Equal(1L, await ScalarInt64Async(
+            connection,
+            "SELECT COUNT(*) FROM legacy_preview_v1_profiles WHERE id = 'legacy-profile';"));
+        Assert.Equal(1L, await ScalarInt64Async(
+            connection,
+            "SELECT COUNT(*) FROM legacy_preview_v1_audit_events WHERE id = 'legacy-audit';"));
+        Assert.Equal(1L, await ScalarInt64Async(
+            connection,
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'connection_profiles';"));
+        Assert.Equal(8L, await ScalarInt64Async(connection, "SELECT COUNT(*) FROM schema_migrations;"));
+
+        var repository = new SqliteConnectionProfileRepository(options);
+        var profile = ConnectionProfile.Create(
+            ConnectionProfileId.New(),
+            new ConnectionProfileMetadata("Migrated database profile"),
+            new LocalEndpoint("C:\\Data"),
+            new NoAuthentication(),
+            new ConnectionOperationalOptions(
+                TimeSpan.FromSeconds(30),
+                TimeSpan.FromSeconds(60),
+                new ConnectionRetryPolicy(3, TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5)),
+                proxy: null,
+                new ConnectionBandwidthLimits(null, null),
+                "utf-8"),
+            DateTimeOffset.UtcNow);
+        Assert.Equal(ConnectionProfileWriteStatus.Succeeded, (await repository.CreateAsync(profile)).Status);
+    }
+
+    [Fact]
+    public async Task Version_collision_with_nonlegacy_shape_fails_closed_without_renaming_tables()
+    {
+        var options = Options();
+        await CreateLegacyPreviewDatabaseAsync(options.DatabasePath, useRecognizedProfileShape: false);
+
+        var result = await new StorageHubDatabaseInitializer(options).InitializeAsync();
+
+        Assert.False(result.IsReady);
+        Assert.Equal(DatabaseRecoveryReason.MigrationFailed, result.RecoveryReason);
+        await using var connection = await OpenConfiguredAsync(options.DatabasePath);
+        Assert.Equal(1L, await ScalarInt64Async(connection, "PRAGMA user_version;"));
+        Assert.Equal(1L, await ScalarInt64Async(
+            connection,
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'profiles';"));
+        Assert.Equal(0L, await ScalarInt64Async(
+            connection,
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'legacy_preview_v1_profiles';"));
+        Assert.Equal(0L, await ScalarInt64Async(connection, "SELECT COUNT(*) FROM schema_migrations;"));
     }
 
     [Fact]
@@ -376,6 +439,53 @@ public sealed class DatabaseFoundationTests : IDisposable
         await using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;";
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task CreateLegacyPreviewDatabaseAsync(
+        string path,
+        bool useRecognizedProfileShape = true)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await using var connection = await OpenCreateConfiguredAsync(path);
+        var profileColumns = useRecognizedProfileShape
+            ? "id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, name TEXT NOT NULL, settings_json TEXT NOT NULL, " +
+              "secret_refs_json TEXT NOT NULL, tags_json TEXT NOT NULL, color TEXT NULL, last_used_utc TEXT NULL"
+            : "id TEXT PRIMARY KEY, payload TEXT NOT NULL";
+        await ExecuteAsync(connection, $"""
+            CREATE TABLE audit_events
+                (id TEXT PRIMARY KEY, occurred_utc TEXT NOT NULL, category TEXT NOT NULL, action TEXT NOT NULL,
+                 subject_id TEXT NULL, detail_json TEXT NOT NULL);
+            CREATE TABLE favorites (id TEXT PRIMARY KEY);
+            CREATE TABLE jobs (id TEXT PRIMARY KEY);
+            CREATE TABLE plugin_state
+                (plugin_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, state_json TEXT NOT NULL, updated_utc TEXT NOT NULL);
+            CREATE TABLE profiles ({profileColumns});
+            CREATE TABLE run_history (id TEXT PRIMARY KEY);
+            CREATE TABLE schedules (id TEXT PRIMARY KEY, job_id TEXT REFERENCES jobs(id));
+            CREATE TABLE sync_manifests (job_id TEXT PRIMARY KEY);
+            CREATE TABLE tombstones (job_id TEXT PRIMARY KEY);
+            CREATE TABLE transfer_queues (id TEXT PRIMARY KEY);
+            CREATE TABLE transfer_items
+                (id TEXT PRIMARY KEY, queue_id TEXT NOT NULL REFERENCES transfer_queues(id), state INTEGER NOT NULL,
+                 lease_expires_utc TEXT NULL, created_utc TEXT NOT NULL);
+            CREATE INDEX ix_transfer_items_claim
+                ON transfer_items(state, lease_expires_utc, created_utc);
+            CREATE TABLE trusted_hosts
+                (profile_id TEXT NOT NULL, host TEXT NOT NULL, algorithm TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                 trusted_utc TEXT NOT NULL, PRIMARY KEY(profile_id, host, algorithm));
+            CREATE TABLE vault_secrets (id TEXT PRIMARY KEY);
+            CREATE TABLE workspaces (id TEXT PRIMARY KEY);
+            INSERT INTO audit_events(id, occurred_utc, category, action, detail_json)
+                VALUES ('legacy-audit', '2026-01-01T00:00:00Z', 'test', 'saved', json_object());
+            PRAGMA user_version = 1;
+            """);
+        if (useRecognizedProfileShape)
+        {
+            await ExecuteAsync(connection, """
+                INSERT INTO profiles(id, provider_id, name, settings_json, secret_refs_json, tags_json)
+                VALUES ('legacy-profile', 'sftp', 'Legacy', '{}', '{}', '[]');
+                """);
+        }
     }
 
     private static async Task<long> ScalarInt64Async(

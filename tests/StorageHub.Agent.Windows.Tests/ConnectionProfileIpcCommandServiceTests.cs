@@ -175,6 +175,47 @@ public sealed class ConnectionProfileIpcCommandServiceTests
         }
     }
 
+    [Fact]
+    public async Task CreateReportsDatabaseRecoveryWithoutLeakingDatabaseDetails()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "storagehub-profile-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "sensitive-database-name.db");
+        try
+        {
+            await using (var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE unexpected(value TEXT); PRAGMA user_version = 1;";
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var service = new ConnectionProfileIpcCommandService(
+                new SqliteDatabaseOptions(databasePath, pooling: false),
+                new FixedTimeProvider(Now));
+            var result = await service.HandleAsync(IpcEnvelope.Create(
+                ConnectionProfileIpcMessageTypes.CreateRequest,
+                Guid.NewGuid(),
+                1,
+                new ConnectionProfileCreateRequest(
+                    ConnectionProfileIpcContract.CurrentVersion,
+                    LocalDraft("Local", "C:\\Data"))));
+            var response = result.Payload.Deserialize<ConnectionProfileWriteResponse>();
+
+            Assert.Equal(ContractWriteStatus.Unavailable, response?.Status);
+            Assert.Equal("connection.profile.database_recovery_required", response?.Failure?.Code);
+            Assert.Contains("requires recovery", response?.Failure?.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(root, result.Payload.GetRawText(), StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("sensitive-database-name", result.Payload.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static ConnectionProfileDraft S3Draft(string accessKey, string secretKey) => new(
         new ConnectionProfileMetadataDocument("Archive", Tags: ["backup"]),
         new ConnectionEndpointDocument(

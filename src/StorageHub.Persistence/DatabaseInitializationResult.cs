@@ -9,6 +9,12 @@ public enum DatabaseRecoveryReason
     NewerSchema
 }
 
+public sealed class DatabaseRecoveryRequiredException(DatabaseRecoveryReason reason) : InvalidOperationException(
+    "The StorageHub database requires recovery before this operation can continue.")
+{
+    public DatabaseRecoveryReason Reason { get; } = reason;
+}
+
 public sealed record DatabaseInitializationResult
 {
     private DatabaseInitializationResult(

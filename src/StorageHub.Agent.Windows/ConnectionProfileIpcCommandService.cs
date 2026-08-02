@@ -125,6 +125,10 @@ public sealed class ConnectionProfileIpcCommandService : IAgentIpcCommandHandler
                 StorageIpcFailureCategory.Validation,
                 "The profile settings are invalid for the selected provider.");
         }
+        catch (DatabaseRecoveryRequiredException)
+        {
+            return DatabaseRecoveryFailure(ConnectionProfileIpcMessageTypes.CreateResponse);
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
@@ -184,6 +188,10 @@ public sealed class ConnectionProfileIpcCommandService : IAgentIpcCommandHandler
                 StorageIpcFailureCategory.Validation,
                 "The profile settings are invalid for the selected provider.");
         }
+        catch (DatabaseRecoveryRequiredException)
+        {
+            return DatabaseRecoveryFailure(ConnectionProfileIpcMessageTypes.UpdateResponse);
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
@@ -222,6 +230,10 @@ public sealed class ConnectionProfileIpcCommandService : IAgentIpcCommandHandler
                 request.ExpectedVersion,
                 cancellationToken).ConfigureAwait(false);
             return MapWriteResult(ConnectionProfileIpcMessageTypes.DeleteResponse, result);
+        }
+        catch (DatabaseRecoveryRequiredException)
+        {
+            return DatabaseRecoveryFailure(ConnectionProfileIpcMessageTypes.DeleteResponse);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -283,6 +295,13 @@ public sealed class ConnectionProfileIpcCommandService : IAgentIpcCommandHandler
             "connection.profile.unavailable", StorageIpcFailureCategory.Unavailable,
             "The profile operation could not be completed.", IsTransient: true)
     };
+
+    private static AgentIpcCommandResponse DatabaseRecoveryFailure(string responseType) => WriteFailure(
+        responseType,
+        ContractWriteStatus.Unavailable,
+        "connection.profile.database_recovery_required",
+        StorageIpcFailureCategory.Unavailable,
+        "The profile database requires recovery before profiles can be changed. No profile data was changed.");
 
     private static AgentIpcCommandResponse GetFailure(
         string code,

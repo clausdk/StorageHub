@@ -40,8 +40,7 @@ public sealed class ConnectionProfileSchemaInitializer
             var result = await _databaseInitializer.InitializeAsync(cancellationToken).ConfigureAwait(false);
             if (!result.IsReady)
             {
-                throw new InvalidOperationException(
-                    $"The StorageHub database is not ready ({result.RecoveryReason}); repository access was refused.");
+                throw new DatabaseRecoveryRequiredException(result.RecoveryReason);
             }
 
             _initialized = true;
