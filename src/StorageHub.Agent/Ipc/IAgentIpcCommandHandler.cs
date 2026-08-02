@@ -19,7 +19,12 @@ public interface IAgentIpcCommandHandler
 /// <summary>A response whose request identity and sequence remain controlled by the IPC host.</summary>
 public sealed record AgentIpcCommandResponse
 {
-    private AgentIpcCommandResponse(string messageType, JsonElement payload)
+    private Action? _postSendAction;
+
+    private AgentIpcCommandResponse(
+        string messageType,
+        JsonElement payload,
+        Action? postSendAction = null)
     {
         if (string.IsNullOrWhiteSpace(messageType) ||
             messageType.StartsWith(IpcProtocol.SecretMessageTypePrefix, StringComparison.OrdinalIgnoreCase))
@@ -29,6 +34,7 @@ public sealed record AgentIpcCommandResponse
 
         MessageType = messageType;
         Payload = payload;
+        _postSendAction = postSendAction;
     }
 
     public string MessageType { get; }
@@ -41,10 +47,26 @@ public sealed record AgentIpcCommandResponse
         return new AgentIpcCommandResponse(messageType, JsonSerializer.SerializeToElement(payload));
     }
 
+    internal static AgentIpcCommandResponse CreateWithPostSendAction<TPayload>(
+        string messageType,
+        TPayload payload,
+        Action postSendAction)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(postSendAction);
+        return new AgentIpcCommandResponse(
+            messageType,
+            JsonSerializer.SerializeToElement(payload),
+            postSendAction);
+    }
+
     public static AgentIpcCommandResponse Error(string code, string message) => Create(
         IpcProtocol.ErrorResponseMessageType,
         new IpcErrorResponse(code, message));
 
     internal IpcEnvelope ToEnvelope(Guid requestId, long sequence) =>
         new(MessageType, requestId, sequence, Payload);
+
+    internal void NotifyResponseSent() =>
+        Interlocked.Exchange(ref _postSendAction, null)?.Invoke();
 }

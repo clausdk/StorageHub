@@ -7,10 +7,12 @@
     <RootNamespace>StorageHub.Desktop</RootNamespace>
     <AssemblyName>StorageHub.Desktop</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\branding\storagehub.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Krypton.Toolkit" />
+    <PackageReference Include="Velopack" />
   </ItemGroup>
 
   <ItemGroup>

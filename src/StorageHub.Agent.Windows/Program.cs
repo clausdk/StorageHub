@@ -1,3 +1,4 @@
+using System.Reflection;
 using CL.Storage;
 using CL.Storage.Configuration;
 using CodeLogic;
@@ -20,6 +21,8 @@ using StorageHub.Storage.CodeLogic;
 using StorageHub.Sync;
 
 var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+var applicationVersion = GetApplicationVersion();
+var shutdown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 var configuredStorageHubRoot = Environment.GetEnvironmentVariable("STORAGEHUB_DATA_ROOT");
 if (string.IsNullOrWhiteSpace(configuredStorageHubRoot))
 {
@@ -29,6 +32,13 @@ if (string.IsNullOrWhiteSpace(configuredStorageHubRoot))
 WindowsAgentDataDirectoryLease agentDataDirectoryLease;
 try
 {
+    var applicationOwnedTreeRoot =
+        WindowsAgentDataDirectoryLease.ResolveApplicationOwnedTreeRoot(AppContext.BaseDirectory);
+    WindowsAgentDataDirectoryLease.EnsureDataRootIsSeparateFromApplication(
+        configuredStorageHubRoot,
+        applicationOwnedTreeRoot);
+    WindowsAgentDataDirectoryLease.EnsureApplicationTreeIsSeparateFromInstanceLock(
+        applicationOwnedTreeRoot);
     agentDataDirectoryLease = WindowsAgentDataDirectoryLease.Acquire(
         configuredStorageHubRoot);
 }
@@ -54,7 +64,7 @@ var initialization = await CodeLogic.CodeLogic.InitializeAsync(options =>
 {
     options.FrameworkRootPath = agentDataDirectoryLease.FrameworkDirectory;
     options.ApplicationRootPath = agentRoot;
-    options.AppVersion = "0.1.0";
+    options.AppVersion = applicationVersion;
     options.HandleShutdownSignals = false;
 });
 
@@ -164,12 +174,15 @@ var requestHandler = new AgentIpcRequestHandler(
         transferCommands,
         syncCommands,
         scheduleCommands,
-        objectInspectorCommands));
+        objectInspectorCommands,
+        new AgentControlIpcCommandService(
+            () => shutdown.TrySetResult(),
+            Environment.ProcessId)));
 var ipc = new NamedPipeIpcServerSubsystem(
     new NamedPipeIpcServerOptions
     {
-        PipeName = "StorageHub.Agent.v1",
-        AgentVersion = "0.1.0",
+        PipeName = StorageHubIpcPipeNames.Normal,
+        AgentVersion = applicationVersion,
         AgentInstanceId = agentInstanceId,
         MaxConcurrentClients = 8,
         RequestTimeout = TimeSpan.FromMinutes(2),
@@ -181,8 +194,8 @@ var secretRequestHandler = new AgentSecretIpcRequestHandler(
 var secretIpc = new NamedPipeIpcServerSubsystem(
     new NamedPipeIpcServerOptions
     {
-        PipeName = "StorageHub.Agent.Secrets.v1",
-        AgentVersion = "0.1.0",
+        PipeName = StorageHubIpcPipeNames.Secret,
+        AgentVersion = applicationVersion,
         AgentInstanceId = agentInstanceId,
         MaxConcurrentClients = 2,
         RequestTimeout = TimeSpan.FromSeconds(30),
@@ -191,16 +204,16 @@ var secretIpc = new NamedPipeIpcServerSubsystem(
     secretRequestHandler.HandleSessionAsync);
 await using var runtimeCoordinator = new AgentRuntimeCoordinator(
     [
+        ipc,
+        secretIpc,
         databaseSubsystem,
         vaultSubsystem,
         transferQueueSubsystem,
         syncOutboxSubsystem,
-        schedulerSubsystem,
-        ipc,
-        secretIpc
+        schedulerSubsystem
     ]);
 coordinator = runtimeCoordinator;
-CodeLogic.CodeLogic.RegisterApplication(new StorageHubApplication(runtimeCoordinator));
+CodeLogic.CodeLogic.RegisterApplication(new StorageHubApplication(runtimeCoordinator, applicationVersion));
 
 try
 {
@@ -221,7 +234,6 @@ try
     }
 
     Console.WriteLine("StorageHub Agent is running. Press Ctrl+C to stop.");
-    var shutdown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     Console.CancelKeyPress += (_, eventArgs) =>
     {
         eventArgs.Cancel = true;
@@ -239,6 +251,23 @@ catch (Exception error)
 finally
 {
     await CodeLogic.CodeLogic.StopAsync();
+}
+
+static string GetApplicationVersion()
+{
+    var assembly = Assembly.GetExecutingAssembly();
+    var informationalVersion = assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+        .InformationalVersion;
+    if (!string.IsNullOrWhiteSpace(informationalVersion))
+    {
+        var metadataSeparator = informationalVersion.IndexOf('+', StringComparison.Ordinal);
+        return metadataSeparator < 0
+            ? informationalVersion
+            : informationalVersion[..metadataSeparator];
+    }
+
+    return assembly.GetName().Version?.ToString(3) ?? "0.1.0";
 }
 
 static AgentStatusSnapshot CreateStatusSnapshot(

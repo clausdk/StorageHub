@@ -3,18 +3,27 @@ using CodeLogic.Framework.Libraries;
 
 namespace StorageHub.Application;
 
-public sealed class StorageHubApplication(IApplicationRuntimeCoordinator coordinator) : IApplication
+public sealed class StorageHubApplication : IApplication
 {
-    private readonly IApplicationRuntimeCoordinator _coordinator = coordinator;
+    private readonly IApplicationRuntimeCoordinator _coordinator;
 
-    public ApplicationManifest Manifest { get; } = new()
+    public StorageHubApplication(
+        IApplicationRuntimeCoordinator coordinator,
+        string version = "0.1.0")
     {
-        Id = "storagehub",
-        Name = "StorageHub",
-        Version = "0.1.0",
-        Description = "Secure file management, transfer, and synchronization",
-        Author = "StorageHub Contributors"
-    };
+        _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
+        ArgumentException.ThrowIfNullOrWhiteSpace(version);
+        Manifest = new ApplicationManifest
+        {
+            Id = "storagehub",
+            Name = "StorageHub",
+            Version = version,
+            Description = "Secure file management, transfer, and synchronization",
+            Author = "StorageHub Contributors"
+        };
+    }
+
+    public ApplicationManifest Manifest { get; }
 
     public Task OnConfigureAsync(ApplicationContext context)
     {

@@ -14,6 +14,10 @@ public static class IpcProtocol
 
     public const string AgentStatusResponseMessageType = "agent.status.response";
 
+    public const string AgentShutdownRequestMessageType = AgentControlIpcMessageTypes.ShutdownRequest;
+
+    public const string AgentShutdownResponseMessageType = AgentControlIpcMessageTypes.ShutdownResponse;
+
     public const string ConnectionListRequestMessageType = StorageIpcMessageTypes.ConnectionListRequest;
 
     public const string ConnectionListResponseMessageType = StorageIpcMessageTypes.ConnectionListResponse;

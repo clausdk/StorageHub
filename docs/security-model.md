@@ -146,7 +146,11 @@ approval or trigger unattended apply.
 
 ### Local IPC and diagnostics
 
-- On Windows, agent and client named pipes use `CurrentUserOnly`.
+- On Windows, agent and client named pipes use `CurrentUserOnly` and bounded
+  account-scoped names. The `StorageHub.Agent.v1.user-<account-hash>` and
+  `StorageHub.Agent.Secrets.v1.user-<account-hash>` suffix is the first 128 bits
+  of SHA-256 over the current account SID's binary form; the raw SID is never
+  placed in a pipe name.
 - A fixed per-user file lease prevents two agents, even with different data-root
   overrides, from serving the same pipe. The complete configured data tree and
   CodeLogic discovery directory reject reparse points and receive verified,
@@ -170,7 +174,7 @@ approval or trigger unattended apply.
   are opaque vault references. They contain no secret-value or free-form notes
   member; existing notes never cross profile IPC.
 - Secret-prefixed messages are rejected on the normal IPC channel. Enrollment,
-  rotation, and deletion use the separate `StorageHub.Agent.Secrets.v1` pipe,
+  rotation, and deletion use the separate account-scoped secret pipe,
   typed secret envelopes, the 32 MiB secret-frame ceiling, and a 16 MiB material
   ceiling. That pipe is Windows/current-user-only; serialized frame buffers,
   desktop transport copies, and agent request buffers are zeroed after use.

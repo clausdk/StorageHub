@@ -18,7 +18,7 @@ public sealed class AgentMonitorStatusEventArgs(AgentMonitorStatus status) : Eve
 
 public sealed class AgentStatusMonitor : IAsyncDisposable
 {
-    public const string DefaultPipeName = "StorageHub.Agent.v1";
+    public static string DefaultPipeName => StorageHubIpcPipeNames.Normal;
 
     private readonly TimeSpan _pollInterval;
     private readonly TimeSpan _connectTimeout;

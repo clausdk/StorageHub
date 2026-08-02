@@ -20,12 +20,13 @@
       "storagehub.domain": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Contracts": "[1.0.0, )"
+          "StorageHub.Contracts": "[0.1.0, )"
         }
       },
       "storagehub.security": {
         "type": "Project"
       }
-    }
+    },
+    "net10.0/win-x64": {}
   }
 }

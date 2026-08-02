@@ -19,6 +19,16 @@ public sealed class StorageHubApplicationTests
         Assert.Equal("storagehub", application.Manifest.Id);
     }
 
+    [Fact]
+    public void Manifest_uses_the_host_release_version()
+    {
+        var application = new StorageHubApplication(
+            new RecordingCoordinator(),
+            "0.1.0-preview.42");
+
+        Assert.Equal("0.1.0-preview.42", application.Manifest.Version);
+    }
+
     [Theory]
     [InlineData(ApplicationOperationalState.Ready, HealthStatusLevel.Healthy)]
     [InlineData(ApplicationOperationalState.RecoveryOnly, HealthStatusLevel.Degraded)]
