@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>StorageHub.Transfers</RootNamespace>
+    <AssemblyName>StorageHub.Transfers</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StorageHub.Domain\StorageHub.Domain.csproj" />
+    <ProjectReference Include="..\StorageHub.Storage\StorageHub.Storage.csproj" />
+  </ItemGroup>
+</Project>

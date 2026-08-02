@@ -1,0 +1,33 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/StorageHub.Contracts/StorageHub.Contracts.csproj" />
+    <Project Path="src/StorageHub.Domain/StorageHub.Domain.csproj" />
+    <Project Path="src/StorageHub.Application/StorageHub.Application.csproj" />
+    <Project Path="src/StorageHub.Storage/StorageHub.Storage.csproj" />
+    <Project Path="src/StorageHub.Storage.CodeLogic/StorageHub.Storage.CodeLogic.csproj" />
+    <Project Path="src/StorageHub.Transfers/StorageHub.Transfers.csproj" />
+    <Project Path="src/StorageHub.Sync/StorageHub.Sync.csproj" />
+    <Project Path="src/StorageHub.Persistence/StorageHub.Persistence.csproj" />
+    <Project Path="src/StorageHub.Security/StorageHub.Security.csproj" />
+    <Project Path="src/StorageHub.Infrastructure.Windows/StorageHub.Infrastructure.Windows.csproj" />
+    <Project Path="src/StorageHub.Agent/StorageHub.Agent.csproj" />
+    <Project Path="src/StorageHub.Agent.Windows/StorageHub.Agent.Windows.csproj" />
+    <Project Path="src/StorageHub.Diagnostics/StorageHub.Diagnostics.csproj" />
+    <Project Path="src/StorageHub.Desktop.WinForms/StorageHub.Desktop.WinForms.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/StorageHub.Domain.Tests/StorageHub.Domain.Tests.csproj" />
+    <Project Path="tests/StorageHub.Storage.ContractTests/StorageHub.Storage.ContractTests.csproj" />
+    <Project Path="tests/StorageHub.Storage.CodeLogic.Tests/StorageHub.Storage.CodeLogic.Tests.csproj" />
+    <Project Path="tests/StorageHub.Application.Tests/StorageHub.Application.Tests.csproj" />
+    <Project Path="tests/StorageHub.Transfers.Tests/StorageHub.Transfers.Tests.csproj" />
+    <Project Path="tests/StorageHub.Sync.Tests/StorageHub.Sync.Tests.csproj" />
+    <Project Path="tests/StorageHub.Persistence.Tests/StorageHub.Persistence.Tests.csproj" />
+    <Project Path="tests/StorageHub.Security.Tests/StorageHub.Security.Tests.csproj" />
+    <Project Path="tests/StorageHub.Infrastructure.Windows.Tests/StorageHub.Infrastructure.Windows.Tests.csproj" />
+    <Project Path="tests/StorageHub.Agent.IntegrationTests/StorageHub.Agent.IntegrationTests.csproj" />
+    <Project Path="tests/StorageHub.Agent.Windows.Tests/StorageHub.Agent.Windows.Tests.csproj" />
+    <Project Path="tests/StorageHub.Diagnostics.Tests/StorageHub.Diagnostics.Tests.csproj" />
+    <Project Path="tests/StorageHub.Desktop.Tests/StorageHub.Desktop.Tests.csproj" />
+  </Folder>
+</Solution>

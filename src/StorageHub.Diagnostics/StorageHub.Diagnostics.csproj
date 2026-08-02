@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>StorageHub.Diagnostics</RootNamespace>
+    <AssemblyName>StorageHub.Diagnostics</AssemblyName>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>StorageHub.Agent.Windows.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StorageHub.Agent.Windows\StorageHub.Agent.Windows.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Application\StorageHub.Application.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Contracts\StorageHub.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Domain\StorageHub.Domain.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Persistence\StorageHub.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Security\StorageHub.Security.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Storage\StorageHub.Storage.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Transfers\StorageHub.Transfers.csproj" />
+  </ItemGroup>
+</Project>

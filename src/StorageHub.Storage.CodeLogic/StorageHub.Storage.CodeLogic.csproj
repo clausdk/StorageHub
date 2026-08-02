@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>StorageHub.Storage.CodeLogic</AssemblyName>
+    <RootNamespace>StorageHub.Storage.CodeLogic</RootNamespace>
+    <RequiresCLStorageSource>true</RequiresCLStorageSource>
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StorageHub.Application\StorageHub.Application.csproj" />
+    <ProjectReference Include="..\StorageHub.Contracts\StorageHub.Contracts.csproj" />
+    <ProjectReference Include="..\StorageHub.Domain\StorageHub.Domain.csproj" />
+    <ProjectReference Include="..\StorageHub.Security\StorageHub.Security.csproj" />
+    <ProjectReference Include="..\StorageHub.Storage\StorageHub.Storage.csproj" />
+    <ProjectReference Include="$(CLStorageProjectPath)"
+                      SetConfiguration="Configuration=$(Configuration)" />
+    <PackageReference Include="CodeLogic" />
+    <PackageReference Include="SSH.NET" />
+  </ItemGroup>
+</Project>

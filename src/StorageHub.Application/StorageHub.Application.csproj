@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>StorageHub.Application</RootNamespace>
+    <AssemblyName>StorageHub.Application</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CodeLogic" />
+    <PackageReference Include="Cronos" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StorageHub.Domain\StorageHub.Domain.csproj" />
+    <ProjectReference Include="..\StorageHub.Security\StorageHub.Security.csproj" />
+  </ItemGroup>
+
+  <!-- Durable scheduler contracts are application-layer abstractions shared by the
+       agent host and persistence adapter. Link the source while the scheduler is
+       split into its own package in a later repository-structure cleanup. -->
+  <ItemGroup>
+    <Compile Include="..\StorageHub.Agent\Scheduling\ScheduledSyncJobContracts.cs"
+             Link="Scheduling\ScheduledSyncJobContracts.cs" />
+    <Compile Include="..\StorageHub.Agent\Scheduling\CronScheduleDefinition.cs"
+             Link="Scheduling\CronScheduleDefinition.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <!-- Microsoft.Data.Sqlite 9.0.18 still has a 2.1.10 minimum. Pin the
+         compatible patched native bundle so NU1903 cannot resolve the
+         CVE-2025-6965-affected SQLite binary. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" VersionOverride="2.1.12" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\StorageHub.Application\StorageHub.Application.csproj" />
+    <ProjectReference Include="..\StorageHub.Security\StorageHub.Security.csproj" />
+    <ProjectReference Include="..\StorageHub.Sync\StorageHub.Sync.csproj" />
+    <ProjectReference Include="..\StorageHub.Transfers\StorageHub.Transfers.csproj" />
+  </ItemGroup>
+</Project>

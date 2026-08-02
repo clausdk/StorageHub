@@ -1,0 +1,80 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0-windows10.0.19041": {
+      "Krypton.Toolkit": {
+        "type": "Direct",
+        "requested": "[105.26.7.201, )",
+        "resolved": "105.26.7.201",
+        "contentHash": "Wxr2n7YYR21vtQIsy4csAQhn0v6AcHdD7SX2qOl/Bb/QGpkyUz1a8IxqOWp4VCyaBPUNPNeTNOWfECI7/UrkJw=="
+      },
+      "storagehub.agent": {
+        "type": "Project",
+        "dependencies": {
+          "Cronos": "[0.13.0, )",
+          "StorageHub.Application": "[1.0.0, )",
+          "StorageHub.Contracts": "[1.0.0, )",
+          "StorageHub.Domain": "[1.0.0, )",
+          "StorageHub.Storage": "[1.0.0, )",
+          "StorageHub.Sync": "[1.0.0, )",
+          "StorageHub.Transfers": "[1.0.0, )"
+        }
+      },
+      "storagehub.application": {
+        "type": "Project",
+        "dependencies": {
+          "CodeLogic": "[4.1.0, )",
+          "Cronos": "[0.13.0, )",
+          "StorageHub.Domain": "[1.0.0, )",
+          "StorageHub.Security": "[1.0.0, )"
+        }
+      },
+      "storagehub.contracts": {
+        "type": "Project"
+      },
+      "storagehub.domain": {
+        "type": "Project",
+        "dependencies": {
+          "StorageHub.Contracts": "[1.0.0, )"
+        }
+      },
+      "storagehub.security": {
+        "type": "Project"
+      },
+      "storagehub.storage": {
+        "type": "Project",
+        "dependencies": {
+          "StorageHub.Contracts": "[1.0.0, )",
+          "StorageHub.Domain": "[1.0.0, )"
+        }
+      },
+      "storagehub.sync": {
+        "type": "Project",
+        "dependencies": {
+          "StorageHub.Domain": "[1.0.0, )",
+          "StorageHub.Storage": "[1.0.0, )",
+          "StorageHub.Transfers": "[1.0.0, )"
+        }
+      },
+      "storagehub.transfers": {
+        "type": "Project",
+        "dependencies": {
+          "StorageHub.Domain": "[1.0.0, )",
+          "StorageHub.Storage": "[1.0.0, )"
+        }
+      },
+      "CodeLogic": {
+        "type": "CentralTransitive",
+        "requested": "[4.1.0, )",
+        "resolved": "4.1.0",
+        "contentHash": "zmlsOZ+kRGW62zyn7HdblpsOIeqZ74FeA757rcS1NJTyp40NUq6SIBmnKGotjUEAHz/uQZPVDIh98kJ8fhQGwQ=="
+      },
+      "Cronos": {
+        "type": "CentralTransitive",
+        "requested": "[0.13.0, )",
+        "resolved": "0.13.0",
+        "contentHash": "Nkve+Yi0+ol3ntSBRHeW0ka9cJQ8vndSUvvkXqF9LVqwpoqWueyxu/HS275r98RDOmF7/mzRnZW5XXUBXob+TA=="
+      }
+    }
+  }
+}

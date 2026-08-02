@@ -1,0 +1,59 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework Condition="'$(TargetFramework)' == ''">net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <DebugType>portable</DebugType>
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
+    <RepositoryUrl>https://github.com/clausdk/StorageHub</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Authors>StorageHub Contributors</Authors>
+    <Copyright>Copyright © StorageHub Contributors</Copyright>
+    <CodeLogicLibsRoot Condition="'$(CodeLogicLibsRoot)' == ''">$(USERPROFILE)\Documents\GitHub\CodeLogic.Libs</CodeLogicLibsRoot>
+    <CLStorageProjectPath Condition="'$(CLStorageProjectPath)' == ''">$(CodeLogicLibsRoot)\CL.Storage\CL.Storage.csproj</CLStorageProjectPath>
+    <CLStorageProjectFullPath>$([MSBuild]::NormalizePath('$(CLStorageProjectPath)'))</CLStorageProjectFullPath>
+    <CLStorageExpectedProjectFullPath>$([MSBuild]::NormalizePath('$(CodeLogicLibsRoot)', 'CL.Storage', 'CL.Storage.csproj'))</CLStorageExpectedProjectFullPath>
+    <CLStorageExpectedRevision>25d357b7e3896e2ff3d6c29875178a6b0f12ed60</CLStorageExpectedRevision>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+
+  <Target Name="RequirePinnedCLStorageSource"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(RequiresCLStorageSource)' == 'true' and !Exists('$(CLStorageProjectPath)')">
+    <Error Text="CL.Storage source was not found at '$(CLStorageProjectPath)'. Check out the pinned CodeLogic.Libs revision and pass -p:CLStorageProjectPath=&quot;...\CL.Storage.csproj&quot;." />
+  </Target>
+
+  <Target Name="VerifyPinnedCLStorageSource"
+          BeforeTargets="PrepareForBuild"
+          DependsOnTargets="RequirePinnedCLStorageSource"
+          Condition="'$(RequiresCLStorageSource)' == 'true' and Exists('$(CLStorageProjectPath)')">
+    <Error Condition="'$(CLStorageProjectFullPath)' != '$(CLStorageExpectedProjectFullPath)'"
+           Text="CLStorageProjectPath must resolve to '$(CLStorageExpectedProjectFullPath)' inside the revision-checked CodeLogicLibsRoot." />
+    <Exec Command="git -c safe.directory=&quot;$(CodeLogicLibsRoot)&quot; -C &quot;$(CodeLogicLibsRoot)&quot; rev-parse HEAD"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_CLStorageActualRevision" />
+    </Exec>
+    <Error Condition="'$(_CLStorageActualRevision)' != '$(CLStorageExpectedRevision)'"
+           Text="CL.Storage is at revision '$(_CLStorageActualRevision)', but StorageHub requires '$(CLStorageExpectedRevision)'. Check out the pinned CodeLogic.Libs revision before building." />
+    <Exec Command="git -c safe.directory=&quot;$(CodeLogicLibsRoot)&quot; -c core.excludesFile= -C &quot;$(CodeLogicLibsRoot)&quot; status --porcelain=v1 --untracked-files=all -- CL.Storage"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="Low"
+          StandardErrorImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_CLStorageSourceStatus" />
+    </Exec>
+    <Error Condition="'$(_CLStorageSourceStatus)' != ''"
+           Text="CL.Storage contains tracked or untracked source-tree changes. StorageHub only builds against the clean pinned revision '$(CLStorageExpectedRevision)'." />
+  </Target>
+</Project>

@@ -1,0 +1,59 @@
+name: Feature request
+description: Propose a focused capability for the StorageHub engineering preview.
+title: "[Feature]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        StorageHub prioritizes fail-closed storage operations, explicit capabilities, and testable provider-neutral behavior. A proposal is not a commitment or support promise.
+
+        **Never include credentials, private keys, certificates, private endpoint details, production data, or unsanitized logs.** Report security concerns privately through the repository Security tab.
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: This proposal contains no secrets, private infrastructure details, or sensitive data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Describe the user outcome and why existing behavior is insufficient.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the smallest useful behavior, including provider capability expectations.
+    validations:
+      required: true
+
+  - type: textarea
+    id: safety-impact
+    attributes:
+      label: Safety and compatibility impact
+      description: Consider credentials, trust, roots and paths, overwrites/deletes, resumability, IPC, migrations, and backward compatibility. Write "None identified" if none apply.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include current workarounds or a smaller scope, if any.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I may be able to submit a focused pull request with tests.

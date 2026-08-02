@@ -1,0 +1,47 @@
+## .NET build output
+bin/
+obj/
+artifacts/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+
+## IDE state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Package/build caches
+packages/
+*.nupkg
+*.snupkg
+
+## StorageHub runtime state and secrets
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.vault
+*.pfx
+*.p12
+*.key
+*.pem
+.env
+.env.*
+!.env.example
+logs/
+diagnostics/
+
+## OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

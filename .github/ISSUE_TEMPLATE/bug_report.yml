@@ -1,0 +1,92 @@
+name: Bug report
+description: Report a reproducible StorageHub defect using synthetic, sanitized data.
+title: "[Bug]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        StorageHub is an engineering preview. Please search existing issues first.
+
+        **Never include passwords, access keys, session tokens, private keys, certificates, vault files, private endpoint names, or unsanitized logs.** Report vulnerabilities privately through the repository Security tab instead of this form.
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed all credentials, private infrastructure details, and sensitive data from this report and its attachments.
+          required: true
+        - label: This is not a security vulnerability. I will use the private security-reporting link for suspected vulnerabilities.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: StorageHub version or commit
+      description: Provide the exact commit SHA when using a source build.
+      placeholder: "Commit SHA or preview version"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Desktop UI
+        - Local storage
+        - S3-compatible storage
+        - FTP or FTPS
+        - SFTP
+        - Transfer queue
+        - Synchronization or scheduling
+        - Agent or IPC
+        - Persistence or migration
+        - Build or documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Use temporary locations, disposable accounts, and synthetic filenames/data.
+      placeholder: |
+        1. Configure ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact safe error code or sanitized message when available.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include Windows edition/build, .NET SDK, provider type, and whether the agent was running. Do not identify private hosts or accounts.
+      placeholder: "Windows 11 24H2; .NET SDK 10.0.x; SFTP; agent running"
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Optional minimal logs or screenshots. Redact secrets, private paths, hostnames, account IDs, and personal data before attaching anything.

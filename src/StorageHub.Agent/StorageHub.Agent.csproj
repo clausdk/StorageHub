@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>StorageHub.Agent</RootNamespace>
+    <AssemblyName>StorageHub.Agent</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Cronos" />
+    <ProjectReference Include="..\StorageHub.Application\StorageHub.Application.csproj" />
+    <ProjectReference Include="..\StorageHub.Contracts\StorageHub.Contracts.csproj" />
+    <ProjectReference Include="..\StorageHub.Domain\StorageHub.Domain.csproj" />
+    <ProjectReference Include="..\StorageHub.Storage\StorageHub.Storage.csproj" />
+    <ProjectReference Include="..\StorageHub.Sync\StorageHub.Sync.csproj" />
+    <ProjectReference Include="..\StorageHub.Transfers\StorageHub.Transfers.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Scheduling\ScheduledSyncJobContracts.cs" />
+    <Compile Remove="Scheduling\CronScheduleDefinition.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>StorageHub.Storage</AssemblyName>
+    <RootNamespace>StorageHub.Storage</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\StorageHub.Contracts\StorageHub.Contracts.csproj" />
+    <ProjectReference Include="..\StorageHub.Domain\StorageHub.Domain.csproj" />
+  </ItemGroup>
+</Project>

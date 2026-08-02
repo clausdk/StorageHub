@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>StorageHub.Storage.ContractTests</AssemblyName>
+    <RootNamespace>StorageHub.Storage.ContractTests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StorageHub.Contracts\StorageHub.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Domain\StorageHub.Domain.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Storage\StorageHub.Storage.csproj" />
+  </ItemGroup>
+</Project>

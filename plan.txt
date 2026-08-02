@@ -1,0 +1,3199 @@
+You are a principal .NET architect, security engineer, desktop UX designer,
+
+and senior C# developer.
+
+
+
+Your task is to research and produce a complete, implementation-ready
+
+architecture and development plan for a professional file-management,
+
+file-transfer, and synchronization application named:
+
+
+
+&#x20;   StorageHUB
+
+
+
+Do not write production code yet.
+
+
+
+The first response must be a researched technical design and phased
+
+implementation plan. Do not scaffold projects or generate placeholder
+
+classes until the design has been reviewed and approved.
+
+
+
+============================================================
+
+1\. PRODUCT VISION
+
+============================================================
+
+
+
+StorageHUB should be a modern, reliable, security-focused alternative to
+
+FileZilla, WinSCP, traditional dual-pane file managers, and basic cloud
+
+storage clients.
+
+
+
+It should combine:
+
+
+
+\- A powerful local file explorer
+
+\- A dual-pane local/remote and remote/remote file manager
+
+\- A connection manager
+
+\- A persistent transfer queue
+
+\- S3-compatible object-storage browsing
+
+\- FTP and FTPS
+
+\- SFTP
+
+\- Manual and scheduled synchronization
+
+\- A background synchronization service
+
+\- Secure, centrally managed credentials
+
+\- Extensible storage-provider plugins
+
+\- Detailed settings, logging, health, and diagnostics
+
+
+
+The primary platform is Windows.
+
+
+
+Technology requirements:
+
+
+
+\- C#
+
+\- .NET 10
+
+\- Windows Forms for the initial desktop UI
+
+\- CodeLogic 4 as the application framework
+
+\- CodeLogic NuGet libraries wherever they are appropriate
+
+\- Architecture must permit a separate Linux-compatible UI later
+
+\- The non-UI core and sync service should remain platform-neutral wherever
+
+&#x20; technically possible
+
+
+
+Do not claim that WinForms itself will run on Linux. Keep the WinForms
+
+project isolated from the application core so that a future Avalonia,
+
+GTK, Uno, or other Linux-capable frontend can reuse the core.
+
+
+
+============================================================
+
+2\. REQUIRED RESEARCH
+
+============================================================
+
+
+
+Before proposing the architecture, inspect the current documentation,
+
+source code, package versions, target frameworks, licenses, samples,
+
+public APIs, and known limitations of these official sources:
+
+
+
+CodeLogic framework:
+
+https://github.com/Media2A/CodeLogic
+
+https://www.nuget.org/packages/CodeLogic
+
+
+
+CodeLogic libraries:
+
+https://github.com/Media2A/CodeLogic.Libs
+
+https://www.nuget.org/profiles/Media2A
+
+
+
+Specifically inspect:
+
+
+
+\- CodeLogic
+
+\- CodeLogic.Common
+
+\- CodeLogic.StorageS3
+
+\- CodeLogic.SQLite
+
+\- CodeLogic.SystemStats
+
+\- CodeLogic.NetUtils
+
+\- Any other CodeLogic package genuinely useful to StorageHUB
+
+
+
+FTP and FTPS candidate:
+
+https://github.com/robinrodricks/FluentFTP
+
+https://www.nuget.org/packages/FluentFTP
+
+
+
+SFTP candidate:
+
+https://github.com/sshnet/SSH.NET
+
+https://www.nuget.org/packages/SSH.NET
+
+
+
+Microsoft WinForms documentation:
+
+https://learn.microsoft.com/dotnet/desktop/winforms/
+
+
+
+Research rules:
+
+
+
+1\. Do not invent CodeLogic classes, namespaces, lifecycle hooks, or APIs.
+
+2\. Verify every named API against current source or documentation.
+
+3\. Record the package version and target framework inspected.
+
+4\. Confirm license compatibility.
+
+5\. Identify where CodeLogic already provides a capability before proposing
+
+&#x20;  another dependency.
+
+6\. Identify gaps where a custom StorageHUB adapter or provider is required.
+
+7\. Do not select libraries solely by popularity. Consider maintenance,
+
+&#x20;  tests, async APIs, security, performance, licensing, and .NET 10
+
+&#x20;  compatibility.
+
+8\. Do not blindly use every CodeLogic library. Use only those that fit.
+
+9\. Prefer stable package versions, but explain any version mismatch between
+
+&#x20;  CodeLogic core and the CodeLogic library packages.
+
+10\. Clearly separate verified facts from architectural recommendations.
+
+
+
+Include a dependency decision table containing:
+
+
+
+\- Package
+
+\- Proposed purpose
+
+\- Verified version
+
+\- Target framework
+
+\- License
+
+\- Why selected
+
+\- Risks or limitations
+
+\- Alternative considered
+
+
+
+============================================================
+
+3\. CODELOGIC INTEGRATION
+
+============================================================
+
+
+
+StorageHUB must meaningfully use CodeLogic rather than merely referencing
+
+the package.
+
+
+
+Design how StorageHUB will use:
+
+
+
+\- CodeLogic application lifecycle
+
+\- IApplication
+
+\- ILibrary
+
+\- CodeLogic configuration
+
+\- CodeLogic logging
+
+\- CodeLogic localization
+
+\- CodeLogic event bus
+
+\- CodeLogic health checks
+
+\- CodeLogic plugin support where appropriate
+
+\- Graceful startup and shutdown
+
+\- Dependency ordering
+
+\- Cancellation and error reporting
+
+
+
+Consider an application class similar in responsibility to:
+
+
+
+&#x20;   StorageHubApplication
+
+
+
+Do not assume the exact API or signature until verified.
+
+
+
+Evaluate using these CodeLogic packages:
+
+
+
+\- CodeLogic.StorageS3 for AWS S3 and compatible object stores
+
+\- CodeLogic.SQLite for local metadata, sync history, transfer history,
+
+&#x20; migrations, and application state
+
+\- CodeLogic.Common for verified utilities such as hashing, encryption,
+
+&#x20; cron/scheduling, caching, compression, IDs, or JSON
+
+\- CodeLogic.SystemStats for an optional diagnostics page
+
+\- CodeLogic.NetUtils only where its verified functionality is useful
+
+
+
+CodeLogic JSON configuration may hold ordinary application settings, but
+
+must never contain plaintext passwords, access keys, secret keys, private
+
+key passphrases, PFX passwords, session tokens, or other secrets.
+
+
+
+Describe which StorageHUB components should be:
+
+
+
+\- CodeLogic libraries
+
+\- CodeLogic plugins
+
+\- Plain application services
+
+\- Provider-specific adapters
+
+\- Background workers
+
+
+
+Do not overuse plugins where normal dependency injection or a direct
+
+interface is simpler.
+
+
+
+============================================================
+
+4\. SOLUTION ARCHITECTURE
+
+============================================================
+
+
+
+Propose two or three viable architectures, describe their trade-offs, and
+
+recommend one.
+
+
+
+The recommended default should probably be a modular monolith with a
+
+separate background sync host, unless research reveals a stronger option.
+
+
+
+Consider a solution structure resembling:
+
+
+
+StorageHUB.sln
+
+
+
+src/
+
+&#x20; StorageHUB.Core
+
+&#x20; StorageHUB.Application
+
+&#x20; StorageHUB.Infrastructure.CodeLogic
+
+&#x20; StorageHUB.Persistence
+
+&#x20; StorageHUB.Security
+
+&#x20; StorageHUB.Transfers
+
+&#x20; StorageHUB.Sync
+
+&#x20; StorageHUB.Providers.Local
+
+&#x20; StorageHUB.Providers.S3
+
+&#x20; StorageHUB.Providers.Ftp
+
+&#x20; StorageHUB.Providers.Sftp
+
+&#x20; StorageHUB.Desktop.WinForms
+
+&#x20; StorageHUB.SyncHost
+
+&#x20; StorageHUB.PluginSdk
+
+
+
+tests/
+
+&#x20; StorageHUB.Core.Tests
+
+&#x20; StorageHUB.Sync.Tests
+
+&#x20; StorageHUB.Security.Tests
+
+&#x20; StorageHUB.ProviderTests
+
+&#x20; StorageHUB.IntegrationTests
+
+&#x20; StorageHUB.Desktop.Tests
+
+
+
+The exact structure may differ, but explain every project and dependency.
+
+
+
+Targeting guidance:
+
+
+
+\- Platform-neutral libraries: net10.0
+
+\- WinForms UI: net10.0-windows
+
+\- Sync host: net10.0 where possible
+
+\- Windows-specific security integration should sit behind an abstraction
+
+\- No WinForms types may appear in Core, Sync, Transfers, Security contracts,
+
+&#x20; or provider interfaces
+
+
+
+Create:
+
+
+
+\- A component diagram
+
+\- A project dependency diagram
+
+\- A startup/lifecycle sequence diagram
+
+\- A transfer data-flow diagram
+
+\- A synchronization sequence diagram
+
+\- A background-service communication diagram
+
+
+
+Mermaid diagrams are acceptable.
+
+
+
+============================================================
+
+5\. STORAGE PROVIDER ABSTRACTION
+
+============================================================
+
+
+
+Design a unified provider model that prevents protocol-specific classes
+
+from leaking into the UI or synchronization engine.
+
+
+
+Consider interfaces or equivalent abstractions for:
+
+
+
+\- IStorageProvider
+
+\- IStorageProviderFactory
+
+\- IStorageSession
+
+\- IStoragePath
+
+\- IStorageEntry
+
+\- IStorageCapabilities
+
+\- IStorageOperation
+
+\- ITransferStreamSource
+
+\- ITransferStreamDestination
+
+
+
+Do not use these exact names blindly. Improve them if necessary.
+
+
+
+Every provider should expose a capability model rather than pretending all
+
+protocols behave identically.
+
+
+
+Capabilities should include:
+
+
+
+\- List directory or prefix
+
+\- Paginated listing
+
+\- Recursive listing
+
+\- Read stream
+
+\- Write stream
+
+\- Resume upload
+
+\- Resume download
+
+\- Multipart upload
+
+\- Create directory
+
+\- Delete
+
+\- Rename
+
+\- Move
+
+\- Copy
+
+\- Server-side copy
+
+\- Atomic rename
+
+\- Set modified time
+
+\- Read or write permissions
+
+\- Symbolic links
+
+\- Checksums
+
+\- Object versioning
+
+\- Trash or recycle support
+
+\- Case sensitivity
+
+\- Maximum object or file size
+
+\- Path separator and invalid characters
+
+\- Metadata
+
+\- Tags
+
+\- Content type
+
+\- Temporary-file support
+
+\- Change notifications
+
+\- Remote-side hashing
+
+\- Direct remote-to-remote transfers
+
+
+
+The UI and sync engine must react to capabilities. Unsupported commands
+
+must be disabled or replaced with an explicit fallback.
+
+
+
+Define a normalized path model that safely handles:
+
+
+
+\- Windows drive-letter paths
+
+\- UNC paths
+
+\- Unix-style remote paths
+
+\- FTP paths
+
+\- SFTP paths
+
+\- S3 bucket and object-key semantics
+
+\- Empty S3 prefixes
+
+\- Leading and trailing separators
+
+\- Unicode normalization
+
+\- Case-sensitive and case-insensitive providers
+
+\- Long Windows paths
+
+\- Reserved names
+
+\- Relative-path traversal attempts
+
+
+
+============================================================
+
+6\. INITIAL PROVIDERS
+
+============================================================
+
+
+
+Plan these providers for the first production release:
+
+
+
+A. Local filesystem
+
+
+
+Support:
+
+
+
+\- Windows drives
+
+\- UNC paths and network shares
+
+\- Local folders
+
+\- Hidden and system files
+
+\- Symbolic links and junctions with safe-loop handling
+
+\- File attributes
+
+\- Recycle Bin where practical
+
+\- Long paths
+
+\- FileSystemWatcher as an optimization, not the only source of truth
+
+
+
+B. S3-compatible storage
+
+
+
+Prefer CodeLogic.StorageS3 where its verified API satisfies the requirement.
+
+
+
+Support:
+
+
+
+\- Amazon S3
+
+\- Cloudflare R2
+
+\- MinIO
+
+\- Custom S3-compatible endpoints
+
+\- Region
+
+\- Custom service URL
+
+\- Path-style versus virtual-host addressing
+
+\- Access key and secret key
+
+\- Temporary session token
+
+\- Optional default bucket
+
+\- Optional default prefix
+
+\- TLS validation
+
+\- Multipart upload
+
+\- Resume/retry strategy
+
+\- Object metadata
+
+\- Content type
+
+\- Storage class where supported
+
+\- Server-side copy where supported
+
+\- Object versioning awareness where supported
+
+\- Pseudo-folder behavior
+
+\- Presigned URLs as a later feature
+
+
+
+C. FTP and FTPS
+
+
+
+Evaluate FluentFTP.
+
+
+
+Support:
+
+
+
+\- Plain FTP, but clearly label it insecure
+
+\- Explicit FTPS
+
+\- Implicit FTPS
+
+\- Passive mode
+
+\- Active mode where required
+
+\- Proxy support if practical
+
+\- Username/password
+
+\- Anonymous login
+
+\- TLS certificate validation
+
+\- Certificate pinning
+
+\- Optional client certificate authentication
+
+\- PFX/PKCS#12 certificate selection
+
+\- PFX password retrieved from the secure credential vault
+
+\- PFX loaded through the platform certificate APIs
+
+\- Connection timeout
+
+\- Keep-alive
+
+\- Retry and reconnect
+
+\- Transfer mode
+
+\- Server time offset
+
+\- UTF-8
+
+\- Hash verification where supported
+
+
+
+Never make “accept any TLS certificate” the default.
+
+
+
+D. SFTP
+
+
+
+Evaluate SSH.NET.
+
+
+
+Correctly treat SFTP as an SSH protocol, not an FTP-over-TLS mode.
+
+
+
+Support:
+
+
+
+\- Password authentication
+
+\- SSH private-key authentication
+
+\- Encrypted private keys
+
+\- OpenSSH keys
+
+\- PKCS#8 keys
+
+\- PuTTY PPK keys where supported
+
+\- OpenSSH user certificates where supported
+
+\- Keyboard-interactive authentication where useful
+
+\- Proxy support where supported
+
+\- SSH host-key verification
+
+\- SHA-256 host-key fingerprints
+
+\- Known-host records
+
+\- Explicit trust-on-first-use workflow
+
+\- Host-key change warning
+
+\- Connection timeout
+
+\- Keep-alive
+
+\- Retry and reconnect
+
+\- SFTP operations and permissions where supported
+
+
+
+Do not list PFX as a normal SFTP authentication method.
+
+
+
+PFX support belongs to FTPS client-certificate authentication. SFTP uses
+
+SSH private keys and SSH certificates. If a proprietary gateway requires a
+
+custom PFX-to-SSH workflow, treat it as a future plugin rather than a
+
+standard SFTP feature.
+
+
+
+Future provider candidates should be enabled by the architecture without
+
+being part of the initial implementation:
+
+
+
+\- WebDAV
+
+\- SMB
+
+\- Azure Blob Storage
+
+\- Google Cloud Storage
+
+\- Backblaze B2
+
+\- OneDrive
+
+\- Google Drive
+
+\- Dropbox
+
+\- Archive-file provider
+
+\- Git repository provider
+
+
+
+============================================================
+
+7\. CONNECTION MANAGER
+
+============================================================
+
+
+
+Design a connection manager inspired by the supplied FileZilla Site Manager
+
+screenshot, but not as a pixel-for-pixel copy.
+
+
+
+It should support:
+
+
+
+\- Connection folders
+
+\- Tags
+
+\- Favorites
+
+\- Search
+
+\- Sort
+
+\- Duplicate
+
+\- Rename
+
+\- Delete
+
+\- Import
+
+\- Export
+
+\- Test connection
+
+\- Connection health status
+
+\- Last successful connection
+
+\- Last error
+
+\- Default remote path
+
+\- Default local path
+
+\- Connection color or icon
+
+\- Notes
+
+\- Per-profile transfer settings
+
+\- Per-profile retry settings
+
+\- Per-profile proxy settings
+
+\- Per-profile bandwidth limit
+
+\- Per-profile encoding
+
+\- Per-profile timeouts
+
+
+
+Connection editor tabs should be protocol-aware, potentially including:
+
+
+
+\- General
+
+\- Authentication
+
+\- TLS or SSH
+
+\- Advanced
+
+\- Transfer Settings
+
+\- Proxy
+
+\- Character Set
+
+\- Sync Defaults
+
+\- Notes
+
+
+
+Fields must dynamically change by protocol.
+
+
+
+Example protocol fields:
+
+
+
+FTP/FTPS:
+
+\- Host
+
+\- Port
+
+\- FTP/explicit FTPS/implicit FTPS
+
+\- Login type
+
+\- Username
+
+\- Password credential reference
+
+\- Passive/active
+
+\- PFX certificate reference
+
+\- PFX password credential reference
+
+\- TLS version
+
+\- Certificate validation and pinning
+
+
+
+SFTP:
+
+\- Host
+
+\- Port
+
+\- Username
+
+\- Authentication methods
+
+\- Password credential reference
+
+\- Private-key file or key-vault reference
+
+\- Private-key passphrase credential reference
+
+\- SSH certificate
+
+\- Host-key fingerprint
+
+\- Proxy/jump-host strategy if supported
+
+
+
+S3:
+
+\- Provider preset
+
+\- Endpoint
+
+\- Region
+
+\- Access-key credential reference
+
+\- Secret-key credential reference
+
+\- Session-token credential reference
+
+\- Bucket
+
+\- Prefix
+
+\- Path-style option
+
+\- TLS options
+
+
+
+Connection profiles must store only references to secrets.
+
+
+
+The same connection profile and credential references must be reusable by:
+
+
+
+\- Interactive browsing
+
+\- Manual transfers
+
+\- Scheduled sync jobs
+
+\- Background sync service
+
+\- Command-line operations
+
+\- Future plugins
+
+
+
+There must be one source of truth for each connection profile.
+
+
+
+============================================================
+
+8\. CREDENTIAL AND TRUST MANAGEMENT
+
+============================================================
+
+
+
+Design a dedicated credential service.
+
+
+
+Security requirements:
+
+
+
+\- Never store plaintext secrets in JSON
+
+\- Never store plaintext secrets in SQLite
+
+\- Never write secrets into logs
+
+\- Never include secrets in exception messages
+
+\- Never export secrets by default
+
+\- Redact URLs containing credentials
+
+\- Use stable opaque credential IDs
+
+\- Separate connection metadata from secret material
+
+\- Support secret rotation
+
+\- Support deleting orphaned credentials
+
+\- Record credential usage metadata without recording the secret
+
+\- Clear sensitive buffers where practical
+
+\- Avoid pretending SecureString provides complete protection
+
+
+
+Windows implementation options to evaluate:
+
+
+
+\- Windows Credential Manager
+
+\- DPAPI-protected encrypted vault
+
+\- Windows certificate store for suitable certificates
+
+\- A combination of these
+
+
+
+Future Linux implementation should use a secure abstraction capable of
+
+using Secret Service/libsecret, KWallet, or another OS keyring.
+
+
+
+Store these through the credential service:
+
+
+
+\- Passwords
+
+\- S3 access keys
+
+\- S3 secret keys
+
+\- S3 session tokens
+
+\- PFX passwords
+
+\- SSH private-key passphrases
+
+\- Proxy passwords
+
+\- Optional application vault master key
+
+
+
+Trust storage should separately record:
+
+
+
+\- TLS certificate pins
+
+\- SSH host-key fingerprints
+
+\- Known-host decisions
+
+\- First-seen date
+
+\- Last-seen date
+
+\- Trust scope
+
+\- Previous fingerprints
+
+\- Revocation or rejection status
+
+
+
+Design secure first-use dialogs:
+
+
+
+\- Unknown TLS certificate
+
+\- Invalid TLS certificate
+
+\- Unknown SSH host key
+
+\- Changed SSH host key
+
+\- Expired certificate
+
+\- Hostname mismatch
+
+
+
+The user must see meaningful fingerprints and warnings. Avoid a casual
+
+“accept everything forever” button.
+
+
+
+Explain how the background sync service obtains credentials without
+
+copying them to its own insecure configuration.
+
+
+
+============================================================
+
+9\. DUAL-PANE FILE EXPLORER UI
+
+============================================================
+
+
+
+The main UI should be inspired by the supplied FileZilla screenshot while
+
+feeling like a modern Windows application.
+
+
+
+Use a dual-pane layout in which either side may show:
+
+
+
+\- Local filesystem
+
+\- S3
+
+\- FTP/FTPS
+
+\- SFTP
+
+\- A future provider
+
+
+
+This permits:
+
+
+
+\- Local to remote
+
+\- Remote to local
+
+\- Local to local
+
+\- Remote to remote
+
+\- S3 to SFTP
+
+\- FTP to S3
+
+\- Any other supported combination
+
+
+
+Suggested layout:
+
+
+
+Top:
+
+\- MenuStrip
+
+\- ToolStrip
+
+\- Quick-connect control
+
+\- Navigation buttons
+
+\- Refresh
+
+\- Compare
+
+\- Sync
+
+\- Search
+
+\- View options
+
+
+
+Optional collapsible area:
+
+\- Session log
+
+\- Connection messages
+
+\- Protocol diagnostics
+
+
+
+Middle:
+
+\- Left browser pane
+
+\- Right browser pane
+
+
+
+Each browser pane should contain:
+
+\- Connection selector
+
+\- Address/breadcrumb bar
+
+\- Back
+
+\- Forward
+
+\- Up
+
+\- Refresh
+
+\- Favorites
+
+\- Directory tree
+
+\- File list
+
+\- Filter/search box
+
+\- Status summary
+
+
+
+Bottom:
+
+\- Persistent transfer and sync queue
+
+
+
+Queue tabs:
+
+\- Queued
+
+\- Active
+
+\- Paused
+
+\- Failed
+
+\- Successful
+
+\- Conflicts
+
+\- Sync Runs
+
+\- Logs
+
+
+
+Status bar:
+
+\- Connection state
+
+\- Selected items
+
+\- Total size
+
+\- Transfer speed
+
+\- Queue size
+
+\- Current throttling state
+
+\- Sync service state
+
+
+
+Core UI functionality:
+
+
+
+\- Drag and drop between panes
+
+\- Drag and drop from Windows Explorer
+
+\- Copy
+
+\- Move
+
+\- Rename
+
+\- Delete
+
+\- Create folder
+
+\- Refresh
+
+\- Properties
+
+\- Checksum
+
+\- Compare
+
+\- Preview sync
+
+\- Manual sync
+
+\- Retry transfer
+
+\- Pause transfer
+
+\- Cancel transfer
+
+\- Conflict resolution
+
+\- Keyboard shortcuts
+
+\- Context menus
+
+\- Multi-select
+
+\- Sorting
+
+\- Filtering
+
+\- Hidden-file toggle
+
+\- Details/list/icon views where reasonable
+
+\- Tabbed dual-pane sessions
+
+\- Bookmarks and favorites
+
+\- Connection reconnect
+
+\- Transfer progress
+
+\- Accessible names and keyboard navigation
+
+
+
+The UI must remain responsive during:
+
+
+
+\- Large directory listings
+
+\- Slow networks
+
+\- Large transfers
+
+\- Hashing
+
+\- Recursive scans
+
+\- Sync comparisons
+
+
+
+Use asynchronous operations, cancellation tokens, UI-safe event dispatch,
+
+pagination, incremental loading, and virtualized file lists.
+
+
+
+Do not bind millions of file entries directly to a normal WinForms control.
+
+
+
+Evaluate suitable WinForms controls such as:
+
+
+
+\- SplitContainer
+
+\- ToolStrip
+
+\- MenuStrip
+
+\- TreeView
+
+\- VirtualMode ListView
+
+\- VirtualMode DataGridView
+
+\- TabControl
+
+\- StatusStrip
+
+
+
+Recommend third-party UI controls only when there is a strong technical
+
+reason and acceptable licensing.
+
+
+
+Include a textual wireframe for:
+
+
+
+1\. Main window
+
+2\. Connection Manager
+
+3\. Settings window
+
+4\. Sync Profile Editor
+
+5\. Sync Preview
+
+6\. Conflict Resolution window
+
+7\. Transfer Queue
+
+8\. Credential and Certificate Manager
+
+
+
+============================================================
+
+10\. TRANSFER ENGINE
+
+============================================================
+
+
+
+Design a provider-neutral transfer engine.
+
+
+
+It should support:
+
+
+
+\- Upload
+
+\- Download
+
+\- Copy
+
+\- Move
+
+\- Delete
+
+\- Rename
+
+\- Directory creation
+
+\- Recursive operations
+
+\- Remote-to-remote relay
+
+\- Provider-native server-side copy where possible
+
+\- Streaming without buffering entire files into memory
+
+\- Resumable transfers where supported
+
+\- Multipart S3 upload
+
+\- Transfer verification
+
+\- Retry with exponential backoff and jitter
+
+\- Pause
+
+\- Resume
+
+\- Cancel
+
+\- Per-job priority
+
+\- Per-provider concurrency
+
+\- Global concurrency
+
+\- Bandwidth limits
+
+\- Progress
+
+\- Speed
+
+\- ETA
+
+\- Temporary-name upload followed by atomic rename where supported
+
+\- Partial-file cleanup policy
+
+\- Disk-space checks
+
+\- Network-offline handling
+
+\- Application-restart recovery
+
+\- Background execution
+
+
+
+Do not assume that every provider supports resume, remote hash, atomic
+
+rename, or server-side copy.
+
+
+
+For remote-to-remote transfers:
+
+
+
+1\. Prefer a provider-native operation when both endpoints support it.
+
+2\. Otherwise relay through a bounded streaming pipeline.
+
+3\. Do not buffer the whole file.
+
+4\. Support cancellation and progress.
+
+5\. Document security and temporary-disk implications.
+
+
+
+Create a transfer-job state machine containing states such as:
+
+
+
+\- Pending
+
+\- Preparing
+
+\- Connecting
+
+\- Transferring
+
+\- Verifying
+
+\- Finalizing
+
+\- Paused
+
+\- Retrying
+
+\- Completed
+
+\- Failed
+
+\- Cancelled
+
+
+
+Improve these states where necessary.
+
+
+
+Design persistent recovery so interrupted transfers can be reloaded after
+
+an application or machine restart without falsely claiming they can resume
+
+when the provider lacks that capability.
+
+
+
+============================================================
+
+11\. SYNCHRONIZATION ENGINE
+
+============================================================
+
+
+
+The sync engine is a core feature, not a simple timer that invokes copy.
+
+
+
+It must use connection and credential references from the Connection
+
+Manager. Sync profiles must never duplicate credentials.
+
+
+
+Support endpoints such as:
+
+
+
+\- Local folder to local folder
+
+\- Local folder to S3 prefix
+
+\- Local folder to FTP directory
+
+\- Local folder to SFTP directory
+
+\- S3 prefix to local folder
+
+\- FTP to SFTP
+
+\- S3 to S3
+
+\- Any future provider pair whose capabilities permit it
+
+
+
+Required sync modes:
+
+
+
+\- One-way update left to right
+
+\- One-way update right to left
+
+\- One-way exact mirror left to right
+
+\- One-way exact mirror right to left
+
+\- Two-way synchronization
+
+\- Backup mode that does not propagate deletes
+
+\- Custom rule mode as a later feature
+
+
+
+Define exact semantics for every mode.
+
+
+
+Required scheduling:
+
+
+
+\- Manual
+
+\- At application startup
+
+\- At sync-service startup
+
+\- Fixed interval
+
+\- Specific time of day
+
+\- Multiple times per day
+
+\- Selected weekdays
+
+\- Cron-like expression if a verified CodeLogic utility supports it
+
+\- Run once
+
+\- Run missed schedule after reboot
+
+\- Continuous or near-real-time local change detection
+
+\- Remote polling
+
+\- Quiet hours
+
+\- Pause on battery
+
+\- Pause on metered network
+
+\- Maximum run duration
+
+\- Prevent overlapping runs
+
+\- Queue one missed run
+
+\- Skip missed runs
+
+
+
+Per-sync options:
+
+
+
+\- Include patterns
+
+\- Exclude patterns
+
+\- Minimum and maximum size
+
+\- Date filters
+
+\- Hidden files
+
+\- System files
+
+\- Symbolic-link policy
+
+\- Empty directories
+
+\- Timestamp tolerance
+
+\- Compare by size
+
+\- Compare by timestamp
+
+\- Compare by hash
+
+\- Always hash
+
+\- Hash only when metadata is ambiguous
+
+\- Deletion propagation
+
+\- Delete protection
+
+\- Quarantine deleted files
+
+\- Versioned backup folder
+
+\- Conflict policy
+
+\- Dry run
+
+\- Notifications
+
+\- Bandwidth limit
+
+\- Transfer concurrency
+
+\- Retry policy
+
+
+
+Conflict policies:
+
+
+
+\- Ask
+
+\- Prefer newest
+
+\- Prefer left
+
+\- Prefer right
+
+\- Keep both
+
+\- Rename conflicting copy
+
+\- Skip
+
+\- Custom future rule
+
+
+
+The engine must maintain state in SQLite so two-way synchronization can
+
+distinguish:
+
+
+
+\- Newly created item
+
+\- Modified item
+
+\- Deleted item
+
+\- Renamed item
+
+\- Conflict
+
+\- Previously synchronized item
+
+\- Item absent because the provider was temporarily unavailable
+
+
+
+Do not implement two-way sync as “newest timestamp always wins.”
+
+
+
+Handle:
+
+
+
+\- Clock skew
+
+\- Timestamp precision differences
+
+\- Time zones
+
+\- Daylight-saving changes
+
+\- Case-only renames
+
+\- Unicode normalization
+
+\- Partial uploads
+
+\- Provider consistency behavior
+
+\- S3 pseudo-directories
+
+\- S3 ETags that are not always content hashes
+
+\- Remote servers with unreliable timestamps
+
+\- Files changed during transfer
+
+\- Local FileSystemWatcher event loss
+
+\- Server disconnects
+
+\- Duplicate events
+
+\- Huge directory trees
+
+
+
+Use FileSystemWatcher only as an optimization. Schedule periodic full
+
+reconciliation scans.
+
+
+
+Design:
+
+
+
+\- Sync planning phase
+
+\- Preview phase
+
+\- Execution phase
+
+\- Verification phase
+
+\- Commit-state phase
+
+\- Recovery phase
+
+
+
+A sync run should first generate an immutable operation plan that can be
+
+previewed and audited before destructive operations begin.
+
+
+
+Include a formal sync state machine and conflict-detection algorithm.
+
+
+
+============================================================
+
+12\. BACKGROUND SYNC SERVICE
+
+============================================================
+
+
+
+Design a separate StorageHUB Sync Host.
+
+
+
+For Windows it should be capable of running as:
+
+
+
+\- A child/background process during development
+
+\- A tray-assisted user process
+
+\- An optional Windows Service for unattended jobs
+
+
+
+For Linux later it should be capable of running as a systemd service without
+
+depending on WinForms.
+
+
+
+Responsibilities:
+
+
+
+\- Load scheduled sync profiles
+
+\- Resolve connection profiles
+
+\- Retrieve credentials securely
+
+\- Run sync jobs
+
+\- Resume persistent work
+
+\- Maintain health status
+
+\- Write structured logs
+
+\- Publish progress
+
+\- Handle shutdown correctly
+
+\- Enforce single-job or configured concurrency rules
+
+\- Prevent two hosts from executing the same profile simultaneously
+
+
+
+The desktop UI should communicate with it through a secure local IPC
+
+mechanism.
+
+
+
+Evaluate:
+
+
+
+\- Named pipes
+
+\- Local gRPC
+
+\- Local HTTP over loopback with authentication
+
+\- Unix domain sockets for later Linux support
+
+
+
+Recommend one and explain:
+
+
+
+\- Authentication
+
+\- Authorization
+
+\- Versioning
+
+\- Reconnection
+
+\- Event streaming
+
+\- Service discovery
+
+\- Failure handling
+
+\- Upgrade compatibility
+
+
+
+The service and UI must not both write incompatible state to SQLite.
+
+Define ownership, locking, migrations, and single-writer rules.
+
+
+
+============================================================
+
+13\. SETTINGS WINDOW
+
+============================================================
+
+
+
+Design a full settings window inspired by the supplied FileZilla settings
+
+screenshot, with a navigation tree on the left and focused options on the
+
+right.
+
+
+
+Suggested categories:
+
+
+
+General
+
+\- Startup behavior
+
+\- Minimize to tray
+
+\- Check for updates
+
+\- Default folders
+
+\- Language
+
+\- Theme
+
+\- Confirmations
+
+
+
+Interface
+
+\- Layout
+
+\- File-list columns
+
+\- Font scaling
+
+\- Toolbar
+
+\- Date/time format
+
+\- File-size format
+
+\- Hidden files
+
+\- Double-click behavior
+
+\- Tabs
+
+\- Accessibility
+
+
+
+Connections
+
+\- Default timeout
+
+\- Keep-alive
+
+\- Retry count
+
+\- Retry delay
+
+\- Proxy
+
+\- DNS behavior
+
+\- Offline detection
+
+
+
+FTP/FTPS
+
+\- Passive/active default
+
+\- TLS minimum
+
+\- Client certificates
+
+\- Certificate validation
+
+\- Encoding
+
+\- Server-time offset
+
+
+
+SFTP
+
+\- SSH algorithms
+
+\- Private keys
+
+\- Known hosts
+
+\- Host-key policy
+
+\- Keep-alive
+
+\- Authentication order
+
+
+
+S3
+
+\- Default region
+
+\- Multipart threshold
+
+\- Multipart part size
+
+\- Path-style addressing
+
+\- Request timeout
+
+\- Checksum policy
+
+
+
+Transfers
+
+\- Global concurrency
+
+\- Per-host concurrency
+
+\- Upload limit
+
+\- Download limit
+
+\- Buffer size
+
+\- Temporary extensions
+
+\- Resume behavior
+
+\- Overwrite rules
+
+\- Verification
+
+\- Retry
+
+
+
+Sync
+
+\- Default compare mode
+
+\- Default conflict policy
+
+\- Delete protection
+
+\- Quarantine path
+
+\- Full-reconciliation interval
+
+\- Preview destructive changes
+
+\- Maximum deletions per run
+
+\- Continuous-sync debounce
+
+
+
+Scheduling
+
+\- Service enabled
+
+\- Start with Windows
+
+\- Run missed jobs
+
+\- Quiet hours
+
+\- Battery behavior
+
+\- Metered-network behavior
+
+\- Maximum concurrent sync profiles
+
+
+
+Security
+
+\- Credential vault
+
+\- Auto-lock
+
+\- Trust records
+
+\- Certificate pins
+
+\- Clear remembered credentials
+
+\- Audit log
+
+\- Clipboard timeout
+
+
+
+Notifications
+
+\- Completed sync
+
+\- Failed sync
+
+\- Conflict
+
+\- Certificate warning
+
+\- Host-key warning
+
+\- Low disk space
+
+
+
+Logging
+
+\- Level
+
+\- Retention
+
+\- Maximum size
+
+\- Protocol logging
+
+\- Redaction
+
+\- Export diagnostic bundle
+
+
+
+Cache
+
+\- Directory listing cache
+
+\- Thumbnail cache
+
+\- Metadata cache
+
+\- Clear cache
+
+
+
+Providers
+
+\- Enable/disable providers
+
+\- Plugin directories
+
+\- Provider health
+
+\- Provider-specific settings
+
+
+
+Advanced
+
+\- CodeLogic diagnostics
+
+\- Config path
+
+\- Database path
+
+\- Experimental features
+
+\- Reset settings
+
+
+
+Also design a dedicated Sync Profile Editor containing:
+
+
+
+\- Name
+
+\- Enabled state
+
+\- Left endpoint
+
+\- Right endpoint
+
+\- Paths
+
+\- Direction/mode
+
+\- Schedule
+
+\- Filters
+
+\- Comparison
+
+\- Conflicts
+
+\- Deletes
+
+\- Performance
+
+\- Notifications
+
+\- Advanced
+
+\- Test
+
+\- Preview
+
+\- Save
+
+
+
+============================================================
+
+14\. DATA AND PERSISTENCE
+
+============================================================
+
+
+
+Use CodeLogic.SQLite if its verified API fits.
+
+
+
+Propose schemas or domain records for:
+
+
+
+\- ConnectionProfile
+
+\- ConnectionFolder
+
+\- CredentialReference
+
+\- TrustRecord
+
+\- ProviderDefinition
+
+\- FavoriteLocation
+
+\- RecentLocation
+
+\- TransferJob
+
+\- TransferAttempt
+
+\- TransferCheckpoint
+
+\- SyncProfile
+
+\- SyncSchedule
+
+\- SyncRun
+
+\- SyncOperation
+
+\- SyncItemState
+
+\- ConflictRecord
+
+\- NotificationRecord
+
+\- AuditEvent
+
+\- ApplicationSetting
+
+\- PluginState
+
+\- SchemaMigration
+
+
+
+Store secrets outside this database.
+
+
+
+Include:
+
+
+
+\- Primary keys
+
+\- Foreign keys
+
+\- Indexes
+
+\- Retention policies
+
+\- Cleanup jobs
+
+\- Migration strategy
+
+\- WAL strategy if appropriate
+
+\- Backup strategy
+
+\- Corruption recovery
+
+\- Concurrent-access policy
+
+\- Database versioning
+
+
+
+Explain which records are authoritative and which are cacheable.
+
+
+
+============================================================
+
+15\. LOGGING, HEALTH, AND DIAGNOSTICS
+
+============================================================
+
+
+
+Use CodeLogic logging and health checks where suitable.
+
+
+
+Logging requirements:
+
+
+
+\- Structured events
+
+\- Correlation ID
+
+\- Transfer ID
+
+\- Sync run ID
+
+\- Connection profile ID
+
+\- Provider ID
+
+\- Retry attempt
+
+\- Duration
+
+\- Redaction
+
+\- Log rotation
+
+\- Retention
+
+\- Exportable diagnostic bundle
+
+
+
+Never log:
+
+
+
+\- Passwords
+
+\- Secret keys
+
+\- Session tokens
+
+\- Private keys
+
+\- PFX passwords
+
+\- Authorization headers
+
+\- Full credential-bearing URLs
+
+
+
+Health checks should cover:
+
+
+
+\- SQLite
+
+\- Credential vault
+
+\- Sync scheduler
+
+\- Sync host
+
+\- Provider loading
+
+\- S3 connection
+
+\- FTP/FTPS connection
+
+\- SFTP connection
+
+\- Disk space
+
+\- Plugin load status
+
+\- IPC channel
+
+
+
+Plan a Diagnostics page showing:
+
+
+
+\- CodeLogic lifecycle state
+
+\- Loaded libraries
+
+\- Loaded plugins
+
+\- Provider versions
+
+\- Package versions
+
+\- Database version
+
+\- Credential-provider status
+
+\- Sync-service status
+
+\- Recent errors
+
+\- Optional CPU and memory information
+
+
+
+============================================================
+
+16\. PERFORMANCE AND RELIABILITY
+
+============================================================
+
+
+
+Plan for:
+
+
+
+\- Direct stream-to-stream transfer
+
+\- Bounded buffers
+
+\- Backpressure
+
+\- Cancellation
+
+\- Configurable concurrency
+
+\- Large files
+
+\- Millions of S3 objects
+
+\- Huge local directories
+
+\- Paginated listings
+
+\- Incremental results
+
+\- UI virtualization
+
+\- Cache invalidation
+
+\- Retry policies
+
+\- Network transitions
+
+\- Low-disk handling
+
+\- Temp-file cleanup
+
+\- Graceful shutdown
+
+\- Crash recovery
+
+\- Application upgrades during queued work
+
+\- Database migration failure
+
+\- Provider plugin failure
+
+\- Memory-pressure handling
+
+
+
+Set sensible defaults rather than exposing every low-level knob.
+
+
+
+Explain how the app avoids:
+
+
+
+\- Loading an entire file into memory
+
+\- Loading an entire enormous directory before showing anything
+
+\- Freezing the WinForms UI thread
+
+\- Unlimited transfer concurrency
+
+\- Infinite retries
+
+\- Destructive sync storms
+
+\- Duplicate scheduled runs
+
+\- Stale connection objects
+
+\- Resource and socket leaks
+
+
+
+============================================================
+
+17\. DESTRUCTIVE-OPERATION SAFETY
+
+============================================================
+
+
+
+StorageHUB must prioritize data safety.
+
+
+
+Required protections:
+
+
+
+\- Dry-run sync preview
+
+\- Confirmation before mass deletion
+
+\- Configurable maximum deletion count
+
+\- Configurable maximum deletion percentage
+
+\- Abort when a root unexpectedly appears empty
+
+\- Abort when an endpoint is unavailable
+
+\- Do not interpret a failed listing as an empty folder
+
+\- Optional quarantine instead of permanent deletion
+
+\- Operation audit trail
+
+\- Undo where technically feasible
+
+\- Transfer verification
+
+\- Clear conflict display
+
+\- Never silently ignore unsupported operations
+
+\- Never silently downgrade secure protocols
+
+\- Never automatically trust a changed SSH host key
+
+\- Never automatically accept an invalid TLS certificate
+
+
+
+Describe safe behavior for:
+
+
+
+\- Empty remote listing after timeout
+
+\- Changed bucket
+
+\- Changed connection root
+
+\- Missing local drive
+
+\- Disconnected network share
+
+\- Expired credentials
+
+\- Permission loss
+
+\- Certificate failure
+
+\- Server clock change
+
+\- Provider plugin crash
+
+
+
+============================================================
+
+18\. TESTING STRATEGY
+
+============================================================
+
+
+
+Produce a complete testing strategy.
+
+
+
+Unit tests:
+
+
+
+\- Path normalization
+
+\- Capability decisions
+
+\- Sync comparisons
+
+\- Conflict detection
+
+\- Delete protections
+
+\- Scheduling
+
+\- Retry policies
+
+\- Credential-reference handling
+
+\- Secret redaction
+
+\- Transfer state machines
+
+\- Sync state machines
+
+
+
+Integration tests:
+
+
+
+\- Local filesystem sandbox
+
+\- MinIO for S3-compatible testing
+
+\- FTP server container
+
+\- Explicit FTPS server
+
+\- Implicit FTPS server if practical
+
+\- FTPS client certificate/PFX tests
+
+\- OpenSSH/SFTP server container
+
+\- SFTP password authentication
+
+\- SFTP key authentication
+
+\- SFTP encrypted key
+
+\- SSH host-key mismatch
+
+\- TLS certificate mismatch
+
+\- Network interruption
+
+\- Slow server
+
+\- Permission errors
+
+\- Huge listings
+
+\- Partial transfer recovery
+
+
+
+Sync tests:
+
+
+
+\- One-way update
+
+\- Exact mirror
+
+\- Backup mode
+
+\- Two-way create
+
+\- Two-way update
+
+\- Two-way delete
+
+\- Concurrent edit conflict
+
+\- Rename
+
+\- Case-only rename
+
+\- Clock skew
+
+\- Timestamp precision
+
+\- Unicode names
+
+\- Zero-byte files
+
+\- Very large files
+
+\- Endpoint unavailable
+
+\- Listing failure
+
+\- Mass-deletion safety
+
+\- Restart during sync
+
+
+
+Security tests:
+
+
+
+\- No plaintext credentials in configuration
+
+\- No plaintext credentials in SQLite
+
+\- No credentials in logs
+
+\- No credentials in exported diagnostics
+
+\- Certificate pinning
+
+\- Host-key pinning
+
+\- Vault lock behavior
+
+\- Tampered encrypted vault
+
+\- Orphaned credential cleanup
+
+
+
+UI tests:
+
+
+
+\- Dual-pane navigation
+
+\- Keyboard navigation
+
+\- Drag and drop
+
+\- Connection editor validation
+
+\- Sync profile validation
+
+\- Queue actions
+
+\- High DPI
+
+\- Dark and light mode
+
+\- Accessibility labels
+
+\- Slow-operation responsiveness
+
+
+
+CI plan:
+
+
+
+\- Build/test platform-neutral projects on Windows and Linux
+
+\- Build/test WinForms project on Windows
+
+\- Run integration containers where supported
+
+\- Package verification
+
+\- Dependency vulnerability scanning
+
+\- License checks
+
+\- Static analysis
+
+\- Formatting
+
+\- Reproducible release build
+
+
+
+============================================================
+
+19\. PLANNING OUTPUT FORMAT
+
+============================================================
+
+
+
+Return the plan in this exact order:
+
+
+
+1\. Executive summary
+
+2\. Verified research findings
+
+3\. Package and dependency decision table
+
+4\. Important terminology corrections
+
+5\. Assumptions
+
+6\. Blocking questions, maximum five
+
+7\. Two or three architecture options
+
+8\. Recommended architecture and rationale
+
+9\. CodeLogic integration design
+
+10\. Solution/project tree
+
+11\. Project dependency diagram
+
+12\. Domain model
+
+13\. Storage provider abstractions
+
+14\. Provider capability matrix
+
+15\. Connection Manager design
+
+16\. Credential and trust architecture
+
+17\. Transfer engine design
+
+18\. Sync engine design
+
+19\. Sync state machine
+
+20\. Conflict-detection strategy
+
+21\. Background Sync Host design
+
+22\. IPC design
+
+23\. SQLite schema
+
+24\. Main WinForms UI layout
+
+25\. Connection Manager wireframe
+
+26\. Settings wireframe
+
+27\. Sync Profile Editor wireframe
+
+28\. Error-handling strategy
+
+29\. Logging and diagnostics
+
+30\. Performance strategy
+
+31\. Security threat model
+
+32\. Testing strategy
+
+33\. Build and release strategy
+
+34\. Phased roadmap
+
+35\. Risk register
+
+36\. Acceptance criteria
+
+37\. First 20 implementation tasks in dependency order
+
+38\. Explicit list of deferred features
+
+
+
+For the roadmap, use phases similar to:
+
+
+
+Phase 0: Research and architectural proof
+
+Phase 1: CodeLogic lifecycle and application foundation
+
+Phase 2: Local provider and dual-pane UI
+
+Phase 3: Connection Manager and credential vault
+
+Phase 4: Transfer engine
+
+Phase 5: FTP and FTPS
+
+Phase 6: SFTP
+
+Phase 7: S3
+
+Phase 8: Sync planning and preview
+
+Phase 9: Scheduled/background sync
+
+Phase 10: Security and reliability hardening
+
+Phase 11: UX polish and release
+
+Phase 12: Plugin SDK and future Linux frontend
+
+
+
+For each phase include:
+
+
+
+\- Objective
+
+\- Dependencies
+
+\- Deliverables
+
+\- Tests
+
+\- Risks
+
+\- Exit criteria
+
+\- Relative size: S, M, L, or XL
+
+\- Uncertainty level
+
+
+
+Do not estimate exact hours unless explicitly asked.
+
+
+
+============================================================
+
+20\. ACCEPTANCE CRITERIA
+
+============================================================
+
+
+
+At minimum, the finished design must make these scenarios possible:
+
+
+
+1\. A user creates an SFTP connection with an encrypted SSH private key.
+
+2\. The private-key passphrase is saved securely outside JSON and SQLite.
+
+3\. The user browses local files on the left and SFTP on the right.
+
+4\. The user drags a 20 GB file to the remote pane.
+
+5\. The UI remains responsive and shows progress.
+
+6\. The transfer can be cancelled and retried.
+
+7\. The SSH host fingerprint is validated.
+
+8\. A user creates an explicit FTPS connection with a PFX client certificate.
+
+9\. The PFX password comes from the central credential vault.
+
+10\. Invalid TLS certificates are not silently accepted.
+
+11\. A user connects to MinIO through CodeLogic.StorageS3.
+
+12\. The same Connection Manager profile is used for browsing and sync.
+
+13\. A user creates a nightly local-to-S3 sync profile.
+
+14\. The sync service executes it without the desktop UI running.
+
+15\. A preview shows uploads, updates, conflicts, and deletions.
+
+16\. Mass-deletion protection prevents an unsafe mirror operation.
+
+17\. The machine reboots during a transfer or sync.
+
+18\. The service recovers persistent state safely.
+
+19\. A user performs an S3-to-SFTP transfer through a bounded stream.
+
+20\. The app does not load the whole object into memory.
+
+21\. A connection password never appears in logs or diagnostic exports.
+
+22\. Core provider and sync projects build without WinForms dependencies.
+
+23\. A future Linux UI can reuse the provider, transfer, and sync layers.
+
+24\. Every unsupported provider operation produces an explicit result.
+
+25\. All shutdown paths stop CodeLogic libraries and background workers
+
+&#x20;   gracefully.
+
+
+
+============================================================
+
+21\. QUALITY RULES
+
+============================================================
+
+
+
+\- Use modern async C#.
+
+\- Pass CancellationToken through all I/O operations.
+
+\- Prefer immutable operation plans and strongly typed result objects.
+
+\- Expected failures should return structured results where appropriate.
+
+\- Unexpected failures should preserve diagnostic context without secrets.
+
+\- Avoid global mutable state except where the verified CodeLogic design
+
+&#x20; intentionally provides a lifecycle facade.
+
+\- Keep files and classes focused.
+
+\- Keep protocol-specific logic inside providers.
+
+\- Keep WinForms logic out of the core.
+
+\- Do not overengineer a distributed microservice system.
+
+\- Do not implement two-way sync with timestamps alone.
+
+\- Do not store credentials in CodeLogic config.
+
+\- Do not conflate FTP, FTPS, and SFTP.
+
+\- Do not fake cross-platform WinForms support.
+
+\- Do not default to insecure trust settings.
+
+\- Do not generate code until the design is approved.
+
+\- Clearly flag any requirement that the researched libraries cannot meet.
+
+\- Prefer a smaller reliable first release over a huge unreliable release.
+
+
+
+Begin by researching the named repositories and NuGet packages. Then return
+
+the complete planning document in the required format.

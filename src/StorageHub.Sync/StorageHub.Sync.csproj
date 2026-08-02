@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>StorageHub.Sync</RootNamespace>
+    <AssemblyName>StorageHub.Sync</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StorageHub.Domain\StorageHub.Domain.csproj" />
+    <ProjectReference Include="..\StorageHub.Storage\StorageHub.Storage.csproj" />
+    <ProjectReference Include="..\StorageHub.Transfers\StorageHub.Transfers.csproj" />
+  </ItemGroup>
+</Project>

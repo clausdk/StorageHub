@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>StorageHub.Agent.Windows</RootNamespace>
+    <AssemblyName>StorageHub.Agent.Windows</AssemblyName>
+    <RequiresCLStorageSource>true</RequiresCLStorageSource>
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StorageHub.Agent\StorageHub.Agent.csproj" />
+    <ProjectReference Include="..\StorageHub.Application\StorageHub.Application.csproj" />
+    <ProjectReference Include="..\StorageHub.Infrastructure.Windows\StorageHub.Infrastructure.Windows.csproj" />
+    <ProjectReference Include="..\StorageHub.Persistence\StorageHub.Persistence.csproj" />
+    <ProjectReference Include="..\StorageHub.Security\StorageHub.Security.csproj" />
+    <ProjectReference Include="..\StorageHub.Storage\StorageHub.Storage.csproj" />
+    <ProjectReference Include="..\StorageHub.Storage.CodeLogic\StorageHub.Storage.CodeLogic.csproj" />
+    <ProjectReference Include="..\StorageHub.Sync\StorageHub.Sync.csproj" />
+    <ProjectReference Include="$(CLStorageProjectPath)"
+                      SetConfiguration="Configuration=$(Configuration)" />
+    <PackageReference Include="CodeLogic" />
+  </ItemGroup>
+</Project>

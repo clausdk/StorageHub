@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-audit:
+    name: Release build, test, and audit
+    runs-on: windows-2022
+    timeout-minutes: 35
+
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      NUGET_XMLDOC_MODE: skip
+
+    steps:
+      - name: Check out StorageHub
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # StorageHub references the all-in-one library as source until its package
+      # release is the canonical dependency. Pin the exact reviewed revision.
+      - name: Check out CodeLogic.Libs
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Media2A/CodeLogic.Libs
+          ref: 25d357b7e3896e2ff3d6c29875178a6b0f12ed60
+          path: CodeLogic.Libs
+          persist-credentials: false
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Restore locked dependencies and audit advisories
+        shell: pwsh
+        run: |
+          $clRoot = Join-Path $env:GITHUB_WORKSPACE 'CodeLogic.Libs'
+          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
+          dotnet restore StorageHub.slnx --locked-mode `
+            -p:NuGetAudit=true `
+            -p:NuGetAuditMode=all `
+            '-p:WarningsAsErrors=NU1901;NU1902;NU1903;NU1904' `
+            -p:CLStorageProjectPath="$clProject" `
+            -p:CodeLogicLibsRoot="$clRoot"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          $clRoot = Join-Path $env:GITHUB_WORKSPACE 'CodeLogic.Libs'
+          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
+          dotnet build StorageHub.slnx --configuration Release --no-restore `
+            -p:CLStorageProjectPath="$clProject" `
+            -p:CodeLogicLibsRoot="$clRoot"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $clRelease = Join-Path $clRoot 'CL.Storage\bin\Release\net10.0\CL.Storage.dll'
+          $clDebug = Join-Path $clRoot 'CL.Storage\bin\Debug\net10.0\CL.Storage.dll'
+          if (-not (Test-Path -LiteralPath $clRelease)) {
+            throw 'The Release build did not produce a Release CL.Storage assembly.'
+          }
+          if (Test-Path -LiteralPath $clDebug) {
+            throw 'The Release build unexpectedly produced or consumed a Debug CL.Storage build.'
+          }
+
+      - name: Test Release
+        shell: pwsh
+        run: |
+          $clRoot = Join-Path $env:GITHUB_WORKSPACE 'CodeLogic.Libs'
+          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
+          dotnet test StorageHub.slnx --configuration Release --no-build --no-restore `
+            --logger trx `
+            -p:CLStorageProjectPath="$clProject" `
+            -p:CodeLogicLibsRoot="$clRoot"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Report vulnerable packages
+        shell: pwsh
+        run: |
+          $clRoot = Join-Path $env:GITHUB_WORKSPACE 'CodeLogic.Libs'
+          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
+          $env:CLStorageProjectPath = $clProject
+          $env:CodeLogicLibsRoot = $clRoot
+          dotnet list StorageHub.slnx package --vulnerable --include-transitive --no-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-results-${{ github.run_attempt }}
+          path: '**/TestResults/*.trx'
+          if-no-files-found: warn
+          retention-days: 14

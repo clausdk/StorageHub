@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>StorageHub.Storage.CodeLogic.Tests</AssemblyName>
+    <RootNamespace>StorageHub.Storage.CodeLogic.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StorageHub.Storage.CodeLogic\StorageHub.Storage.CodeLogic.csproj" />
+  </ItemGroup>
+</Project>
