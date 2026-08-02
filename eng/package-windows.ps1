@@ -483,7 +483,7 @@ if (Test-Path -LiteralPath $outputRootPath -PathType Leaf) {
     throw "OutputRoot '$outputRootPath' is a file."
 }
 
-$dotnetCommand = Get-Command dotnet -CommandType Application -ErrorAction Stop
+$dotnetCommand = @(Get-Command dotnet -CommandType Application -ErrorAction Stop)[0]
 $desktopProject = Join-Path $repoRoot 'src\StorageHub.Desktop.WinForms\StorageHub.Desktop.WinForms.csproj'
 $agentProject = Join-Path $repoRoot 'src\StorageHub.Agent.Windows\StorageHub.Agent.Windows.csproj'
 $licensePath = Join-Path $repoRoot 'LICENSE'
@@ -549,7 +549,7 @@ if ($LASTEXITCODE -ne 0) {
 $dotnetSdkVersion = ([string] ($dotnetVersionOutput | Select-Object -First 1)).Trim()
 
 $storageHubCommit = $null
-$gitCommand = Get-Command git -CommandType Application -ErrorAction SilentlyContinue
+$gitCommand = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)[0]
 if ($null -ne $gitCommand) {
     $commitOutput = & $gitCommand.Source `
         -c "safe.directory=$repoRoot" `
