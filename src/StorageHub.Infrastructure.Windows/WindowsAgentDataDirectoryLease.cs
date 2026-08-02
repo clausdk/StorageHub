@@ -29,6 +29,63 @@ public sealed class WindowsAgentDataDirectoryLease : IDisposable, IAsyncDisposab
     public string FrameworkDirectory { get; }
 
     /// <summary>
+    /// Rejects layouts where an installer/update could replace durable state, or where
+    /// durable-state protection could take ownership of packaged application files.
+    /// </summary>
+    public static void EnsureDataRootIsSeparateFromApplication(
+        string rootDirectory,
+        string applicationDirectory)
+    {
+        var fullRootPath = ValidateLocalPath(rootDirectory, "agent data directory");
+        var fullApplicationPath = ValidateLocalPath(applicationDirectory, "application directory");
+        if (IsSamePathOrAncestor(fullRootPath, fullApplicationPath) ||
+            IsSamePathOrAncestor(fullApplicationPath, fullRootPath))
+        {
+            throw new WindowsAgentDataDirectoryException(
+                WindowsAgentDataDirectoryFailure.InvalidPath,
+                "The StorageHub data directory must not overlap the installed application directory.");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the complete Velopack-owned tree for an Agent located at
+    /// <c>&lt;package&gt;\current\Agent</c>. Non-packaged hosts retain their exact
+    /// application directory so source and test execution are not broadened.
+    /// </summary>
+    public static string ResolveApplicationOwnedTreeRoot(string applicationDirectory)
+    {
+        var fullApplicationPath = ValidateLocalPath(applicationDirectory, "application directory");
+        var agentDirectory = new DirectoryInfo(fullApplicationPath);
+        var currentDirectory = agentDirectory.Parent;
+        var packageDirectory = currentDirectory?.Parent;
+        return string.Equals(agentDirectory.Name, "Agent", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(currentDirectory?.Name, "current", StringComparison.OrdinalIgnoreCase) &&
+            packageDirectory is not null
+                ? packageDirectory.FullName
+                : fullApplicationPath;
+    }
+
+    /// <summary>
+    /// Rejects a custom package location that contains the fixed per-user
+    /// instance lease, which must remain outside installer-owned directories.
+    /// </summary>
+    public static void EnsureApplicationTreeIsSeparateFromInstanceLock(
+        string applicationDirectory)
+    {
+        var fullApplicationPath = ValidateLocalPath(applicationDirectory, "application directory");
+        var fullLockPath = ValidateLocalPath(
+            GetDefaultInstanceLockDirectory(),
+            "agent instance lock directory");
+        if (IsSamePathOrAncestor(fullApplicationPath, fullLockPath) ||
+            IsSamePathOrAncestor(fullLockPath, fullApplicationPath))
+        {
+            throw new WindowsAgentDataDirectoryException(
+                WindowsAgentDataDirectoryFailure.InvalidPath,
+                "The installed application directory must not overlap the per-user Agent instance lock.");
+        }
+    }
+
+    /// <summary>
     /// Acquires the one-agent-per-Windows-user lock and protects the selected data root. The
     /// optional lock directory exists for isolated tests; production callers must use the fixed
     /// per-user location so different data-root overrides cannot start competing pipe servers.
@@ -225,6 +282,20 @@ public sealed class WindowsAgentDataDirectoryLease : IDisposable, IAsyncDisposab
         }
 
         return fullPath;
+    }
+
+    private static bool IsSamePathOrAncestor(string candidateAncestor, string candidateDescendant)
+    {
+        var ancestor = Path.TrimEndingDirectorySeparator(candidateAncestor);
+        var descendant = Path.TrimEndingDirectorySeparator(candidateDescendant);
+        if (string.Equals(ancestor, descendant, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return descendant.StartsWith(
+            ancestor + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static SecurityIdentifier GetCurrentUser() =>

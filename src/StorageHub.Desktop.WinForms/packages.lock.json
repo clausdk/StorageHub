@@ -8,16 +8,22 @@
         "resolved": "105.26.7.201",
         "contentHash": "Wxr2n7YYR21vtQIsy4csAQhn0v6AcHdD7SX2qOl/Bb/QGpkyUz1a8IxqOWp4VCyaBPUNPNeTNOWfECI7/UrkJw=="
       },
+      "Velopack": {
+        "type": "Direct",
+        "requested": "[1.2.0, )",
+        "resolved": "1.2.0",
+        "contentHash": "Rz67gJL619fSBS6omaSINUxyDuwhIxkm5mmubf7uLd5Qgi6LLKaKCha+QFP6n+Bw/UjA0vutnH4JQfYzn6ANtw=="
+      },
       "storagehub.agent": {
         "type": "Project",
         "dependencies": {
           "Cronos": "[0.13.0, )",
-          "StorageHub.Application": "[1.0.0, )",
-          "StorageHub.Contracts": "[1.0.0, )",
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Storage": "[1.0.0, )",
-          "StorageHub.Sync": "[1.0.0, )",
-          "StorageHub.Transfers": "[1.0.0, )"
+          "StorageHub.Application": "[0.1.0, )",
+          "StorageHub.Contracts": "[0.1.0, )",
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Storage": "[0.1.0, )",
+          "StorageHub.Sync": "[0.1.0, )",
+          "StorageHub.Transfers": "[0.1.0, )"
         }
       },
       "storagehub.application": {
@@ -25,8 +31,8 @@
         "dependencies": {
           "CodeLogic": "[4.1.0, )",
           "Cronos": "[0.13.0, )",
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Security": "[1.0.0, )"
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Security": "[0.1.0, )"
         }
       },
       "storagehub.contracts": {
@@ -35,7 +41,7 @@
       "storagehub.domain": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Contracts": "[1.0.0, )"
+          "StorageHub.Contracts": "[0.1.0, )"
         }
       },
       "storagehub.security": {
@@ -44,23 +50,23 @@
       "storagehub.storage": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Contracts": "[1.0.0, )",
-          "StorageHub.Domain": "[1.0.0, )"
+          "StorageHub.Contracts": "[0.1.0, )",
+          "StorageHub.Domain": "[0.1.0, )"
         }
       },
       "storagehub.sync": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Storage": "[1.0.0, )",
-          "StorageHub.Transfers": "[1.0.0, )"
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Storage": "[0.1.0, )",
+          "StorageHub.Transfers": "[0.1.0, )"
         }
       },
       "storagehub.transfers": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Storage": "[1.0.0, )"
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Storage": "[0.1.0, )"
         }
       },
       "CodeLogic": {
@@ -75,6 +81,7 @@
         "resolved": "0.13.0",
         "contentHash": "Nkve+Yi0+ol3ntSBRHeW0ka9cJQ8vndSUvvkXqF9LVqwpoqWueyxu/HS275r98RDOmF7/mzRnZW5XXUBXob+TA=="
       }
-    }
+    },
+    "net10.0-windows10.0.19041/win-x64": {}
   }
 }

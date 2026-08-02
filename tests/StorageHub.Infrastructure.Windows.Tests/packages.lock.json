@@ -102,7 +102,7 @@
       "storagehub.infrastructure.windows": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Security": "[1.0.0, )"
+          "StorageHub.Security": "[0.1.0, )"
         }
       },
       "storagehub.security": {

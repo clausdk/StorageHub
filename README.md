@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/branding/storagehub-icon.png" width="144" alt="StorageHub icon">
+</p>
+
 # StorageHub
 
 StorageHub is an open-source, security-first file manager, transfer client, and
@@ -9,8 +13,30 @@ CodeLogic application lifecycle, and adapts the all-in-one `CL.Storage`
 > StorageHub is currently an engineering preview, not a finished file-manager
 > release. Core browsing, saved-pane file transfers, queue execution, sync, and
 > preview scheduling are wired, but provider interoperability, trust enrollment,
-> directory jobs, packaging, and production stress/security gates remain. Do not
+> directory jobs, code signing, and production stress/security gates remain. Do not
 > use this revision as the only copy of important data.
+
+## Install
+
+Download the newest engineering preview from
+[GitHub Releases](https://github.com/clausdk/StorageHub/releases). The Windows
+release bundle contains:
+
+- `StorageHub-<version>-win-x64-Setup.exe` — recommended one-click, per-user installer;
+- `StorageHub-<version>-win-x64.msi` — per-user MSI for managed deployment; and
+- `StorageHub-<version>-win-x64-portable.zip` — self-contained portable payload.
+
+The installer does not require elevation, starts the background agent only as
+the signed-in Windows user, and preserves application data under
+`%LOCALAPPDATA%\StorageHub` when the program is updated or uninstalled. Scheduled
+work therefore runs only while that user is signed in. Preview binaries are not
+yet Authenticode-signed, so Windows SmartScreen may show an unrecognized-app
+warning. Verify the files against the included `SHA256SUMS` before running them.
+
+Every successful push to `main` creates a uniquely versioned prerelease after
+the Release build, full test suite, dependency audit, packaging, silent install,
+agent health, and silent uninstall checks pass. A failed check produces no
+release.
 
 ## What is implemented
 
@@ -67,6 +93,10 @@ CodeLogic application lifecycle, and adapts the all-in-one `CL.Storage`
   current-user-only pipe and returns only opaque vault references. Startup
   enforces one agent per Windows user and verifies current-user-only ACLs
   throughout its reparse-free data tree.
+- A self-contained, per-user Windows distribution with coordinated desktop and
+  background-agent startup, graceful update/uninstall shutdown, portable and
+  installer artifacts, checksums, provenance attestation, and disposable-runner
+  install/uninstall smoke tests.
 - A modern high-DPI WinForms/Krypton shell with top menus, dual browser panes,
   functional asynchronous local and remote browsing with history, filtering and
   bounded paging, saved-pane file transfer actions, durable queue/sync/schedule
@@ -176,6 +206,7 @@ the CodeLogic health path.
 - [Security model](docs/security-model.md)
 - [Development status](docs/development-status.md)
 - [Implementation roadmap](docs/roadmap.md)
+- [Release engineering](docs/releasing.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 

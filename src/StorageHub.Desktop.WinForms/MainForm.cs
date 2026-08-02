@@ -360,7 +360,7 @@ public sealed class MainForm : KryptonForm
                 case "About StorageHub":
                     _ = MessageBox.Show(
                         this,
-                        "StorageHub 0.1.0\nOpen-source secure storage manager\nPowered by CodeLogic and CL.Storage",
+                        $"StorageHub {DesktopApplicationVersion.Current}\nOpen-source secure storage manager\nPowered by CodeLogic and CL.Storage",
                         "About StorageHub",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);

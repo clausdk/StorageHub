@@ -25,6 +25,7 @@ public sealed class AgentIpcRequestHandler
         long responseSequence = 0;
         while (!cancellationToken.IsCancellationRequested && session.IsConnected)
         {
+            AgentIpcCommandResponse? commandResponse = null;
             IpcEnvelope request;
             try
             {
@@ -82,7 +83,7 @@ public sealed class AgentIpcRequestHandler
                     }
                     else
                     {
-                        var commandResponse = await _commandHandler
+                        commandResponse = await _commandHandler
                             .HandleAsync(request, cancellationToken)
                             .ConfigureAwait(false);
                         response = commandResponse.ToEnvelope(
@@ -118,6 +119,7 @@ public sealed class AgentIpcRequestHandler
             }
 
             await session.SendAsync(response, cancellationToken).ConfigureAwait(false);
+            commandResponse?.NotifyResponseSent();
         }
     }
 

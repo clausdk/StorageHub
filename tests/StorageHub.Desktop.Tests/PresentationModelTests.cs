@@ -1,3 +1,5 @@
+using StorageHub.Agent.Ipc;
+
 namespace StorageHub.Desktop.Tests;
 
 public sealed class PresentationModelTests
@@ -123,7 +125,12 @@ public sealed class PresentationModelTests
     [Fact]
     public void AgentMonitorUsesBoundedNonBlockingDefaults()
     {
-        Assert.Equal("StorageHub.Agent.v1", AgentStatusMonitor.DefaultPipeName);
+        Assert.Equal(StorageHubIpcPipeNames.Normal, AgentStatusMonitor.DefaultPipeName);
+        Assert.Equal(StorageHubIpcPipeNames.Normal, new RemoteStorageAgentClientOptions().PipeName);
+        Assert.Equal(StorageHubIpcPipeNames.Normal, new ObjectInspectorAgentClientOptions().PipeName);
+        Assert.Equal(StorageHubIpcPipeNames.Normal, new SyncManagementAgentClientOptions().PipeName);
+        Assert.Equal(StorageHubIpcPipeNames.Normal, new ScheduleManagementAgentClientOptions().PipeName);
+        Assert.Equal(StorageHubIpcPipeNames.Secret, new RemoteSecretVaultClientOptions().PipeName);
         Assert.Throws<ArgumentOutOfRangeException>(() => new AgentStatusMonitor(connectTimeout: TimeSpan.FromSeconds(6)));
         Assert.Throws<ArgumentOutOfRangeException>(() => new AgentStatusMonitor(pollInterval: TimeSpan.FromMilliseconds(500)));
     }

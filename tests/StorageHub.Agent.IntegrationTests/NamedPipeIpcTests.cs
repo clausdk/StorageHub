@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO.Pipes;
+using System.Security.Cryptography;
+using System.Security.Principal;
 using StorageHub.Agent.Ipc;
 using StorageHub.Contracts.Ipc;
 
@@ -44,6 +46,74 @@ public sealed class NamedPipeIpcTests
 
         Assert.NotEqual(normal.Name, secret.Name);
         _ = new AgentRuntimeCoordinator([normal, secret]);
+    }
+
+    [Fact]
+    public void CurrentAccountPipeNamesUseStableSidHash()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var identity = WindowsIdentity.GetCurrent();
+        var accountSid = identity.User ??
+            throw new InvalidOperationException("The test account SID is unavailable.");
+        var sidBytes = new byte[accountSid.BinaryLength];
+        accountSid.GetBinaryForm(sidBytes, 0);
+        var digest = SHA256.HashData(sidBytes);
+        var expectedHash = Convert.ToHexStringLower(digest.AsSpan(0, 16));
+        var normal = StorageHubIpcPipeNames.Normal;
+        var secret = StorageHubIpcPipeNames.Secret;
+
+        Assert.Equal($"StorageHub.Agent.v1.user-{expectedHash}", normal);
+        Assert.Equal($"StorageHub.Agent.Secrets.v1.user-{expectedHash}", secret);
+        Assert.Equal(normal, StorageHubIpcPipeNames.Normal);
+        Assert.Equal(secret, StorageHubIpcPipeNames.Secret);
+        Assert.DoesNotContain(accountSid.Value, normal, StringComparison.Ordinal);
+        Assert.DoesNotContain(accountSid.Value, secret, StringComparison.Ordinal);
+        Assert.Matches("^[A-Za-z0-9.-]+$", normal);
+        Assert.Matches("^[A-Za-z0-9.-]+$", secret);
+        Assert.True(normal.Length < 128);
+        Assert.True(secret.Length < 128);
+    }
+
+    [Fact]
+    public async Task DuplicatePipeStartFailurePropagatesAndCanRetry()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var options = CreateServerOptions() with { MaxConcurrentClients = 1 };
+        await using var server = new NamedPipeIpcServerSubsystem(options);
+        var initialization = await server.InitializeAsync(CancellationToken.None);
+        Assert.True(initialization.IsReady);
+
+        using (var blocker = new NamedPipeServerStream(
+            options.PipeName,
+            PipeDirection.InOut,
+            maxNumberOfServerInstances: 1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly))
+        {
+            var error = await Assert.ThrowsAnyAsync<Exception>(() =>
+                server.StartAsync(CancellationToken.None));
+
+            Assert.True(error is IOException or UnauthorizedAccessException, error.ToString());
+            Assert.False(server.IsRunning);
+            var failedHealth = await server.CheckHealthAsync(CancellationToken.None);
+            Assert.Equal(SubsystemHealthLevel.Unhealthy, failedHealth.Level);
+        }
+
+        await server.StartAsync(CancellationToken.None);
+        Assert.True(server.IsRunning);
+        await using var client = new NamedPipeIpcClient(CreateClientOptions(options.PipeName));
+        Assert.True((await client.ConnectAsync()).Accepted);
+
+        await server.StopAsync(CancellationToken.None);
+        Assert.False(server.IsRunning);
     }
 
     [Fact]
@@ -112,14 +182,16 @@ public sealed class NamedPipeIpcTests
             static (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
         await using var client = new NamedPipeIpcClient(CreateClientOptions(options.PipeName) with
         {
-            ConnectTimeout = TimeSpan.FromMilliseconds(40),
-            InitialReconnectDelay = TimeSpan.FromMilliseconds(10),
-            MaximumReconnectDelay = TimeSpan.FromMilliseconds(20),
-            MaxConnectAttempts = 20
+            ConnectTimeout = TimeSpan.FromMilliseconds(250),
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(50),
+            MaximumReconnectDelay = TimeSpan.FromMilliseconds(100),
+            MaxConnectAttempts = 100
         });
 
         var connecting = client.ConnectAsync();
-        await Task.Delay(100);
+        await WaitUntilAsync(
+            () => client.LastConnectionAttemptCount >= 2,
+            TimeSpan.FromSeconds(10));
         await StartAsync(server);
         var hello = await connecting;
 

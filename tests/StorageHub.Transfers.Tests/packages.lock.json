@@ -105,21 +105,21 @@
       "storagehub.domain": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Contracts": "[1.0.0, )"
+          "StorageHub.Contracts": "[0.1.0, )"
         }
       },
       "storagehub.storage": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Contracts": "[1.0.0, )",
-          "StorageHub.Domain": "[1.0.0, )"
+          "StorageHub.Contracts": "[0.1.0, )",
+          "StorageHub.Domain": "[0.1.0, )"
         }
       },
       "storagehub.transfers": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Storage": "[1.0.0, )"
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Storage": "[0.1.0, )"
         }
       }
     }

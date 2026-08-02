@@ -104,8 +104,8 @@
         "dependencies": {
           "CodeLogic": "[4.1.0, )",
           "Cronos": "[0.13.0, )",
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Security": "[1.0.0, )"
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Security": "[0.1.0, )"
         }
       },
       "storagehub.contracts": {
@@ -114,7 +114,7 @@
       "storagehub.domain": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Contracts": "[1.0.0, )"
+          "StorageHub.Contracts": "[0.1.0, )"
         }
       },
       "storagehub.security": {

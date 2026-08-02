@@ -22,6 +22,7 @@ public sealed class NamedPipeIpcServerSubsystem : IAgentSubsystem, IAsyncDisposa
     private int _nextSessionId;
     private int _activeClientCount;
     private int _peakClientCount;
+    private int _isRunning;
     private bool _initialized;
     private bool _disposed;
 
@@ -42,7 +43,7 @@ public sealed class NamedPipeIpcServerSubsystem : IAgentSubsystem, IAsyncDisposa
 
     public bool CanRunInRecoveryMode => true;
 
-    public bool IsRunning { get; private set; }
+    public bool IsRunning => Volatile.Read(ref _isRunning) != 0;
 
     public int ActiveClientCount => Volatile.Read(ref _activeClientCount);
 
@@ -69,6 +70,9 @@ public sealed class NamedPipeIpcServerSubsystem : IAgentSubsystem, IAsyncDisposa
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? lifetime = null;
+        NamedPipeServerStream? firstListener = null;
+        var ownsClientSlot = false;
         try
         {
             if (!_initialized)
@@ -81,10 +85,43 @@ public sealed class NamedPipeIpcServerSubsystem : IAgentSubsystem, IAsyncDisposa
                 return;
             }
 
-            _lastFailure = null;
-            _lifetime = new CancellationTokenSource();
-            IsRunning = true;
-            _acceptLoop = AcceptConnectionsAsync(_lifetime.Token);
+            if (_lifetime is not null || _acceptLoop is not null)
+            {
+                throw new InvalidOperationException(
+                    "The local IPC subsystem must be stopped after a failed run before it can restart.");
+            }
+
+            Volatile.Write(ref _lastFailure, null);
+            lifetime = new CancellationTokenSource();
+            await _clientSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
+            ownsClientSlot = true;
+            firstListener = CreateServerStream();
+
+            _lifetime = lifetime;
+            lifetime = null;
+            Volatile.Write(ref _isRunning, 1);
+
+            var listener = firstListener;
+            firstListener = null;
+            ownsClientSlot = false;
+            _acceptLoop = AcceptConnectionsAsync(listener, _lifetime.Token);
+        }
+        catch (Exception error)
+        {
+            Volatile.Write(ref _isRunning, 0);
+            if (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                Volatile.Write(ref _lastFailure, error);
+            }
+
+            firstListener?.Dispose();
+            if (ownsClientSlot)
+            {
+                _clientSlots.Release();
+            }
+
+            lifetime?.Dispose();
+            throw;
         }
         finally
         {
@@ -102,12 +139,12 @@ public sealed class NamedPipeIpcServerSubsystem : IAgentSubsystem, IAsyncDisposa
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!IsRunning)
+            if (!IsRunning && _lifetime is null && _acceptLoop is null)
             {
                 return;
             }
 
-            IsRunning = false;
+            Volatile.Write(ref _isRunning, 0);
             _lifetime?.Cancel();
             DisposePendingListener();
             foreach (var pipe in _activePipes.Values)
@@ -139,10 +176,11 @@ public sealed class NamedPipeIpcServerSubsystem : IAgentSubsystem, IAsyncDisposa
     public Task<SubsystemHealth> CheckHealthAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_lastFailure is not null)
+        var lastFailure = Volatile.Read(ref _lastFailure);
+        if (lastFailure is not null)
         {
             return Task.FromResult(SubsystemHealth.Unhealthy(
-                $"Local IPC failed: {_lastFailure.GetType().Name}."));
+                $"Local IPC failed: {lastFailure.GetType().Name}."));
         }
 
         if (IsRunning)
@@ -205,18 +243,26 @@ public sealed class NamedPipeIpcServerSubsystem : IAgentSubsystem, IAsyncDisposa
             nameof(options.RequestTimeout));
     }
 
-    private async Task AcceptConnectionsAsync(CancellationToken cancellationToken)
+    private async Task AcceptConnectionsAsync(
+        NamedPipeServerStream firstListener,
+        CancellationToken cancellationToken)
     {
+        NamedPipeServerStream? suppliedListener = firstListener;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var ownsSlot = false;
+            var ownsSlot = suppliedListener is not null;
             var handedOff = false;
-            NamedPipeServerStream? listener = null;
+            var listener = suppliedListener;
+            suppliedListener = null;
             try
             {
-                await _clientSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
-                ownsSlot = true;
-                listener = CreateServerStream();
+                if (listener is null)
+                {
+                    await _clientSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    ownsSlot = true;
+                    listener = CreateServerStream();
+                }
+
                 SetPendingListener(listener);
                 await listener.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 ClearPendingListener(listener);
@@ -243,7 +289,7 @@ public sealed class NamedPipeIpcServerSubsystem : IAgentSubsystem, IAsyncDisposa
             }
             catch (Exception error)
             {
-                _lastFailure = error;
+                RecordFatalAcceptLoopFailure(error);
                 return;
             }
             finally
@@ -259,6 +305,24 @@ public sealed class NamedPipeIpcServerSubsystem : IAgentSubsystem, IAsyncDisposa
                     _clientSlots.Release();
                 }
             }
+        }
+    }
+
+    private void RecordFatalAcceptLoopFailure(Exception error)
+    {
+        Volatile.Write(ref _lastFailure, error);
+        Volatile.Write(ref _isRunning, 0);
+        try
+        {
+            _lifetime?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        foreach (var pipe in _activePipes.Values)
+        {
+            pipe.Dispose();
         }
     }
 

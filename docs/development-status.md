@@ -18,6 +18,7 @@ tested foundations from UI concepts and planned production integration.
 | Scheduling | Cron/time-zone/DST calculation, misfire decisions, SQLite optimistic revisions, profile-scoped fenced leases, post-lock authoritative timing, bounded renewal, idempotent/stale-completion handling, queue-one behavior, preview-only durable dispatch, management IPC, and desktop editor |
 | Agent | Guarded reparse-free/current-user-only data tree, one process per Windows user, real database/vault startup, protected CodeLogic discovery, transfer/sync/scheduler workers, health reporting, bounded normal and secret-only current-user pipes, browse/test/profile/queue/sync/schedule/read-only-object-inspector commands, and sanitized vault enrollment/rotation/deletion |
 | Desktop | Top-menu dual-pane shell, asynchronous local and remote browsers, navigation/history/bounded paging, saved-connection file copy/move enqueue, durable queue/sync/schedule surfaces, read-only versions/metadata/tags inspector, protocol-aware Connection Manager, explicit vault enrollment actions, and agent status polling |
+| Packaging | Self-contained win-x64 desktop/agent payload, per-user Velopack Setup and MSI, portable archive, graceful agent lifecycle, checksums, provenance attestation, disposable-runner smoke test, and prerelease publication after every successful main push |
 | Diagnostics | Safe artifact manifest policy that excludes secret and durable-state files |
 
 The automated suite includes unit and contract coverage, local-browser and
@@ -43,8 +44,8 @@ evidence tests, and a real local `CL.Storage` integration fixture.
    long-path, Unicode, large-directory, and lost-acknowledgement stress tests.
 6. Expand profiles in order through WebDAV, Azure Blob, Google Cloud Storage,
    and OpenStack Swift, preserving provider-specific credential and trust rules.
-7. Finish packaging, installer/update signing, accessibility review,
-   localization, telemetry consent, and release/recovery documentation.
+7. Finish Authenticode installer/update signing, accessibility review,
+   localization, telemetry consent, and stable-release/recovery documentation.
 
 ## Provider expansion order
 
@@ -69,5 +70,6 @@ The project should not be labeled stable until:
 - upgrade, recovery, vault rotation, and uninstall behavior are documented and
   tested;
 - Release build, tests, dependency audit, and packaging run reproducibly in CI;
+- installer upgrade/rollback coverage and Authenticode signing are production-ready;
 - an independent security review has addressed secret, path, IPC, trust, and
   destructive-operation boundaries.

@@ -138,12 +138,12 @@
         "type": "Project",
         "dependencies": {
           "Cronos": "[0.13.0, )",
-          "StorageHub.Application": "[1.0.0, )",
-          "StorageHub.Contracts": "[1.0.0, )",
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Storage": "[1.0.0, )",
-          "StorageHub.Sync": "[1.0.0, )",
-          "StorageHub.Transfers": "[1.0.0, )"
+          "StorageHub.Application": "[0.1.0, )",
+          "StorageHub.Contracts": "[0.1.0, )",
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Storage": "[0.1.0, )",
+          "StorageHub.Sync": "[0.1.0, )",
+          "StorageHub.Transfers": "[0.1.0, )"
         }
       },
       "storagehub.application": {
@@ -151,8 +151,8 @@
         "dependencies": {
           "CodeLogic": "[4.1.0, )",
           "Cronos": "[0.13.0, )",
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Security": "[1.0.0, )"
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Security": "[0.1.0, )"
         }
       },
       "storagehub.contracts": {
@@ -161,7 +161,7 @@
       "storagehub.domain": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Contracts": "[1.0.0, )"
+          "StorageHub.Contracts": "[0.1.0, )"
         }
       },
       "storagehub.persistence": {
@@ -169,10 +169,10 @@
         "dependencies": {
           "Microsoft.Data.Sqlite": "[9.0.18, )",
           "SQLitePCLRaw.bundle_e_sqlite3": "[2.1.12, )",
-          "StorageHub.Application": "[1.0.0, )",
-          "StorageHub.Security": "[1.0.0, )",
-          "StorageHub.Sync": "[1.0.0, )",
-          "StorageHub.Transfers": "[1.0.0, )"
+          "StorageHub.Application": "[0.1.0, )",
+          "StorageHub.Security": "[0.1.0, )",
+          "StorageHub.Sync": "[0.1.0, )",
+          "StorageHub.Transfers": "[0.1.0, )"
         }
       },
       "storagehub.security": {
@@ -181,23 +181,23 @@
       "storagehub.storage": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Contracts": "[1.0.0, )",
-          "StorageHub.Domain": "[1.0.0, )"
+          "StorageHub.Contracts": "[0.1.0, )",
+          "StorageHub.Domain": "[0.1.0, )"
         }
       },
       "storagehub.sync": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Storage": "[1.0.0, )",
-          "StorageHub.Transfers": "[1.0.0, )"
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Storage": "[0.1.0, )",
+          "StorageHub.Transfers": "[0.1.0, )"
         }
       },
       "storagehub.transfers": {
         "type": "Project",
         "dependencies": {
-          "StorageHub.Domain": "[1.0.0, )",
-          "StorageHub.Storage": "[1.0.0, )"
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Storage": "[0.1.0, )"
         }
       },
       "CodeLogic": {

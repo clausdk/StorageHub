@@ -2,6 +2,8 @@ namespace StorageHub.Desktop.Tests;
 
 public sealed class SyncRunReviewControlTests
 {
+    private static readonly object StaExecutionGate = new();
+
     [Fact]
     public void Review_loads_immutable_pages_and_approves_the_exact_revision_and_digest()
     {
@@ -30,21 +32,38 @@ public sealed class SyncRunReviewControlTests
 
     internal static void RunOnSta(Action action)
     {
-        Exception? failure = null;
-        var thread = new Thread(() =>
+        ArgumentNullException.ThrowIfNull(action);
+
+        // WinForms and Krypton both maintain process-wide UI state. xUnit runs test
+        // classes concurrently, so starting one STA per class allowed multiple forms
+        // to initialize that shared state at once. Serialize the UI checks, and start
+        // the timeout only after this test owns the gate so queued tests do not spend
+        // their execution budget waiting for another STA check.
+        lock (StaExecutionGate)
         {
-            try
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
+            var thread = new Thread(() =>
             {
-                action();
-            }
-            catch (Exception error)
+                try
+                {
+                    action();
+                }
+                catch (Exception error)
+                {
+                    failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error);
+                }
+            })
             {
-                failure = error;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "The sync UI check timed out.");
-        Assert.Null(failure);
+                IsBackground = true,
+                Name = "StorageHub Desktop test STA"
+            };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+
+            Assert.True(
+                thread.Join(TimeSpan.FromMinutes(1)),
+                "The serialized WinForms UI check timed out after one minute.");
+            failure?.Throw();
+        }
     }
 }

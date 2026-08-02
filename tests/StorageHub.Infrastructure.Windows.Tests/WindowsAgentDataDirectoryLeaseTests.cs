@@ -90,6 +90,74 @@ public sealed class WindowsAgentDataDirectoryLeaseTests : IDisposable
     }
 
     [Fact]
+    public void Data_and_application_trees_must_be_disjoint()
+    {
+        var applicationRoot = Path.Combine(_testRoot, "StorageHub.Desktop");
+        var siblingDataRoot = Path.Combine(_testRoot, "StorageHub");
+
+        WindowsAgentDataDirectoryLease.EnsureDataRootIsSeparateFromApplication(
+            siblingDataRoot,
+            applicationRoot);
+
+        _ = Assert.Throws<WindowsAgentDataDirectoryException>(() =>
+            WindowsAgentDataDirectoryLease.EnsureDataRootIsSeparateFromApplication(
+                applicationRoot,
+                applicationRoot));
+        _ = Assert.Throws<WindowsAgentDataDirectoryException>(() =>
+            WindowsAgentDataDirectoryLease.EnsureDataRootIsSeparateFromApplication(
+                Path.Combine(applicationRoot, "Data"),
+                applicationRoot));
+        _ = Assert.Throws<WindowsAgentDataDirectoryException>(() =>
+            WindowsAgentDataDirectoryLease.EnsureDataRootIsSeparateFromApplication(
+                _testRoot,
+                applicationRoot));
+    }
+
+    [Fact]
+    public void Packaged_agent_resolves_the_complete_velopack_owned_tree()
+    {
+        var applicationRoot = Path.Combine(_testRoot, "StorageHub.Desktop");
+        var agentDirectory = Path.Combine(applicationRoot, "current", "Agent");
+
+        var resolvedRoot = WindowsAgentDataDirectoryLease.ResolveApplicationOwnedTreeRoot(
+            agentDirectory);
+
+        Assert.Equal(Path.GetFullPath(applicationRoot), resolvedRoot);
+        _ = Assert.Throws<WindowsAgentDataDirectoryException>(() =>
+            WindowsAgentDataDirectoryLease.EnsureDataRootIsSeparateFromApplication(
+                Path.Combine(applicationRoot, "Data"),
+                resolvedRoot));
+        _ = Assert.Throws<WindowsAgentDataDirectoryException>(() =>
+            WindowsAgentDataDirectoryLease.EnsureDataRootIsSeparateFromApplication(
+                Path.Combine(applicationRoot, "current", "Data"),
+                resolvedRoot));
+    }
+
+    [Fact]
+    public void Non_packaged_agent_keeps_its_exact_application_directory()
+    {
+        var applicationDirectory = Path.Combine(_testRoot, "bin", "Release", "net10.0-windows");
+
+        var resolvedRoot = WindowsAgentDataDirectoryLease.ResolveApplicationOwnedTreeRoot(
+            applicationDirectory);
+
+        Assert.Equal(Path.GetFullPath(applicationDirectory), resolvedRoot);
+    }
+
+    [Fact]
+    public void Application_tree_must_not_contain_the_fixed_instance_lock()
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var defaultDataRoot = Path.Combine(localAppData, "StorageHub");
+
+        _ = Assert.Throws<WindowsAgentDataDirectoryException>(() =>
+            WindowsAgentDataDirectoryLease.EnsureApplicationTreeIsSeparateFromInstanceLock(
+                defaultDataRoot));
+        WindowsAgentDataDirectoryLease.EnsureApplicationTreeIsSeparateFromInstanceLock(
+            Path.Combine(localAppData, "StorageHub.Desktop"));
+    }
+
+    [Fact]
     public void Reparse_point_in_ancestor_path_is_rejected()
     {
         Directory.CreateDirectory(_testRoot);

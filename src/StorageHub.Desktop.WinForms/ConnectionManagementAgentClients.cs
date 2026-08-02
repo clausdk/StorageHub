@@ -351,7 +351,7 @@ public interface ISecretIpcTransport : IAsyncDisposable
 
 public sealed record RemoteSecretVaultClientOptions
 {
-    public string PipeName { get; init; } = "StorageHub.Agent.Secrets.v1";
+    public string PipeName { get; init; } = StorageHubIpcPipeNames.Secret;
     public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(2);
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);
 }
