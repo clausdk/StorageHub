@@ -5,6 +5,34 @@ namespace StorageHub.Desktop.Tests;
 public sealed class SettingsFormTests
 {
     [Fact]
+    public void GeneralInformationCardsKeepReadableWidth()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var settings = new SettingsForm();
+            settings.CreateControl();
+
+            var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
+            var cards = pages.Values
+                .SelectMany(DescendantsAndSelf)
+                .OfType<TableLayoutPanel>()
+                .Where(control => control.Name == "InformationCard")
+                .ToArray();
+
+            Assert.Equal(3, cards.Length);
+            Assert.All(cards, card =>
+            {
+                Assert.True(card.AutoSize);
+                Assert.Equal(AutoSizeMode.GrowAndShrink, card.AutoSizeMode);
+                Assert.True(card.MinimumSize.Width >= 650);
+                Assert.Equal(2, card.RowCount);
+                Assert.All(card.Controls.Cast<Control>(), child =>
+                    Assert.Equal(DockStyle.Fill, child.Dock));
+            });
+        });
+    }
+
+    [Fact]
     public void ApplyPersistsConnectionAndUpdateChoicesTogether()
     {
         var root = Path.Combine(Path.GetTempPath(), $"storagehub-settings-form-{Guid.NewGuid():N}");
@@ -53,5 +81,17 @@ public sealed class SettingsFormTests
         var field = instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(field);
         return Assert.IsType<T>(field.GetValue(instance));
+    }
+
+    private static IEnumerable<Control> DescendantsAndSelf(Control root)
+    {
+        yield return root;
+        foreach (Control child in root.Controls)
+        {
+            foreach (var descendant in DescendantsAndSelf(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 }

@@ -228,6 +228,7 @@ public sealed class SettingsForm : KryptonForm
         {
             AutoSize = true,
             Width = 650,
+            MinimumSize = new Size(650, 0),
             ColumnCount = 1,
             Padding = new Padding(0, 14, 0, 0)
         };
@@ -254,6 +255,7 @@ public sealed class SettingsForm : KryptonForm
         {
             AutoSize = true,
             Width = 650,
+            MinimumSize = new Size(650, 0),
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
             Padding = new Padding(0, 10, 0, 0)
@@ -298,28 +300,40 @@ public sealed class SettingsForm : KryptonForm
         };
         var heading = UiControlFactory.CreateSectionTitle(title);
         heading.Width = 650;
+        heading.MinimumSize = new Size(650, 0);
         heading.Height = 32;
         var summary = UiControlFactory.CreateDescription(description);
         summary.Width = 650;
+        summary.MinimumSize = new Size(650, 0);
         summary.Padding = new Padding(0, 0, 0, 12);
         page.Controls.Add(heading);
         page.Controls.Add(summary);
         return page;
     }
 
-    private static Panel CreateInformationCard(string title, string text)
+    private static TableLayoutPanel CreateInformationCard(string title, string text)
     {
-        var card = new Panel
+        var card = new TableLayoutPanel
         {
             AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Width = 650,
+            MinimumSize = new Size(650, 0),
+            ColumnCount = 1,
+            RowCount = 2,
+            GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
             BackColor = StorageHubTheme.SurfaceMuted,
             Padding = new Padding(14),
-            Margin = new Padding(0, 10, 0, 0)
+            Margin = new Padding(0, 10, 0, 0),
+            Name = "InformationCard",
+            AccessibleName = $"{title} settings card"
         };
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var heading = new Label
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             AutoSize = true,
             Text = title,
             Font = StorageHubTheme.CreateSectionFont(),
@@ -327,15 +341,15 @@ public sealed class SettingsForm : KryptonForm
         };
         var description = new Label
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             AutoSize = true,
             MaximumSize = new Size(620, 0),
             Text = text,
             ForeColor = StorageHubTheme.TextMuted,
             Padding = new Padding(0, 6, 0, 0)
         };
-        card.Controls.Add(description);
-        card.Controls.Add(heading);
+        card.Controls.Add(heading, 0, 0);
+        card.Controls.Add(description, 0, 1);
         return card;
     }
 
@@ -346,6 +360,7 @@ public sealed class SettingsForm : KryptonForm
             AutoSize = true,
             BackColor = Color.FromArgb(255, 242, 222),
             Width = 650,
+            MinimumSize = new Size(650, 0),
             Padding = new Padding(12),
             Margin = new Padding(0, 18, 0, 0)
         };

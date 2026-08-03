@@ -661,8 +661,10 @@ internal static class RemoteBrowserErrors
     {
         StorageIpcFailureCategory.Validation => "The remote path or connection settings are invalid.",
         StorageIpcFailureCategory.NotFound => "The remote folder or saved connection was not found.",
-        StorageIpcFailureCategory.Unauthorized or StorageIpcFailureCategory.Security =>
-            "Authentication or trust verification failed.",
+        StorageIpcFailureCategory.Unauthorized =>
+            "The provider rejected the saved username or credential.",
+        StorageIpcFailureCategory.Security =>
+            "The saved server-identity trust decision is missing or no longer valid.",
         StorageIpcFailureCategory.Timeout => "The remote provider did not respond in time.",
         StorageIpcFailureCategory.Cancelled => "The remote request was cancelled.",
         StorageIpcFailureCategory.Unsupported => "This provider does not support the requested browse operation.",
