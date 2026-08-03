@@ -179,16 +179,23 @@ public sealed class ShellWiringTests
         SyncRunReviewControlTests.RunOnSta(() =>
         {
             using var settings = new SettingsForm();
-            var categories = GetField<ListBox>(settings, "_categories");
+            settings.Show();
+            System.Windows.Forms.Application.DoEvents();
+            var categories = GetField<TreeView>(settings, "_categories");
             Assert.Equal(
-                ["General", "Editing", "Connections & trust", "Updates", "About"],
-                categories.Items.Cast<string>());
+                ["Transfers & sync", "Editing", "Connections & trust", "Updates"],
+                categories.Nodes.Cast<TreeNode>().Select(static node => node.Text));
+            var transfers = categories.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Transfers & sync");
+            Assert.Equal("Concurrency", Assert.Single(transfers.Nodes.Cast<TreeNode>()).Text);
             var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
-            Assert.Equal(categories.Items.Count, pages.Count);
-            for (var index = 0; index < categories.Items.Count; index++)
+            Assert.Equal(4, pages.Count);
+            var pageNodes = categories.Nodes.Cast<TreeNode>()
+                .SelectMany(static node => node.Nodes.Count == 0 ? [node] : node.Nodes.Cast<TreeNode>())
+                .ToArray();
+            foreach (var node in pageNodes)
             {
-                categories.SelectedIndex = index;
-                var selectedPage = pages[(string)categories.Items[index]!];
+                categories.SelectedNode = node;
+                var selectedPage = pages[node.Name];
                 Assert.Equal(0, selectedPage.Parent!.Controls.GetChildIndex(selectedPage));
             }
 
