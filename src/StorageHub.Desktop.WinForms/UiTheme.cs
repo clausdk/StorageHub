@@ -100,6 +100,7 @@ public enum UiGlyph
     Pause,
     Search,
     Folder,
+    File,
     Save,
     Delete,
     Test,
@@ -187,6 +188,23 @@ public static class UiIconFactory
                     path.CloseFigure();
                     graphics.DrawPath(pen, path);
                 }
+                break;
+            case UiGlyph.File:
+                graphics.DrawLines(pen,
+                [
+                    new PointF(6, 3),
+                    new PointF(15, 3),
+                    new PointF(19, 7),
+                    new PointF(19, 21),
+                    new PointF(6, 21),
+                    new PointF(6, 3)
+                ]);
+                graphics.DrawLines(pen,
+                [
+                    new PointF(15, 3),
+                    new PointF(15, 7),
+                    new PointF(19, 7)
+                ]);
                 break;
             case UiGlyph.Save:
                 graphics.DrawRectangle(pen, 5, 4, 14, 16);

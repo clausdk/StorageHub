@@ -428,6 +428,42 @@ public sealed class LocalBrowserController : IAsyncDisposable
                 }
             }
 
+            if (error is DirectoryNotFoundException or DriveNotFoundException && !target.IsThisPc)
+            {
+                try
+                {
+                    var fallback = await BrowseNearestAvailableParentAsync(
+                        target,
+                        navigationCancellation.Token).ConfigureAwait(false);
+                    if (fallback is not null)
+                    {
+                        lock (_sync)
+                        {
+                            if (sequence != _navigationSequence || _disposed)
+                            {
+                                return new LocalBrowserNavigationResult(LocalBrowserNavigationStatus.Superseded);
+                            }
+
+                            _history.Navigate(fallback.Value.Location);
+                            return new LocalBrowserNavigationResult(
+                                LocalBrowserNavigationStatus.Succeeded,
+                                fallback.Value.Snapshot,
+                                "That folder no longer exists. StorageHub moved to the nearest available parent.");
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    lock (_sync)
+                    {
+                        return new LocalBrowserNavigationResult(
+                            sequence == _navigationSequence
+                                ? LocalBrowserNavigationStatus.Canceled
+                                : LocalBrowserNavigationStatus.Superseded);
+                    }
+                }
+            }
+
             return new LocalBrowserNavigationResult(
                 LocalBrowserNavigationStatus.Failed,
                 ErrorMessage: LocalBrowserErrors.ToSafeMessage(error));
@@ -444,6 +480,37 @@ public sealed class LocalBrowserController : IAsyncDisposable
 
             navigationCancellation.Dispose();
         }
+    }
+
+    private async Task<(LocalBrowserLocation Location, LocalBrowserSnapshot Snapshot)?>
+        BrowseNearestAvailableParentAsync(
+            LocalBrowserLocation missingLocation,
+            CancellationToken cancellationToken)
+    {
+        var candidate = missingLocation.GetParent();
+        for (var depth = 0; depth < 256; depth++)
+        {
+            try
+            {
+                var snapshot = await _dataSource.BrowseAsync(candidate, cancellationToken).ConfigureAwait(false);
+                return (candidate, snapshot);
+            }
+            catch (Exception error) when (error is DirectoryNotFoundException or DriveNotFoundException)
+            {
+                if (candidate.IsThisPc)
+                {
+                    return null;
+                }
+
+                candidate = candidate.GetParent();
+            }
+            catch (Exception error) when (LocalBrowserErrors.IsExpected(error) && error is not OperationCanceledException)
+            {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     public void CancelCurrentNavigation()
