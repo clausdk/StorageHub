@@ -140,8 +140,15 @@ public sealed class ShellWiringTests
 
             var tree = GetField<TreeView>(manager, "_profileTree");
             Assert.Equal(
-                ["Favorites", "Folders", "Providers", "Disabled"],
+                ["Favorites", "Team", "Providers", "Disabled"],
                 tree.Nodes.Cast<TreeNode>().Select(static node => node.Text));
+            var folder = tree.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Team");
+            Assert.Equal(
+                "Foldered",
+                Assert.IsType<ConnectionCardModel>(Assert.Single(folder.Nodes.Cast<TreeNode>()).Tag).Name);
+            Assert.DoesNotContain(
+                tree.Nodes.Cast<TreeNode>(),
+                static node => node.Text == "Folders");
             var cards = tree.Nodes
                 .Cast<TreeNode>()
                 .SelectMany(FlattenTree)

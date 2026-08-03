@@ -1606,12 +1606,10 @@ public sealed class ConnectionManagerForm : KryptonForm
                 "category:favorites",
                 "Favorites",
                 nestSections: false);
-            AddProfileTreeCategory(
+            AddProfileTreeSections(
                 sections,
                 ConnectionProfileSectionKind.Folder,
-                "category:folders",
-                "Folders",
-                nestSections: true);
+                "folder");
             AddProfileTreeCategory(
                 sections,
                 ConnectionProfileSectionKind.Provider,
@@ -1694,6 +1692,26 @@ public sealed class ConnectionManagerForm : KryptonForm
         }
 
         _profileTree.Nodes.Add(root);
+    }
+
+    private void AddProfileTreeSections(
+        IReadOnlyList<ConnectionProfileTreeSection> sections,
+        ConnectionProfileSectionKind kind,
+        string keyPrefix)
+    {
+        foreach (var section in sections.Where(section => section.Kind == kind))
+        {
+            var root = CreateGroupNode(
+                $"{keyPrefix}:{section.Key}",
+                section.Label,
+                section.Connections.Count);
+            foreach (var connection in section.Connections)
+            {
+                root.Nodes.Add(CreateConnectionNode(connection));
+            }
+
+            _profileTree.Nodes.Add(root);
+        }
     }
 
     private static TreeNode CreateGroupNode(string key, string label, int count) => new(label)
