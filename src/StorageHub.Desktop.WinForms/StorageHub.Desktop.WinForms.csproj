@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\StorageHub.Agent\StorageHub.Agent.csproj" />
     <ProjectReference Include="..\StorageHub.Agent.Windows\StorageHub.Agent.Windows.csproj"
+                      Condition="'$(StorageHubPackagedAgent)' != 'true' and '$(ArtifactsPath)' == ''"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\StorageHub.Contracts\StorageHub.Contracts.csproj" />
   </ItemGroup>
