@@ -100,7 +100,8 @@ public sealed record SyncPlanExecutionRequest
         SyncExecutionSnapshots snapshots,
         SyncPlanExecutionMode mode = SyncPlanExecutionMode.Execute,
         DeletionSafetyPolicy? deletionPolicy = null,
-        TransferExecutionOptions? transferOptions = null)
+        TransferExecutionOptions? transferOptions = null,
+        string? profilePolicySha256 = null)
         : this(
             plan,
             approvedDigest,
@@ -109,7 +110,8 @@ public sealed record SyncPlanExecutionRequest
             snapshots,
             mode,
             deletionPolicy,
-            transferOptions)
+            transferOptions,
+            profilePolicySha256)
     {
     }
 
@@ -120,7 +122,8 @@ public sealed record SyncPlanExecutionRequest
         SyncExecutionSnapshots snapshots,
         SyncPlanExecutionMode mode = SyncPlanExecutionMode.Execute,
         DeletionSafetyPolicy? deletionPolicy = null,
-        TransferExecutionOptions? transferOptions = null)
+        TransferExecutionOptions? transferOptions = null,
+        string? profilePolicySha256 = null)
         : this(
             plan,
             plan?.Digest ?? default,
@@ -129,7 +132,8 @@ public sealed record SyncPlanExecutionRequest
             snapshots,
             mode,
             deletionPolicy,
-            transferOptions)
+            transferOptions,
+            profilePolicySha256)
     {
     }
 
@@ -141,7 +145,8 @@ public sealed record SyncPlanExecutionRequest
         SyncExecutionSnapshots snapshots,
         SyncPlanExecutionMode mode,
         DeletionSafetyPolicy? deletionPolicy,
-        TransferExecutionOptions? transferOptions)
+        TransferExecutionOptions? transferOptions,
+        string? profilePolicySha256)
     {
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         ArgumentNullException.ThrowIfNull(sessions);
@@ -179,6 +184,7 @@ public sealed record SyncPlanExecutionRequest
         Mode = mode;
         DeletionPolicy = deletionPolicy ?? DeletionSafetyPolicy.Default;
         TransferOptions = transferOptions ?? new TransferExecutionOptions();
+        ProfilePolicySha256 = profilePolicySha256;
     }
 
     public ImmutableSyncPlan Plan { get; }
@@ -196,6 +202,7 @@ public sealed record SyncPlanExecutionRequest
     public DeletionSafetyPolicy DeletionPolicy { get; }
 
     public TransferExecutionOptions TransferOptions { get; }
+    public string? ProfilePolicySha256 { get; }
 }
 
 public sealed record SyncPlanExecutionReport(
@@ -413,7 +420,8 @@ public static class SyncPlanExecutor
                 request.Snapshots,
                 request.Mode,
                 request.DeletionPolicy,
-                request.TransferOptions);
+                request.TransferOptions,
+                request.ProfilePolicySha256);
             if (currentApproval != request.ApprovedExecution)
             {
                 return PreflightFailure(

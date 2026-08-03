@@ -4,7 +4,10 @@ namespace StorageHub.Agent.Transfers;
 
 public sealed record TransferQueueWorkerOptions
 {
-    public int MaximumConcurrency { get; init; } = 2;
+    public int MaximumConcurrency { get; init; } = 4;
+    public int MinimumConcurrency { get; init; } = 1;
+    public int PerConnectionConcurrency { get; init; } = 2;
+    public bool AdaptiveConcurrency { get; init; }
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan LeaseDuration { get; init; } = TimeSpan.FromMinutes(2);
     public TimeSpan LeaseRenewalInterval { get; init; } = TimeSpan.FromSeconds(30);
@@ -21,6 +24,16 @@ public sealed record TransferQueueWorkerOptions
             throw new ArgumentOutOfRangeException(
                 nameof(MaximumConcurrency),
                 "Transfer concurrency must be between 1 and 32.");
+        }
+
+        if (MinimumConcurrency < 1 || MinimumConcurrency > MaximumConcurrency)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MinimumConcurrency));
+        }
+
+        if (PerConnectionConcurrency is < 1 or > 16)
+        {
+            throw new ArgumentOutOfRangeException(nameof(PerConnectionConcurrency));
         }
 
         ValidatePositive(PollInterval, nameof(PollInterval));

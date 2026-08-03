@@ -42,7 +42,8 @@ public sealed record RemoteConnectionLoadResult(
 public sealed record RemoteBrowserNavigationResult(
     RemoteBrowserOperationStatus Status,
     RemoteBrowserSnapshot? Snapshot = null,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null,
+    string? UnavailablePath = null);
 
 public static class RemoteBrowserPath
 {
@@ -351,6 +352,43 @@ public sealed class RemoteBrowserController : IAsyncDisposable
 
             if (listed.Failure is not null)
             {
+                if (listed.Failure.Category == StorageIpcFailureCategory.NotFound && target.Length > 0)
+                {
+                    var missingPath = target;
+                    var fallbackPath = RemoteBrowserPath.GetParent(target);
+                    for (var depth = 0; depth < 256; depth++)
+                    {
+                        var fallback = await ListPageAsync(
+                            SelectedConnection,
+                            fallbackPath,
+                            null,
+                            DefaultPageSize,
+                            operation.Cancellation.Token).ConfigureAwait(false);
+                        if (!IsCurrent(operation.Sequence))
+                        {
+                            return new(RemoteBrowserOperationStatus.Superseded);
+                        }
+
+                        if (fallback.Failure is null)
+                        {
+                            _history.Commit(RemoteBrowserNavigationKind.Navigate, fallbackPath);
+                            CurrentSnapshot = CreateSnapshot(SelectedConnection, fallback);
+                            return new(
+                                RemoteBrowserOperationStatus.Succeeded,
+                                CurrentSnapshot,
+                                "That folder no longer exists. StorageHub moved to the nearest available parent.",
+                                missingPath);
+                        }
+
+                        if (fallback.Failure.Category != StorageIpcFailureCategory.NotFound || fallbackPath.Length == 0)
+                        {
+                            break;
+                        }
+
+                        fallbackPath = RemoteBrowserPath.GetParent(fallbackPath);
+                    }
+                }
+
                 return new(
                     RemoteBrowserOperationStatus.Failed,
                     ErrorMessage: RemoteBrowserErrors.ForFailure(listed.Failure));

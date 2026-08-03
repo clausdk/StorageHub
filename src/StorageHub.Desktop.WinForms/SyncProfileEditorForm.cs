@@ -15,13 +15,17 @@ public sealed class SyncProfileEditorForm : KryptonForm
     private readonly CheckBox _enabled;
     private readonly ComboBox _leftConnection;
     private readonly TextBox _leftRoot;
+    private readonly Button _leftBrowse;
     private readonly ComboBox _rightConnection;
     private readonly TextBox _rightRoot;
-    private readonly ComboBox _direction;
-    private readonly ComboBox _deletionMode;
+    private readonly Button _rightBrowse;
+    private readonly SyncBehaviorPickerControl _behavior;
+    private readonly ComboBox _conflictPolicy;
+    private readonly TextBox _includeGlobs;
+    private readonly TextBox _excludeGlobs;
+    private readonly CheckBox _includeHiddenFiles;
     private readonly NumericUpDown _maximumDeletionCount;
     private readonly NumericUpDown _maximumDeletionPercentage;
-    private readonly CheckBox _overwrite;
     private readonly NumericUpDown _bufferSize;
     private readonly Label _status;
     private readonly Button _save;
@@ -29,6 +33,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
     private readonly SyncRunReviewControl _review;
     private readonly TabControl _tabs;
     private SyncProfileDocument? _currentProfile;
+    private SyncRunSummary? _lastGeneratedRun;
     private bool _initialLoadStarted;
     private bool _suppressProfileSelection;
     private bool _disposed;
@@ -51,10 +56,10 @@ public sealed class SyncProfileEditorForm : KryptonForm
         _ownsClients = ownsClients;
         Text = "Sync Profiles — StorageHub";
         AccessibleName = "Sync Profile Editor";
-        AccessibleDescription = "Create and update a persisted preview-first synchronization profile.";
+        AccessibleDescription = "Create, review, and run a persisted synchronization profile.";
         StartPosition = FormStartPosition.CenterParent;
-        MinimumSize = new Size(920, 650);
-        Size = new Size(1120, 780);
+        MinimumSize = new Size(1000, 700);
+        Size = new Size(1240, 860);
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
@@ -77,7 +82,14 @@ public sealed class SyncProfileEditorForm : KryptonForm
             WrapContents = false,
             Margin = Padding.Empty
         };
-        title.Controls.Add(UiControlFactory.CreateSectionTitle("Preview-first synchronization"));
+        title.Controls.Add(new Label
+        {
+            Text = "Safe synchronization",
+            AutoSize = true,
+            Font = new Font("Segoe UI Semibold", 14F),
+            ForeColor = StorageHubTheme.Text,
+            Margin = Padding.Empty
+        });
         title.Controls.Add(UiControlFactory.CreateDescription(
             "Save a bounded profile, inspect its immutable plan, then explicitly dispatch that exact revision."));
         header.Controls.Add(title, 0, 0);
@@ -103,15 +115,31 @@ public sealed class SyncProfileEditorForm : KryptonForm
             MaxLength = SyncManagementIpcLimits.MaximumDisplayNameLength
         };
         _enabled = new CheckBox { Text = "Enabled", AutoSize = true };
-        _leftConnection = CreateChoice("Left connection");
-        _leftRoot = CreateRootTextBox("Left connection-relative root");
-        _rightConnection = CreateChoice("Right connection");
-        _rightRoot = CreateRootTextBox("Right connection-relative root");
-        _direction = CreateEnumChoice<SyncIpcDirection>("Synchronization direction");
-        _direction.SelectedItem = SyncIpcDirection.LeftToRight;
-        _deletionMode = CreateEnumChoice<SyncIpcDeletionMode>("Deletion mode");
-        _deletionMode.SelectedItem = SyncIpcDeletionMode.Disabled;
-        _direction.SelectedIndexChanged += (_, _) => EnforceDirectionCompatibility();
+        _leftConnection = CreateChoice("Location A connection");
+        _leftRoot = CreateRootTextBox("Location A connection-relative folder");
+        _leftRoot.Name = "LocationAFolder";
+        _leftBrowse = CreateBrowseButton("BrowseLocationA", "Browse Location A folders");
+        _rightConnection = CreateChoice("Location B connection");
+        _rightRoot = CreateRootTextBox("Location B connection-relative folder");
+        _rightRoot.Name = "LocationBFolder";
+        _rightBrowse = CreateBrowseButton("BrowseLocationB", "Browse Location B folders");
+        _leftConnection.SelectedIndexChanged += LocationConnectionChanged;
+        _rightConnection.SelectedIndexChanged += LocationConnectionChanged;
+        _leftBrowse.Click += BrowseLeftClicked;
+        _rightBrowse.Click += BrowseRightClicked;
+        UpdateLocationSelectorState(_leftConnection, _leftRoot, _leftBrowse);
+        UpdateLocationSelectorState(_rightConnection, _rightRoot, _rightBrowse);
+        _behavior = new SyncBehaviorPickerControl
+        {
+            SelectedBehavior = SyncIpcBehavior.UpdateAToB
+        };
+        _conflictPolicy = CreateEnumChoice<SyncIpcConflictPolicy>("Conflict policy");
+        _conflictPolicy.Format += FormatConflictPolicy;
+        _conflictPolicy.SelectedItem = SyncIpcConflictPolicy.Block;
+        _includeGlobs = CreateGlobTextBox("Include glob filters");
+        _excludeGlobs = CreateGlobTextBox("Exclude glob filters");
+        _excludeGlobs.Lines = [".storagehub", ".storagehub/**", "**/.storagehub/**"];
+        _includeHiddenFiles = new CheckBox { Text = "Include hidden files", Checked = true, AutoSize = true };
         _maximumDeletionCount = CreateNumeric(
             SyncPresentationCatalog.DefaultMassDeleteItemLimit,
             1,
@@ -122,7 +150,6 @@ public sealed class SyncProfileEditorForm : KryptonForm
             100m,
             decimalPlaces: 2,
             increment: 0.25m);
-        _overwrite = new CheckBox { Text = "Allow overwrite after preview", AutoSize = true };
         _bufferSize = CreateNumeric(64 * 1024, 1, SyncManagementIpcLimits.MaximumTransferBufferSize);
 
         _tabs = new TabControl
@@ -134,7 +161,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
         };
         _tabs.TabPages.Add(BuildProfilePage());
         _review = new SyncRunReviewControl(_syncClient);
-        var previewPage = new TabPage("Preview & approve")
+        var previewPage = new TabPage("Plan & run")
         {
             BackColor = StorageHubTheme.Surface,
             Padding = new Padding(5)
@@ -168,7 +195,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
         _save = new Button { Name = "SaveSyncProfile", Text = "Save profile", AutoSize = true };
         StorageHubTheme.StyleSecondaryButton(_save);
         _save.Click += SaveClicked;
-        _preview = new Button { Name = "GenerateSyncPreview", Text = "Generate preview", AutoSize = true };
+        _preview = new Button { Name = "GenerateSyncPreview", Text = "Review & run", AutoSize = true };
         StorageHubTheme.StylePrimaryButton(_preview);
         _preview.Click += PreviewClicked;
         actions.Controls.Add(close);
@@ -186,6 +213,8 @@ public sealed class SyncProfileEditorForm : KryptonForm
 
     public SyncRunReviewControl Review => _review;
 
+    public SyncRunSummary? LastGeneratedRun => _lastGeneratedRun;
+
     public string StatusText => _status.Text;
 
     /// <summary>Loads saved profiles and endpoints. Construction itself remains IPC-inert.</summary>
@@ -202,17 +231,57 @@ public sealed class SyncProfileEditorForm : KryptonForm
             StorageIpcContract.CurrentVersion,
             IncludeDisabled: true,
             Limit: StorageIpcLimits.MaximumConnectionResults), linked.Token);
-        await Task.WhenAll(profileTask, connectionTask).ConfigureAwait(true);
-        var profiles = await profileTask.ConfigureAwait(true);
-        var connections = await connectionTask.ConfigureAwait(true);
-        ThrowIfFailure(profiles.Failure);
-        ThrowIfFailure(connections.Failure);
-        PopulateConnections(connections.Connections);
-        PopulateProfiles(profiles.Profiles);
-        _status.Text = profiles.Profiles.Length == 0
-            ? "No saved profile yet. Configure two saved connections, save, then generate a preview."
-            : $"Loaded {profiles.Profiles.Length} saved profile(s).";
-        _status.ForeColor = StorageHubTheme.Success;
+
+        SyncProfileListResponse? profiles = null;
+        ConnectionListResponse? connections = null;
+        Exception? profileError = null;
+        Exception? connectionError = null;
+        try
+        {
+            connections = await connectionTask.ConfigureAwait(true);
+            ThrowIfFailure(connections.Failure);
+            PopulateConnections(connections.Connections);
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            connectionError = error;
+        }
+
+        try
+        {
+            profiles = await profileTask.ConfigureAwait(true);
+            ThrowIfFailure(profiles.Failure);
+            PopulateProfiles(profiles.Profiles);
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            profileError = error;
+        }
+
+        if (profileError is null && connectionError is null)
+        {
+            _status.Text = profiles!.Profiles.Length == 0
+                ? "No saved profile yet. Configure two saved connections, then choose Review & run."
+                : $"Loaded {profiles.Profiles.Length} saved profile(s).";
+            _status.ForeColor = StorageHubTheme.Success;
+            return;
+        }
+
+        _status.Text = (profileError, connectionError) switch
+        {
+            (not null, null) => $"Connections loaded, but sync profiles are unavailable: {profileError.Message}",
+            (null, not null) => $"Sync profiles loaded, but connections are unavailable: {connectionError.Message}",
+            _ => $"Profiles and connections are unavailable: {profileError!.Message} {connectionError!.Message}"
+        };
+        _status.ForeColor = StorageHubTheme.Danger;
     }
 
     public async Task SelectProfileAsync(Guid profileId, CancellationToken cancellationToken = default)
@@ -236,7 +305,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
         if (!draft.HasValidBounds)
         {
             throw new InvalidOperationException(
-                "Complete two different connections and use bounded profile values. Mirror applies only to one-way sync; propagate applies only to two-way sync.");
+                "Complete two non-overlapping locations and use bounded profile, filter, and safety values.");
         }
 
         SyncProfileMutationResponse response;
@@ -273,14 +342,15 @@ public sealed class SyncProfileEditorForm : KryptonForm
     public async Task<SyncRunSummary> GeneratePreviewAsync(CancellationToken cancellationToken = default)
     {
         var profile = await SaveCurrentProfileAsync(cancellationToken).ConfigureAwait(true);
-        _status.Text = "Scanning both endpoints and generating an immutable preview…";
+        _status.Text = "Scanning both locations and preparing the sync plan…";
         _status.ForeColor = StorageHubTheme.TextMuted;
         var response = await _syncClient.GeneratePreviewAsync(new SyncPreviewGenerateRequest(
             SyncManagementIpcContract.CurrentVersion,
             profile.ProfileId,
             Guid.NewGuid()), cancellationToken).ConfigureAwait(true);
         ThrowIfFailure(response.Failure);
-        var run = response.Run ?? throw new InvalidDataException("The agent did not return the generated preview run.");
+        var run = response.Run ?? throw new InvalidDataException("The agent did not return the generated synchronization run.");
+        _lastGeneratedRun = run;
         var plan = response.Plan ?? throw new InvalidDataException("The agent did not return the immutable plan summary.");
         if (plan.SyncRunId != run.SyncRunId ||
             plan.PlanId != run.PlanId ||
@@ -291,7 +361,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
 
         await _review.ShowPreviewAsync(run, cancellationToken).ConfigureAwait(true);
         _tabs.SelectedIndex = 1;
-        _status.Text = "Preview generated. Review the immutable operations before explicit approval.";
+        _status.Text = "Sync plan ready. Review any approval-gated operations, then run it.";
         _status.ForeColor = StorageHubTheme.Success;
         return run;
     }
@@ -335,46 +405,240 @@ public sealed class SyncProfileEditorForm : KryptonForm
 
     private TabPage BuildProfilePage()
     {
-        var page = new TabPage("Profile") { BackColor = StorageHubTheme.Surface, Padding = new Padding(10) };
+        var page = new TabPage("Profile") { BackColor = StorageHubTheme.Canvas, Padding = new Padding(0) };
         var panel = new Panel
         {
             Dock = DockStyle.Fill,
             AutoScroll = true,
-            BackColor = StorageHubTheme.Surface,
-            Padding = new Padding(12)
+            BackColor = StorageHubTheme.Canvas,
+            Padding = new Padding(18)
         };
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 1,
+            Padding = Padding.Empty
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        var intro = CreateSectionHeader(
+            "Design your synchronization",
+            "Choose two saved locations, then select exactly how StorageHub should compare and converge them.");
+        content.Controls.Add(intro);
+
+        var identity = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2 };
+        identity.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
+        identity.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+        identity.Controls.Add(CreateField("Profile name", _name, "Shown in Sync tasks and run history."), 0, 0);
+        identity.Controls.Add(CreateField("Profile state", _enabled, "Disabled profiles can still be reviewed manually."), 1, 0);
+        content.Controls.Add(CreateCard(identity, new Padding(16), new Padding(0, 0, 0, 14)));
+
+        content.Controls.Add(CreateSectionHeader(
+            "1. Choose locations",
+            "Each folder stays relative to its saved connection; credentials and trust never leave that connection."));
+        var locationGrid = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3 };
+        locationGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        locationGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+        locationGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        locationGrid.Controls.Add(CreateLocationCard("A", "PRIMARY", _leftConnection, _leftRoot, _leftBrowse), 0, 0);
+        var swap = new Button { Text = "Swap A / B", AutoSize = true, Anchor = AnchorStyles.None };
+        StorageHubTheme.StyleSecondaryButton(swap);
+        swap.Click += (_, _) => SwapLocations();
+        locationGrid.Controls.Add(swap, 1, 0);
+        locationGrid.Controls.Add(CreateLocationCard("B", "PEER", _rightConnection, _rightRoot, _rightBrowse), 2, 0);
+        content.Controls.Add(locationGrid);
+
+        content.Controls.Add(CreateSectionHeader(
+            "2. Choose behavior",
+            "Select a complete preset. Updates are identity-guarded; every deletion remains approval-gated."));
+        content.Controls.Add(CreateCard(_behavior, new Padding(14), new Padding(0, 0, 0, 14)));
+
+        content.Controls.Add(CreateSectionHeader(
+            "3. Review safety and scope",
+            "Filters are applied before planning. Excluded content is never changed, deleted, or added to the baseline."));
+        var advanced = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2 };
+        advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        var policy = CreateFormTable();
+        UiControlFactory.AddLabeledRow(policy, "Conflicts", _conflictPolicy, "Block and review is safest. Keep both always requires approval.");
+        UiControlFactory.AddLabeledRow(policy, "Maximum deletes", _maximumDeletionCount, "Stop when this item limit is exceeded.");
+        UiControlFactory.AddLabeledRow(policy, "Maximum baseline %", _maximumDeletionPercentage, "Stop when this percentage limit is exceeded.");
+        UiControlFactory.AddLabeledRow(policy, "Transfer buffer", _bufferSize, "Bounded from 1 byte through 1 MiB.");
+        var scope = CreateFormTable();
+        UiControlFactory.AddLabeledRow(scope, "Include globs", _includeGlobs, "Optional; one forward-slash glob per line.");
+        UiControlFactory.AddLabeledRow(scope, "Exclude globs", _excludeGlobs, "StorageHub staging paths are excluded by default.");
+        UiControlFactory.AddLabeledRow(scope, "Hidden content", _includeHiddenFiles, "Clear to exclude dot-prefixed path segments.");
+        advanced.Controls.Add(CreateCard(policy, new Padding(10), new Padding(0, 0, 7, 0)), 0, 0);
+        advanced.Controls.Add(CreateCard(scope, new Padding(10), new Padding(7, 0, 0, 0)), 1, 0);
+        content.Controls.Add(advanced);
+
+        panel.Controls.Add(content);
+        page.Controls.Add(panel);
+        return page;
+    }
+
+    private static TableLayoutPanel CreateSectionHeader(string title, string description)
+    {
+        var header = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            ColumnCount = 1,
+            Margin = new Padding(0, 5, 0, 7)
+        };
+        header.Controls.Add(new Label
+        {
+            Text = title,
+            AutoSize = true,
+            Font = new Font("Segoe UI Semibold", 12F),
+            ForeColor = StorageHubTheme.Text,
+            Margin = Padding.Empty
+        });
+        header.Controls.Add(new Label
+        {
+            Text = description,
+            AutoSize = true,
+            MaximumSize = new Size(940, 0),
+            ForeColor = StorageHubTheme.TextMuted,
+            Margin = new Padding(0, 2, 0, 0)
+        });
+        return header;
+    }
+
+    private static Panel CreateCard(Control content, Padding padding, Padding margin)
+    {
+        var card = new Panel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            BackColor = StorageHubTheme.Surface,
+            BorderStyle = BorderStyle.FixedSingle,
+            Padding = padding,
+            Margin = margin
+        };
+        content.Dock = DockStyle.Top;
+        card.Controls.Add(content);
+        return card;
+    }
+
+    private static TableLayoutPanel CreateField(string label, Control control, string help)
+    {
+        var field = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            ColumnCount = 1,
+            Margin = new Padding(0, 0, 12, 0)
+        };
+        field.Controls.Add(new Label
+        {
+            Text = label,
+            AutoSize = true,
+            Font = StorageHubTheme.CreateSectionFont(),
+            ForeColor = StorageHubTheme.Text,
+            Margin = new Padding(0, 0, 0, 5)
+        });
+        control.Dock = DockStyle.Top;
+        control.Margin = Padding.Empty;
+        field.Controls.Add(control);
+        field.Controls.Add(new Label
+        {
+            Text = help,
+            AutoSize = true,
+            ForeColor = StorageHubTheme.TextMuted,
+            Margin = new Padding(0, 5, 0, 0)
+        });
+        return field;
+    }
+
+    private static Panel CreateLocationCard(
+        string location,
+        string badge,
+        ComboBox connection,
+        TextBox root,
+        Button browse)
+    {
+        var body = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 1,
+            Margin = Padding.Empty
+        };
+        var heading = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2 };
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        heading.Controls.Add(new Label
+        {
+            Text = $"Location {location}",
+            AutoSize = true,
+            Font = new Font("Segoe UI Semibold", 13F),
+            ForeColor = StorageHubTheme.Text,
+            Margin = Padding.Empty
+        }, 0, 0);
+        heading.Controls.Add(new Label
+        {
+            Text = badge,
+            AutoSize = true,
+            Font = new Font("Segoe UI Semibold", 7.5F),
+            ForeColor = StorageHubTheme.Primary,
+            BackColor = Color.FromArgb(232, 240, 253),
+            Padding = new Padding(7, 3, 7, 3),
+            Margin = Padding.Empty
+        }, 1, 0);
+        body.Controls.Add(heading);
+        body.Controls.Add(new Label
+        {
+            Text = "Saved connection",
+            AutoSize = true,
+            ForeColor = StorageHubTheme.TextMuted,
+            Margin = new Padding(0, 14, 0, 4)
+        });
+        connection.Dock = DockStyle.Top;
+        connection.Margin = Padding.Empty;
+        body.Controls.Add(connection);
+        body.Controls.Add(new Label
+        {
+            Text = "Folder inside connection",
+            AutoSize = true,
+            ForeColor = StorageHubTheme.TextMuted,
+            Margin = new Padding(0, 12, 0, 4)
+        });
+        body.Controls.Add(CreateFolderSelector(root, browse));
+        body.Controls.Add(new Label
+        {
+            Text = "Empty means the saved connection root.",
+            AutoSize = true,
+            ForeColor = StorageHubTheme.TextMuted,
+            Margin = new Padding(0, 5, 0, 0)
+        });
+        return CreateCard(body, new Padding(16), new Padding(0));
+    }
+
+    private static TableLayoutPanel CreateFormTable()
+    {
         var table = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 2,
-            Padding = new Padding(8)
+            Margin = Padding.Empty
         };
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        var heading = UiControlFactory.CreateSectionTitle("Profile and endpoint policy");
-        var description = UiControlFactory.CreateDescription(
-            "All paths are connection-relative. Credentials, trust, and client certificates stay with each saved connection.");
-        table.Controls.Add(heading, 0, 0);
-        table.SetColumnSpan(heading, 2);
-        table.Controls.Add(description, 0, 1);
-        table.SetColumnSpan(description, 2);
-        table.RowCount = 2;
-        UiControlFactory.AddLabeledRow(table, "Name", _name, "A user-visible workflow name; never place secrets here.");
-        UiControlFactory.AddLabeledRow(table, "Enabled", _enabled, "Disabled profiles can still be saved and previewed manually.");
-        UiControlFactory.AddLabeledRow(table, "Left connection", _leftConnection, "A saved CL.Storage connection and its per-connection security settings.");
-        UiControlFactory.AddLabeledRow(table, "Left root", _leftRoot, "Empty means the saved connection root.");
-        UiControlFactory.AddLabeledRow(table, "Right connection", _rightConnection, "Must differ from the left connection.");
-        UiControlFactory.AddLabeledRow(table, "Right root", _rightRoot, "Use normalized forward-slash connection-relative paths.");
-        UiControlFactory.AddLabeledRow(table, "Direction", _direction, "One-way or baseline-aware two-way planning.");
-        UiControlFactory.AddLabeledRow(table, "Deletion mode", _deletionMode, "Disabled is the safe default; every delete remains visible in preview.");
-        UiControlFactory.AddLabeledRow(table, "Maximum deletes", _maximumDeletionCount, "The run blocks when this guard is exceeded.");
-        UiControlFactory.AddLabeledRow(table, "Maximum baseline %", _maximumDeletionPercentage, "The run blocks when this percentage guard is exceeded.");
-        UiControlFactory.AddLabeledRow(table, "Overwrite", _overwrite, "Applied only after exact-plan approval and durable dispatch.");
-        UiControlFactory.AddLabeledRow(table, "Transfer buffer (bytes)", _bufferSize, "Bounded from 1 byte through 1 MiB.");
-        panel.Controls.Add(table);
-        page.Controls.Add(panel);
-        return page;
+        return table;
+    }
+
+    private static void FormatConflictPolicy(object? sender, ListControlConvertEventArgs e)
+    {
+        e.Value = e.ListItem switch
+        {
+            SyncIpcConflictPolicy.Block => "Block and review",
+            SyncIpcConflictPolicy.KeepBoth => "Keep both (manual approval)",
+            _ => e.ListItem?.ToString() ?? string.Empty
+        };
     }
 
     private SyncProfileDraftDocument BuildDraft()
@@ -387,12 +651,13 @@ public sealed class SyncProfileEditorForm : KryptonForm
             _leftRoot.Text.Trim(),
             right,
             _rightRoot.Text.Trim(),
-            SelectedEnum<SyncIpcDirection>(_direction),
-            SelectedEnum<SyncIpcDeletionMode>(_deletionMode),
-            SyncIpcConflictPolicy.Block,
+            _behavior.SelectedBehavior,
+            SelectedEnum<SyncIpcConflictPolicy>(_conflictPolicy),
+            ParseGlobs(_includeGlobs),
+            ParseGlobs(_excludeGlobs),
+            _includeHiddenFiles.Checked,
             decimal.ToInt32(_maximumDeletionCount.Value),
             _maximumDeletionPercentage.Value,
-            _overwrite.Checked,
             decimal.ToInt32(_bufferSize.Value),
             _enabled.Checked);
     }
@@ -406,11 +671,13 @@ public sealed class SyncProfileEditorForm : KryptonForm
         _leftRoot.Text = profile.Draft.LeftRoot;
         SelectConnection(_rightConnection, profile.Draft.RightConnectionId);
         _rightRoot.Text = profile.Draft.RightRoot;
-        _direction.SelectedItem = profile.Draft.Direction;
-        _deletionMode.SelectedItem = profile.Draft.DeletionMode;
+        _behavior.SelectedBehavior = profile.Draft.Behavior;
+        _conflictPolicy.SelectedItem = profile.Draft.ConflictPolicy;
+        _includeGlobs.Lines = profile.Draft.IncludeGlobs;
+        _excludeGlobs.Lines = profile.Draft.ExcludeGlobs;
+        _includeHiddenFiles.Checked = profile.Draft.IncludeHiddenFiles;
         _maximumDeletionCount.Value = profile.Draft.MaximumDeletionCount;
         _maximumDeletionPercentage.Value = profile.Draft.MaximumDeletionPercentage;
-        _overwrite.Checked = profile.Draft.Overwrite;
         _bufferSize.Value = profile.Draft.TransferBufferSize;
         SelectProfileChoice(profile.ProfileId);
         _status.Text = $"Loaded profile revision {profile.Revision}.";
@@ -434,11 +701,13 @@ public sealed class SyncProfileEditorForm : KryptonForm
         _enabled.Checked = false;
         _leftRoot.Clear();
         _rightRoot.Clear();
-        _direction.SelectedItem = SyncIpcDirection.LeftToRight;
-        _deletionMode.SelectedItem = SyncIpcDeletionMode.Disabled;
+        _behavior.SelectedBehavior = SyncIpcBehavior.UpdateAToB;
+        _conflictPolicy.SelectedItem = SyncIpcConflictPolicy.Block;
+        _includeGlobs.Clear();
+        _excludeGlobs.Lines = [".storagehub", ".storagehub/**", "**/.storagehub/**"];
+        _includeHiddenFiles.Checked = true;
         _maximumDeletionCount.Value = SyncPresentationCatalog.DefaultMassDeleteItemLimit;
         _maximumDeletionPercentage.Value = SyncPresentationCatalog.DefaultMassDeletePercentageLimit;
-        _overwrite.Checked = false;
         _bufferSize.Value = 64 * 1024;
         if (_leftConnection.Items.Count > 0)
         {
@@ -558,19 +827,60 @@ public sealed class SyncProfileEditorForm : KryptonForm
         throw new InvalidOperationException("A connection referenced by this profile is not available in the connection manager.");
     }
 
-    private void EnforceDirectionCompatibility()
+    private void SwapLocations()
     {
-        if (_direction.SelectedItem is not SyncIpcDirection direction ||
-            _deletionMode.SelectedItem is not SyncIpcDeletionMode deletion)
+        var connection = _leftConnection.SelectedItem;
+        var root = _leftRoot.Text;
+        _leftConnection.SelectedItem = _rightConnection.SelectedItem;
+        _leftRoot.Text = _rightRoot.Text;
+        _rightConnection.SelectedItem = connection;
+        _rightRoot.Text = root;
+    }
+
+    private void LocationConnectionChanged(object? sender, EventArgs e)
+    {
+        if (ReferenceEquals(sender, _leftConnection))
         {
+            _leftRoot.Clear();
+        }
+        else if (ReferenceEquals(sender, _rightConnection))
+        {
+            _rightRoot.Clear();
+        }
+
+        UpdateLocationSelectorState(_leftConnection, _leftRoot, _leftBrowse);
+        UpdateLocationSelectorState(_rightConnection, _rightRoot, _rightBrowse);
+    }
+
+    private void BrowseLeftClicked(object? sender, EventArgs e) =>
+        BrowseLocation(_leftConnection, _leftRoot, "Location A");
+
+    private void BrowseRightClicked(object? sender, EventArgs e) =>
+        BrowseLocation(_rightConnection, _rightRoot, "Location B");
+
+    private void BrowseLocation(ComboBox connectionChoice, TextBox root, string locationName)
+    {
+        if (connectionChoice.SelectedItem is not ConnectionChoice choice)
+        {
+            _status.Text = $"Select a saved connection for {locationName} first.";
+            _status.ForeColor = StorageHubTheme.Danger;
             return;
         }
 
-        if (direction == SyncIpcDirection.TwoWay && deletion == SyncIpcDeletionMode.Mirror ||
-            direction != SyncIpcDirection.TwoWay && deletion == SyncIpcDeletionMode.Propagate)
+        using var picker = new SyncLocationPickerForm(
+            _storageClient,
+            choice.Connection,
+            root.Text.Trim(),
+            locationName);
+        if (picker.ShowDialog(this) == DialogResult.OK)
         {
-            _deletionMode.SelectedItem = SyncIpcDeletionMode.Disabled;
+            root.Text = picker.SelectedRelativePath;
+            _status.Text = picker.SelectedRelativePath.Length == 0
+                ? $"{locationName} uses the root of {choice.Connection.DisplayName}."
+                : $"{locationName} folder selected: {picker.SelectedRelativePath}";
+            _status.ForeColor = StorageHubTheme.Success;
         }
+
     }
 
     private async void ProfileSelectionChanged(object? sender, EventArgs e)
@@ -607,7 +917,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
     {
         await RunBusyAsync(
             token => GeneratePreviewAsync(token),
-            "Generating immutable preview…").ConfigureAwait(true);
+            "Preparing sync plan…").ConfigureAwait(true);
     }
 
     private async Task RunBusyAsync<T>(Func<CancellationToken, Task<T>> action, string status)
@@ -651,6 +961,55 @@ public sealed class SyncProfileEditorForm : KryptonForm
         AccessibleName = accessibleName
     };
 
+    private static Button CreateBrowseButton(string name, string accessibleName)
+    {
+        var button = new Button
+        {
+            Name = name,
+            Text = "Browse...",
+            AutoSize = true,
+            Enabled = false,
+            AccessibleName = accessibleName,
+            AccessibleDescription = "Browse folders inside the selected saved connection."
+        };
+        StorageHubTheme.StyleSecondaryButton(button);
+        return button;
+    }
+
+    private static TableLayoutPanel CreateFolderSelector(TextBox root, Button browse)
+    {
+        var selector = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            ColumnCount = 2,
+            Margin = Padding.Empty
+        };
+        selector.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        selector.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        root.Dock = DockStyle.Fill;
+        root.Margin = new Padding(0, 0, 8, 0);
+        browse.Margin = Padding.Empty;
+        selector.Controls.Add(root, 0, 0);
+        selector.Controls.Add(browse, 1, 0);
+        return selector;
+    }
+
+    private static void UpdateLocationSelectorState(ComboBox connection, TextBox root, Button browse)
+    {
+        var choice = connection.SelectedItem as ConnectionChoice;
+        var canBrowse = choice?.Connection.IsEnabled == true;
+        root.Enabled = canBrowse;
+        browse.Enabled = canBrowse;
+        root.PlaceholderText = choice switch
+        {
+            null => "Select a connection first",
+            { Connection.IsEnabled: false } => "This saved connection is disabled",
+            { Connection.FolderPath.Length: > 0 } => $"Connection root: {choice.Connection.FolderPath}",
+            _ => "Connection root (choose Browse for a subfolder)"
+        };
+    }
+
     private static ComboBox CreateEnumChoice<T>(string accessibleName) where T : struct, Enum
     {
         var combo = CreateChoice(accessibleName);
@@ -669,6 +1028,20 @@ public sealed class SyncProfileEditorForm : KryptonForm
         PlaceholderText = "Connection-relative path (empty = root)",
         AccessibleName = accessibleName
     };
+
+    private static TextBox CreateGlobTextBox(string accessibleName) => new()
+    {
+        Multiline = true,
+        ScrollBars = ScrollBars.Vertical,
+        Height = 58,
+        MaxLength = SyncManagementIpcLimits.MaximumFilterCount * SyncManagementIpcLimits.MaximumGlobLength,
+        AccessibleName = accessibleName
+    };
+
+    private static string[] ParseGlobs(TextBox textBox) => textBox.Lines
+        .Select(static line => line.Trim())
+        .Where(static line => line.Length > 0)
+        .ToArray();
 
     private static NumericUpDown CreateNumeric(
         decimal value,

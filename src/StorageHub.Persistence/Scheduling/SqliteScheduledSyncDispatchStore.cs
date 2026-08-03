@@ -52,13 +52,27 @@ public sealed class SqliteScheduledSyncDispatchStore : IScheduledSyncDispatchSto
                     : SyncPersistenceMutationStatus.NotFound;
             }
 
+            var authorization = await ReadAuthorizationAsync(
+                writer.Connection,
+                transaction,
+                request,
+                cancellationToken).ConfigureAwait(false);
+            if (authorization is null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                return SyncPersistenceMutationStatus.StaleLease;
+            }
+
             var payload = JsonSerializer.Serialize(
                 new ScheduledSyncPreviewOutboxPayload(
                     request.JobId.ToString("D"),
                     request.ProfileId.ToString(),
                     request.LeaseId.ToString("D"),
                     request.FencingToken,
-                    request.ScheduledForUtc),
+                    request.ScheduledForUtc,
+                    authorization.Value.ExecutionMode,
+                    authorization.Value.ProfileRevision,
+                    authorization.Value.ProfilePolicySha256),
                 JsonOptions);
             var enqueue = await SqliteReliableOutboxStore.EnqueueCoreAsync(
                 writer.Connection,
@@ -125,6 +139,30 @@ public sealed class SqliteScheduledSyncDispatchStore : IScheduledSyncDispatchSto
         return Convert.ToInt64(
             await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
             System.Globalization.CultureInfo.InvariantCulture) == 1;
+    }
+
+    private static async ValueTask<(string ExecutionMode, long ProfileRevision, string ProfilePolicySha256)?>
+        ReadAuthorizationAsync(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            ScheduledSyncDispatchRequest request,
+            CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT schedule.execution_mode, profile.profile_revision, profile.policy_hash
+            FROM sync_schedules AS schedule
+            JOIN sync_profiles AS profile ON profile.sync_profile_id = schedule.sync_profile_id
+            WHERE schedule.sync_schedule_id = $jobId
+              AND schedule.sync_profile_id = $profileId;
+            """;
+        command.Parameters.AddWithValue("$jobId", request.JobId.ToString("D"));
+        command.Parameters.AddWithValue("$profileId", request.ProfileId.ToString());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? (reader.GetString(0), reader.GetInt64(1), reader.GetString(2))
+            : null;
     }
 
     private static async ValueTask<bool> ScheduleExistsAsync(

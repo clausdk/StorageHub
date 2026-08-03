@@ -312,7 +312,17 @@ public sealed class IpcContractTests
             Direction = SyncIpcDirection.TwoWay,
             DeletionMode = SyncIpcDeletionMode.Mirror
         }).HasValidBounds);
-        Assert.False((draft with { LeftConnectionId = draft.RightConnectionId }).HasValidBounds);
+        Assert.False((draft with
+        {
+            LeftConnectionId = draft.RightConnectionId,
+            LeftRoot = draft.RightRoot
+        }).HasValidBounds);
+        Assert.True((draft with
+        {
+            LeftConnectionId = draft.RightConnectionId,
+            LeftRoot = "incoming",
+            RightRoot = "archive"
+        }).HasValidBounds);
         Assert.False((draft with
         {
             TransferBufferSize = SyncManagementIpcLimits.MaximumTransferBufferSize + 1

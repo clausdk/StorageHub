@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using StorageHub.Domain.Identifiers;
 using StorageHub.Sync;
@@ -169,7 +170,9 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
                 profile.Enabled,
                 checked(expectedRevision + 1),
                 current.CreatedAtUtc,
-                _timeProvider.GetUtcNow());
+                _timeProvider.GetUtcNow(),
+                profile.FilterPolicy,
+                profile.Behavior);
             var policyChanged = !StringComparer.Ordinal.Equals(
                 current.PolicySha256,
                 updated.PolicySha256);
@@ -255,11 +258,12 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
             reader.GetInt64(10) == 1,
             reader.GetInt64(11),
             SyncPersistenceUtilities.ParseTimestamp(reader.GetString(16), "sync profile creation time"),
-            SyncPersistenceUtilities.ParseTimestamp(reader.GetString(17), "sync profile update time"));
-        if (!StringComparer.OrdinalIgnoreCase.Equals(profile.PolicySha256, reader.GetString(9)))
-        {
-            throw new InvalidDataException("The persisted sync profile policy hash is invalid.");
-        }
+            SyncPersistenceUtilities.ParseTimestamp(reader.GetString(17), "sync profile update time"),
+            new SyncPathFilterPolicy(
+                JsonSerializer.Deserialize<string[]>(reader.GetString(19)) ?? [],
+                JsonSerializer.Deserialize<string[]>(reader.GetString(20)) ?? [],
+                reader.GetInt64(21) == 1),
+            ParseBehavior(reader.GetString(18)));
 
         return profile;
     }
@@ -277,12 +281,14 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
             (sync_profile_id, display_name, left_profile_id, right_profile_id, left_root, right_root,
              direction, deletion_policy, conflict_policy, policy_hash, enabled,
              profile_revision, maximum_deletion_count, maximum_deletion_percentage,
-             transfer_overwrite, transfer_buffer_size, created_utc, updated_utc)
+             transfer_overwrite, transfer_buffer_size, created_utc, updated_utc,
+             behavior, include_globs_json, exclude_globs_json, include_hidden_files)
             VALUES
             ($id, $name, $leftId, $rightId, $leftRoot, $rightRoot,
              $direction, $deletion, $conflict, $hash, $enabled,
              $revision, $maximumDeletes, $maximumPercentage,
-             $overwrite, $bufferSize, $created, $updated);
+             $overwrite, $bufferSize, $created, $updated,
+             $behavior, $includeGlobs, $excludeGlobs, $includeHidden);
             """;
         Bind(command, profile);
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -315,6 +321,10 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
                 maximum_deletion_percentage = $maximumPercentage,
                 transfer_overwrite = $overwrite,
                 transfer_buffer_size = $bufferSize,
+                behavior = $behavior,
+                include_globs_json = $includeGlobs,
+                exclude_globs_json = $excludeGlobs,
+                include_hidden_files = $includeHidden,
                 updated_utc = $updated,
                 baseline_generation = CASE WHEN $reset = 1 THEN 0 ELSE baseline_generation END,
                 baseline_revision = CASE WHEN $reset = 1 THEN baseline_revision + 1 ELSE baseline_revision END,
@@ -338,7 +348,7 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
         command.Parameters.AddWithValue("$rightRoot", profile.RightRoot);
         command.Parameters.AddWithValue("$direction", FormatDirection(profile.Direction));
         command.Parameters.AddWithValue("$deletion", FormatDeletionMode(profile.DeletionMode));
-        command.Parameters.AddWithValue("$conflict", "block");
+        command.Parameters.AddWithValue("$conflict", profile.ConflictPolicy == SyncConflictPolicy.KeepBoth ? "keep-both" : "block");
         command.Parameters.AddWithValue("$hash", profile.PolicySha256);
         command.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
         command.Parameters.AddWithValue("$revision", profile.Revision);
@@ -350,6 +360,10 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
         command.Parameters.AddWithValue("$bufferSize", profile.TransferOptions.BufferSize);
         command.Parameters.AddWithValue("$created", SyncPersistenceUtilities.FormatTimestamp(profile.CreatedAtUtc));
         command.Parameters.AddWithValue("$updated", SyncPersistenceUtilities.FormatTimestamp(profile.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$behavior", FormatBehavior(profile.Behavior));
+        command.Parameters.AddWithValue("$includeGlobs", JsonSerializer.Serialize(profile.FilterPolicy.IncludeGlobs));
+        command.Parameters.AddWithValue("$excludeGlobs", JsonSerializer.Serialize(profile.FilterPolicy.ExcludeGlobs));
+        command.Parameters.AddWithValue("$includeHidden", profile.FilterPolicy.IncludeHiddenFiles ? 1 : 0);
     }
 
     private static async Task DeleteBaselineAsync(
@@ -406,7 +420,36 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
     private static SyncConflictPolicy ParseConflictPolicy(string value) => value switch
     {
         "block" => SyncConflictPolicy.Block,
+        "keep-both" => SyncConflictPolicy.KeepBoth,
         _ => throw new InvalidDataException("The persisted sync conflict policy is invalid."),
+    };
+
+    private static string FormatBehavior(SyncBehavior value) => value switch
+    {
+        SyncBehavior.CopyNewFilesAToB => "copy-new-a-to-b",
+        SyncBehavior.UpdateAToB => "update-a-to-b",
+        SyncBehavior.MirrorAToB => "mirror-a-to-b",
+        SyncBehavior.CopyNewFilesBToA => "copy-new-b-to-a",
+        SyncBehavior.UpdateBToA => "update-b-to-a",
+        SyncBehavior.MirrorBToA => "mirror-b-to-a",
+        SyncBehavior.TwoWaySync => "two-way",
+        SyncBehavior.TwoWayWithDeletionPropagation => "two-way-delete",
+        SyncBehavior.CompareOnly => "compare-only",
+        _ => throw new ArgumentOutOfRangeException(nameof(value)),
+    };
+
+    private static SyncBehavior ParseBehavior(string value) => value switch
+    {
+        "copy-new-a-to-b" => SyncBehavior.CopyNewFilesAToB,
+        "update-a-to-b" => SyncBehavior.UpdateAToB,
+        "mirror-a-to-b" => SyncBehavior.MirrorAToB,
+        "copy-new-b-to-a" => SyncBehavior.CopyNewFilesBToA,
+        "update-b-to-a" => SyncBehavior.UpdateBToA,
+        "mirror-b-to-a" => SyncBehavior.MirrorBToA,
+        "two-way" => SyncBehavior.TwoWaySync,
+        "two-way-delete" => SyncBehavior.TwoWayWithDeletionPropagation,
+        "compare-only" => SyncBehavior.CompareOnly,
+        _ => throw new InvalidDataException("The persisted sync behavior is invalid."),
     };
 
     private static void EnsureId(SyncProfileId profileId)
@@ -433,6 +476,7 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
         sync_profile_id, display_name, left_profile_id, left_root, right_profile_id, right_root,
         direction, deletion_policy, conflict_policy, policy_hash, enabled, profile_revision,
         maximum_deletion_count, maximum_deletion_percentage, transfer_overwrite,
-        transfer_buffer_size, created_utc, updated_utc
+        transfer_buffer_size, created_utc, updated_utc, behavior, include_globs_json,
+        exclude_globs_json, include_hidden_files
         """;
 }

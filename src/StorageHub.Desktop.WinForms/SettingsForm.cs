@@ -1,20 +1,13 @@
 using Krypton.Toolkit;
+using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
 public sealed class SettingsForm : KryptonForm
 {
-    private static readonly string[] CategoryNames =
-    [
-        "General",
-        "Connections & trust",
-        "Updates",
-        "About"
-    ];
-
     private readonly DesktopUpdatePreferencesStore _store;
     private readonly Action<DesktopUpdatePreferences>? _saved;
-    private readonly ListBox _categories;
+    private readonly TreeView _categories;
     private readonly Dictionary<string, Control> _pages = new(StringComparer.Ordinal);
     private readonly CheckBox _checkAutomatically;
     private readonly CheckBox _downloadAutomatically;
@@ -22,6 +15,13 @@ public sealed class SettingsForm : KryptonForm
     private readonly CheckBox _includePrereleases;
     private readonly ComboBox _sshDiscovery;
     private readonly Label _sshDiscoveryDescription;
+    private readonly TextBox _externalEditor;
+    private readonly NumericUpDown _maximumEditableKilobytes;
+    private readonly CheckBox _adaptiveConcurrency;
+    private readonly NumericUpDown _minimumConcurrency;
+    private readonly NumericUpDown _maximumTransferConcurrency;
+    private readonly NumericUpDown _perConnectionConcurrency;
+    private readonly NumericUpDown _maximumSyncConcurrency;
     private readonly Button _apply;
 
     public SettingsForm()
@@ -63,6 +63,30 @@ public sealed class SettingsForm : KryptonForm
             "Include engineering preview releases",
             "Keep enabled while using StorageHub preview builds. Disable it later to receive stable releases only.",
             preferences.IncludePrereleases);
+        _externalEditor = new TextBox
+        {
+            Text = preferences.ExternalEditorPath ?? string.Empty,
+            Width = 520,
+            PlaceholderText = "Choose an editor executable, or leave blank for the Windows default",
+            AccessibleName = "External editor executable"
+        };
+        _maximumEditableKilobytes = new NumericUpDown
+        {
+            Minimum = 1,
+            Maximum = EditableFileIpcContract.MaximumContentBytes / 1024,
+            Value = Math.Clamp(preferences.MaximumEditableFileBytes / 1024, 1, EditableFileIpcContract.MaximumContentBytes / 1024),
+            Width = 120,
+            ThousandsSeparator = true,
+            AccessibleName = "Maximum externally editable file size in KiB"
+        };
+        _adaptiveConcurrency = CreateOption(
+            "Automatically tune concurrency from observed speed",
+            "Starts at the minimum, increases after sustained healthy throughput, and backs off on slowdown or provider errors.",
+            preferences.AdaptiveConcurrency);
+        _minimumConcurrency = CreateConcurrencyInput(1, 8, preferences.MinimumConcurrency, "Starting concurrency");
+        _maximumTransferConcurrency = CreateConcurrencyInput(1, 32, preferences.MaximumTransferConcurrency, "Maximum concurrent transfers");
+        _perConnectionConcurrency = CreateConcurrencyInput(1, 16, preferences.PerConnectionConcurrency, "Maximum transfers per connection");
+        _maximumSyncConcurrency = CreateConcurrencyInput(1, 8, preferences.MaximumSyncConcurrency, "Maximum concurrent synchronizations");
 
         _sshDiscovery = new ComboBox
         {
@@ -98,17 +122,28 @@ public sealed class SettingsForm : KryptonForm
         };
         UpdateDiscoveryDescription();
 
-        _categories = new ListBox
+        _categories = new TreeView
         {
             Dock = DockStyle.Fill,
             BorderStyle = BorderStyle.None,
-            IntegralHeight = false,
-            ItemHeight = 38,
-            Font = StorageHubTheme.CreateSectionFont(),
+            ItemHeight = 30,
+            Indent = 20,
+            FullRowSelect = true,
+            HideSelection = false,
+            ShowLines = true,
+            ShowPlusMinus = true,
+            ShowRootLines = false,
+            Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point),
             BackColor = StorageHubTheme.SurfaceMuted,
             AccessibleName = "Settings categories"
         };
-        _categories.Items.AddRange(CategoryNames);
+        var work = new TreeNode("Transfers & sync") { Name = "Performance" };
+        work.Nodes.Add(new TreeNode("Concurrency") { Name = "Performance" });
+        _categories.Nodes.Add(work);
+        _categories.Nodes.Add(new TreeNode("Editing") { Name = "Editing" });
+        _categories.Nodes.Add(new TreeNode("Connections & trust") { Name = "Connections & trust" });
+        _categories.Nodes.Add(new TreeNode("Updates") { Name = "Updates" });
+        work.Expand();
 
         var pageHost = new Panel
         {
@@ -116,10 +151,10 @@ public sealed class SettingsForm : KryptonForm
             BackColor = StorageHubTheme.Surface,
             Padding = new Padding(28, 24, 28, 18)
         };
-        AddPage(pageHost, "General", BuildGeneralPage());
+        AddPage(pageHost, "Performance", BuildPerformancePage());
+        AddPage(pageHost, "Editing", BuildEditingPage());
         AddPage(pageHost, "Connections & trust", BuildConnectionsPage());
         AddPage(pageHost, "Updates", BuildUpdatesPage());
-        AddPage(pageHost, "About", BuildAboutPage());
 
         var navigation = new Panel
         {
@@ -173,16 +208,23 @@ public sealed class SettingsForm : KryptonForm
         AcceptButton = ok;
         CancelButton = cancel;
 
-        _categories.SelectedIndexChanged += CategorySelected;
+        _categories.AfterSelect += CategorySelected;
         _checkAutomatically.CheckedChanged += UpdateDependencies;
         _downloadAutomatically.CheckedChanged += UpdateDependencies;
         _sshDiscovery.SelectedIndexChanged += DiscoverySelectionChanged;
+        _externalEditor.TextChanged += MarkDirty;
+        _maximumEditableKilobytes.ValueChanged += MarkDirty;
+        _adaptiveConcurrency.CheckedChanged += ConcurrencyChanged;
+        _minimumConcurrency.ValueChanged += ConcurrencyChanged;
+        _maximumTransferConcurrency.ValueChanged += ConcurrencyChanged;
+        _perConnectionConcurrency.ValueChanged += ConcurrencyChanged;
+        _maximumSyncConcurrency.ValueChanged += ConcurrencyChanged;
         foreach (var option in UpdateOptions())
         {
             option.CheckedChanged += MarkDirty;
         }
 
-        _categories.SelectedIndex = 0;
+        _categories.SelectedNode = work.Nodes[0];
         UpdateDependencies(this, EventArgs.Empty);
     }
 
@@ -190,10 +232,17 @@ public sealed class SettingsForm : KryptonForm
     {
         if (disposing)
         {
-            _categories.SelectedIndexChanged -= CategorySelected;
+            _categories.AfterSelect -= CategorySelected;
             _checkAutomatically.CheckedChanged -= UpdateDependencies;
             _downloadAutomatically.CheckedChanged -= UpdateDependencies;
             _sshDiscovery.SelectedIndexChanged -= DiscoverySelectionChanged;
+            _externalEditor.TextChanged -= MarkDirty;
+            _maximumEditableKilobytes.ValueChanged -= MarkDirty;
+            _adaptiveConcurrency.CheckedChanged -= ConcurrencyChanged;
+            _minimumConcurrency.ValueChanged -= ConcurrencyChanged;
+            _maximumTransferConcurrency.ValueChanged -= ConcurrencyChanged;
+            _perConnectionConcurrency.ValueChanged -= ConcurrencyChanged;
+            _maximumSyncConcurrency.ValueChanged -= ConcurrencyChanged;
             foreach (var option in UpdateOptions())
             {
                 option.CheckedChanged -= MarkDirty;
@@ -205,17 +254,33 @@ public sealed class SettingsForm : KryptonForm
         base.Dispose(disposing);
     }
 
-    private static FlowLayoutPanel BuildGeneralPage()
+    private FlowLayoutPanel BuildPerformancePage()
     {
         var page = CreatePage(
-            "General",
-            "StorageHub keeps the desktop intentionally predictable. All currently configurable behavior is grouped in this window.");
+            "Concurrency",
+            "One provider-neutral policy controls Local, S3, FTP, FTPS, and SFTP transfers plus background synchronization work.");
+        page.Controls.Add(_adaptiveConcurrency);
+        var table = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Width = 650,
+            ColumnCount = 2,
+            Padding = new Padding(0, 12, 0, 0)
+        };
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 72));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
+        AddConcurrencyRow(table, "Start with", _minimumConcurrency,
+            "The adaptive controller begins conservatively at this many jobs.");
+        AddConcurrencyRow(table, "Maximum transfers", _maximumTransferConcurrency,
+            "Global ceiling shared by transfers across every supported provider.");
+        AddConcurrencyRow(table, "Per saved connection", _perConnectionConcurrency,
+            "Prevents one server, bucket, or local connection from consuming every worker.");
+        AddConcurrencyRow(table, "Maximum synchronizations", _maximumSyncConcurrency,
+            "Separate ceiling for scheduled and manually approved synchronization runs.");
+        page.Controls.Add(table);
         page.Controls.Add(CreateInformationCard(
-            "Workspace",
-            "StorageHub opens with a dual-pane workspace. Workspace navigation, queues, schedules, and saved connections use the background agent and remain scoped to the signed-in Windows user."));
-        page.Controls.Add(CreateInformationCard(
-            "Settings storage",
-            "Desktop preferences are schema-versioned, size-bounded, and atomically saved under your local application-data folder. Credentials and private keys are never stored here."));
+            "How automatic tuning works",
+            "StorageHub measures completed work, raises concurrency only after sustained throughput, and lowers it immediately after significant slowdown or a provider failure. Changes apply when the background Agent safely restarts."));
         return page;
     }
 
@@ -246,6 +311,79 @@ public sealed class SettingsForm : KryptonForm
         return page;
     }
 
+    private FlowLayoutPanel BuildEditingPage()
+    {
+        var page = CreatePage(
+            "External editing",
+            "Download a bounded remote file into StorageHub's private temporary workspace, open it in your editor, and ask before uploading detected changes.");
+        var layout = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Width = 650,
+            ColumnCount = 2,
+            Padding = new Padding(0, 12, 0, 0)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        layout.Controls.Add(new Label
+        {
+            Text = "Editor executable",
+            AutoSize = true,
+            Font = StorageHubTheme.CreateSectionFont(),
+            ForeColor = StorageHubTheme.Text
+        }, 0, 0);
+        layout.SetColumnSpan(layout.Controls[^1], 2);
+        layout.Controls.Add(_externalEditor, 0, 1);
+        var browse = new Button { Text = "Browse...", AutoSize = true };
+        StorageHubTheme.StyleSecondaryButton(browse);
+        browse.Click += BrowseEditorClicked;
+        layout.Controls.Add(browse, 1, 1);
+        layout.Controls.Add(new Label
+        {
+            Text = "Leave blank to use the Windows file association. StorageHub passes only the temporary file path to the editor.",
+            AutoSize = true,
+            MaximumSize = new Size(620, 0),
+            ForeColor = StorageHubTheme.TextMuted,
+            Padding = new Padding(0, 4, 0, 12)
+        }, 0, 2);
+        layout.SetColumnSpan(layout.Controls[^1], 2);
+        layout.Controls.Add(new Label
+        {
+            Text = "Maximum editable file size (KiB)",
+            AutoSize = true,
+            Font = StorageHubTheme.CreateSectionFont(),
+            ForeColor = StorageHubTheme.Text
+        }, 0, 3);
+        layout.SetColumnSpan(layout.Controls[^1], 2);
+        layout.Controls.Add(_maximumEditableKilobytes, 0, 4);
+        layout.Controls.Add(new Label
+        {
+            Text = "Hard limit: 1,024 KiB (1 MiB). Larger files are rejected before download and before re-upload.",
+            AutoSize = true,
+            MaximumSize = new Size(620, 0),
+            ForeColor = StorageHubTheme.Warning,
+            Padding = new Padding(0, 5, 0, 0)
+        }, 0, 5);
+        layout.SetColumnSpan(layout.Controls[^1], 2);
+        page.Controls.Add(layout);
+        return page;
+    }
+
+    private void BrowseEditorClicked(object? sender, EventArgs e)
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Choose external editor",
+            Filter = "Applications (*.exe)|*.exe|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            _externalEditor.Text = dialog.FileName;
+        }
+    }
+
     private FlowLayoutPanel BuildUpdatesPage()
     {
         var page = CreatePage(
@@ -274,17 +412,6 @@ public sealed class SettingsForm : KryptonForm
             AccessibleName = "Update source and installed version"
         });
         page.Controls.Add(options);
-        return page;
-    }
-
-    private static FlowLayoutPanel BuildAboutPage()
-    {
-        var page = CreatePage(
-            "About StorageHub",
-            $"StorageHub {DesktopApplicationVersion.Current}\nOpen-source secure storage manager\nPowered by CodeLogic and CL.Storage");
-        page.Controls.Add(CreateInformationCard(
-            "Security model",
-            "Remote identities are never trusted merely because they were fetched. Compare a discovered SHA-256 fingerprint with one obtained through a separate trusted channel before saving it."));
         return page;
     }
 
@@ -401,9 +528,49 @@ public sealed class SettingsForm : KryptonForm
             AccessibleDescription = description
         };
 
+    private static NumericUpDown CreateConcurrencyInput(int minimum, int maximum, int value, string accessibleName) =>
+        new()
+        {
+            Minimum = minimum,
+            Maximum = maximum,
+            Value = Math.Clamp(value, minimum, maximum),
+            Width = 110,
+            AccessibleName = accessibleName
+        };
+
+    private static void AddConcurrencyRow(
+        TableLayoutPanel table,
+        string label,
+        Control input,
+        string description)
+    {
+        var row = table.RowCount++;
+        var text = new Label
+        {
+            Text = label,
+            AutoSize = true,
+            Font = StorageHubTheme.CreateSectionFont(),
+            ForeColor = StorageHubTheme.Text,
+            Padding = new Padding(0, 7, 8, 0)
+        };
+        table.Controls.Add(text, 0, row);
+        table.Controls.Add(input, 1, row);
+        var help = new Label
+        {
+            Text = description,
+            AutoSize = true,
+            MaximumSize = new Size(610, 0),
+            ForeColor = StorageHubTheme.TextMuted,
+            Padding = new Padding(0, 2, 0, 10)
+        };
+        table.Controls.Add(help, 0, row + 1);
+        table.SetColumnSpan(help, 2);
+        table.RowCount++;
+    }
+
     private void CategorySelected(object? sender, EventArgs e)
     {
-        var selected = _categories.SelectedItem as string;
+        var selected = _categories.SelectedNode?.Name;
         foreach (var page in _pages)
         {
             page.Value.Visible = string.Equals(page.Key, selected, StringComparison.Ordinal);
@@ -418,6 +585,24 @@ public sealed class SettingsForm : KryptonForm
     {
         _downloadAutomatically.Enabled = _checkAutomatically.Checked;
         _restartAutomatically.Enabled = _checkAutomatically.Checked && _downloadAutomatically.Checked;
+        _minimumConcurrency.Enabled = _adaptiveConcurrency.Checked;
+    }
+
+    private void ConcurrencyChanged(object? sender, EventArgs e)
+    {
+        var minimum = (int)_minimumConcurrency.Value;
+        if (_maximumTransferConcurrency.Value < minimum)
+        {
+            _maximumTransferConcurrency.Value = minimum;
+        }
+
+        if (_maximumSyncConcurrency.Value < minimum)
+        {
+            _maximumSyncConcurrency.Value = minimum;
+        }
+
+        UpdateDependencies(sender, e);
+        MarkDirty(sender, e);
     }
 
     private void DiscoverySelectionChanged(object? sender, EventArgs e)
@@ -452,12 +637,34 @@ public sealed class SettingsForm : KryptonForm
         {
             var discovery = (_sshDiscovery.SelectedItem as DiscoveryChoice)?.Mode
                 ?? SshHostKeyDiscoveryMode.AskBeforeFetching;
+            var editorPath = string.IsNullOrWhiteSpace(_externalEditor.Text)
+                ? null
+                : Path.GetFullPath(_externalEditor.Text.Trim());
+            if (editorPath is not null && (!File.Exists(editorPath) ||
+                (File.GetAttributes(editorPath) & FileAttributes.ReparsePoint) != 0))
+            {
+                _ = MessageBox.Show(
+                    this,
+                    "Choose an existing editor executable that is not a symbolic link or reparse point.",
+                    "External editor",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return false;
+            }
+
             var preferences = new DesktopUpdatePreferences(
                 _checkAutomatically.Checked,
                 _downloadAutomatically.Checked,
                 _restartAutomatically.Checked,
                 _includePrereleases.Checked,
-                discovery);
+                discovery,
+                editorPath,
+                checked((int)_maximumEditableKilobytes.Value * 1024),
+                _adaptiveConcurrency.Checked,
+                (int)_minimumConcurrency.Value,
+                (int)_maximumTransferConcurrency.Value,
+                (int)_perConnectionConcurrency.Value,
+                (int)_maximumSyncConcurrency.Value);
             if (_saved is null)
             {
                 _store.Save(preferences);
@@ -470,7 +677,11 @@ public sealed class SettingsForm : KryptonForm
             _apply.Enabled = false;
             return true;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        catch (Exception error) when (error is
+            IOException or
+            UnauthorizedAccessException or
+            ArgumentException or
+            NotSupportedException)
         {
             _ = MessageBox.Show(
                 this,

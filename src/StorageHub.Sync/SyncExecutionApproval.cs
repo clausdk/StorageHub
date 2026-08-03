@@ -35,7 +35,8 @@ public readonly record struct SyncExecutionApproval
         SyncExecutionSnapshots snapshots,
         SyncPlanExecutionMode mode = SyncPlanExecutionMode.Execute,
         DeletionSafetyPolicy? deletionPolicy = null,
-        TransferExecutionOptions? transferOptions = null)
+        TransferExecutionOptions? transferOptions = null,
+        string? profilePolicySha256 = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(sessions);
@@ -47,7 +48,13 @@ public readonly record struct SyncExecutionApproval
 
         deletionPolicy ??= DeletionSafetyPolicy.Default;
         transferOptions ??= new TransferExecutionOptions();
-        return Compute(plan, sessions, snapshots, mode, deletionPolicy, transferOptions);
+        if (profilePolicySha256 is not null &&
+            (profilePolicySha256.Length != 64 || !profilePolicySha256.All(Uri.IsHexDigit)))
+        {
+            throw new ArgumentException("The profile policy binding must be a SHA-256 value.", nameof(profilePolicySha256));
+        }
+
+        return Compute(plan, sessions, snapshots, mode, deletionPolicy, transferOptions, profilePolicySha256);
     }
 
     public static SyncExecutionApproval Parse(string sha256Hex)
@@ -99,7 +106,8 @@ public readonly record struct SyncExecutionApproval
         SyncExecutionSnapshots snapshots,
         SyncPlanExecutionMode mode,
         DeletionSafetyPolicy deletionPolicy,
-        TransferExecutionOptions transferOptions)
+        TransferExecutionOptions transferOptions,
+        string? profilePolicySha256 = null)
     {
         using var writer = new ApprovalDigestWriter();
         writer.AppendInt32(1); // Approval schema version.
@@ -139,6 +147,11 @@ public readonly record struct SyncExecutionApproval
 
         writer.AppendBoolean(transferOptions.Overwrite);
         writer.AppendInt32(transferOptions.BufferSize);
+        writer.AppendBoolean(profilePolicySha256 is not null);
+        if (profilePolicySha256 is not null)
+        {
+            writer.AppendString(profilePolicySha256.ToLowerInvariant());
+        }
         return new SyncExecutionApproval(writer.GetHashAndReset());
     }
 

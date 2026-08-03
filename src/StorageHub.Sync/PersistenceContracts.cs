@@ -13,7 +13,10 @@ public sealed record ScheduledSyncPreviewOutboxPayload(
     string SyncProfileId,
     string LeaseId,
     long FencingToken,
-    DateTimeOffset ScheduledForUtc);
+    DateTimeOffset ScheduledForUtc,
+    string ExecutionMode = "preview-only",
+    long AuthorizedProfileRevision = 0,
+    string AuthorizedProfilePolicySha256 = "");
 
 public sealed record SyncApplyOutboxPayload(
     string SyncRunId,
@@ -210,6 +213,13 @@ public sealed record SyncApplyDispatchRequest(
 
 public interface ISyncRunStore
 {
+    ValueTask<IReadOnlyList<SyncPreviewRecord>> ListAsync(
+        SyncProfileId? profileId,
+        int offset,
+        int maximumCount,
+        CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult<IReadOnlyList<SyncPreviewRecord>>([]);
+
     ValueTask<SyncPreviewRecord?> GetAsync(
         SyncRunId syncRunId,
         CancellationToken cancellationToken = default);

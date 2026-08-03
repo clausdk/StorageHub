@@ -2,6 +2,7 @@ using System.Text.Json;
 using StorageHub.Agent.Ipc;
 using StorageHub.Contracts.Ipc;
 using StorageHub.Contracts.Results;
+using StorageHub.Domain.Capabilities;
 using StorageHub.Domain.Identifiers;
 using StorageHub.Domain.Storage;
 using StorageHub.Storage.Abstractions;
@@ -11,9 +12,9 @@ using StorageHub.Sync;
 namespace StorageHub.Agent.Windows;
 
 /// <summary>
-/// Exposes only bounded, read-only advanced object inspection over the normal authenticated pipe.
-/// Saved profile resolution and the root-scoped provider connection are delegated to the same
-/// connector used by background synchronization.
+/// Exposes bounded advanced object inspection plus an explicitly size-limited external-editor
+/// download/upload workflow over the normal authenticated pipe. Saved profile resolution and the
+/// root-scoped provider connection are delegated to the same connector used by synchronization.
 /// </summary>
 public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
 {
@@ -27,7 +28,10 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
     public bool CanHandle(string messageType) => messageType is
         ObjectInspectorIpcMessageTypes.VersionListRequest or
         ObjectInspectorIpcMessageTypes.MetadataGetRequest or
-        ObjectInspectorIpcMessageTypes.TagsGetRequest;
+        ObjectInspectorIpcMessageTypes.TagsGetRequest or
+        EditableFileIpcMessageTypes.DownloadRequest or
+        EditableFileIpcMessageTypes.UploadRequest or
+        EditableFileIpcMessageTypes.DirectoryEnsureRequest;
 
     public ValueTask<AgentIpcCommandResponse> HandleAsync(
         IpcEnvelope request,
@@ -42,6 +46,12 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
                 GetMetadataAsync(request, cancellationToken),
             ObjectInspectorIpcMessageTypes.TagsGetRequest =>
                 GetTagsAsync(request, cancellationToken),
+            EditableFileIpcMessageTypes.DownloadRequest =>
+                DownloadEditableFileAsync(request, cancellationToken),
+            EditableFileIpcMessageTypes.UploadRequest =>
+                UploadEditedFileAsync(request, cancellationToken),
+            EditableFileIpcMessageTypes.DirectoryEnsureRequest =>
+                EnsureDirectoryAsync(request, cancellationToken),
             _ => ValueTask.FromResult(AgentIpcCommandResponse.Error(
                 "ipc.message.unsupported",
                 "The requested IPC operation is not supported by this agent version."))
@@ -276,6 +286,282 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
         }
     }
 
+    private async ValueTask<AgentIpcCommandResponse> DownloadEditableFileAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        EditableFileDownloadRequest request;
+        try
+        {
+            request = envelope.DeserializePayload<EditableFileDownloadRequest>();
+        }
+        catch (JsonException)
+        {
+            return InvalidPayload();
+        }
+
+        if (!request.HasValidBounds)
+        {
+            return InvalidRequest(request.ContractVersion);
+        }
+
+        try
+        {
+            var opened = await _connector.OpenAsync(
+                new ConnectionProfileId(request.Address.ConnectionId),
+                cancellationToken).ConfigureAwait(false);
+            if (opened.IsFailure)
+            {
+                return DownloadFailure(request, SanitizeFailure(opened.Error));
+            }
+
+            await using var connection = opened.Value;
+            var validated = ValidateAndCreateAddress(connection.Session, request.Address);
+            if (validated.Failure is not null)
+            {
+                return DownloadFailure(request, validated.Failure);
+            }
+
+            var entry = await connection.Session.GetEntryAsync(validated.Address!, cancellationToken)
+                .ConfigureAwait(false);
+            if (entry.IsFailure)
+            {
+                return DownloadFailure(request, SanitizeFailure(entry.Error));
+            }
+
+            if (entry.Value.Kind != StorageEntryKind.File || entry.Value.Size is > EditableFileIpcContract.MaximumContentBytes ||
+                entry.Value.Size > request.MaximumBytes)
+            {
+                return DownloadFailure(request, new StorageIpcFailure(
+                    "storage.editor.file_too_large",
+                    StorageIpcFailureCategory.Validation,
+                    "The file exceeds the configured external-editor size limit.",
+                    IsTransient: false));
+            }
+
+            var read = await connection.Session.OpenReadAsync(new StorageReadRequest(
+                validated.Address!,
+                ExpectedVersionId: request.Address.VersionId,
+                ExpectedEntityTag: request.Address.EntityTag), cancellationToken).ConfigureAwait(false);
+            if (read.IsFailure)
+            {
+                return DownloadFailure(request, SanitizeFailure(read.Error));
+            }
+
+            await using var stream = read.Value;
+            var content = await ReadBoundedAsync(stream, request.MaximumBytes, cancellationToken)
+                .ConfigureAwait(false);
+            if (content is null)
+            {
+                return DownloadFailure(request, new StorageIpcFailure(
+                    "storage.editor.file_too_large",
+                    StorageIpcFailureCategory.Validation,
+                    "The file exceeds the configured external-editor size limit.",
+                    IsTransient: false));
+            }
+
+            return AgentIpcCommandResponse.Create(
+                EditableFileIpcMessageTypes.DownloadResponse,
+                new EditableFileDownloadResponse(
+                    request.ContractVersion,
+                    request.Address,
+                    content,
+                    entry.Value.ContentType));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return DownloadFailure(request, InspectorUnavailable());
+        }
+    }
+
+    private async ValueTask<AgentIpcCommandResponse> UploadEditedFileAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        EditableFileUploadRequest request;
+        try
+        {
+            request = envelope.DeserializePayload<EditableFileUploadRequest>();
+        }
+        catch (JsonException)
+        {
+            return InvalidPayload();
+        }
+
+        if (!request.HasValidBounds)
+        {
+            return InvalidRequest(request.ContractVersion);
+        }
+
+        try
+        {
+            var opened = await _connector.OpenAsync(
+                new ConnectionProfileId(request.Address.ConnectionId),
+                cancellationToken).ConfigureAwait(false);
+            if (opened.IsFailure)
+            {
+                return UploadFailure(request, SanitizeFailure(opened.Error));
+            }
+
+            await using var connection = opened.Value;
+            var validated = ValidateAndCreateAddress(connection.Session, request.Address);
+            if (validated.Failure is not null)
+            {
+                return UploadFailure(request, validated.Failure);
+            }
+
+            var openedWrite = await connection.Session.OpenWriteAsync(new StorageWriteRequest(
+                validated.Address!,
+                StorageWriteMode.Overwrite,
+                expectedLength: request.Content.LongLength,
+                contentType: request.ContentType,
+                expectedDestinationVersionId: request.Address.VersionId,
+                expectedDestinationEntityTag: request.Address.EntityTag), cancellationToken).ConfigureAwait(false);
+            if (openedWrite.IsFailure)
+            {
+                return UploadFailure(request, SanitizeFailure(openedWrite.Error));
+            }
+
+            await using var write = openedWrite.Value;
+            await write.Content.WriteAsync(request.Content, cancellationToken).ConfigureAwait(false);
+            var committed = await write.CommitAsync(cancellationToken).ConfigureAwait(false);
+            if (committed.IsFailure)
+            {
+                return UploadFailure(request, SanitizeFailure(committed.Error));
+            }
+
+            var entry = committed.Value;
+            var responseAddress = new ObjectInspectorAddress(
+                request.Address.ConnectionId,
+                request.Address.RootIdentity,
+                request.Address.RelativePath,
+                entry.Address.NativeItemId,
+                entry.Address.VersionId,
+                entry.Address.EntityTag ?? entry.ETag);
+            return responseAddress.HasValidBounds
+                ? AgentIpcCommandResponse.Create(
+                    EditableFileIpcMessageTypes.UploadResponse,
+                    new EditableFileUploadResponse(
+                        request.ContractVersion,
+                        responseAddress,
+                        entry.Size ?? request.Content.LongLength,
+                        entry.LastModifiedUtc))
+                : UploadFailure(request, InvalidProviderResponse());
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return UploadFailure(request, InspectorUnavailable());
+        }
+    }
+
+    private static async Task<byte[]?> ReadBoundedAsync(
+        Stream stream,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        using var content = new MemoryStream(Math.Min(maximumBytes, 64 * 1024));
+        var buffer = new byte[64 * 1024];
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return content.ToArray();
+            }
+
+            if (content.Length + read > maximumBytes)
+            {
+                return null;
+            }
+
+            content.Write(buffer, 0, read);
+        }
+    }
+
+    private async ValueTask<AgentIpcCommandResponse> EnsureDirectoryAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        StorageDirectoryEnsureRequest request;
+        try
+        {
+            request = envelope.DeserializePayload<StorageDirectoryEnsureRequest>();
+        }
+        catch (JsonException)
+        {
+            return InvalidPayload();
+        }
+
+        if (!request.HasValidBounds)
+        {
+            return InvalidRequest(request.ContractVersion);
+        }
+
+        try
+        {
+            var opened = await _connector.OpenAsync(
+                new ConnectionProfileId(request.Address.ConnectionId),
+                cancellationToken).ConfigureAwait(false);
+            if (opened.IsFailure)
+            {
+                return DirectoryFailure(request, SanitizeFailure(opened.Error));
+            }
+
+            await using var connection = opened.Value;
+            var validated = ValidateAndCreateAddress(connection.Session, request.Address);
+            if (validated.Failure is not null)
+            {
+                return DirectoryFailure(request, validated.Failure);
+            }
+
+            var existing = await connection.Session.GetEntryAsync(validated.Address!, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing.IsSuccess)
+            {
+                return existing.Value.Kind is StorageEntryKind.Directory or StorageEntryKind.Prefix
+                    ? DirectorySuccess(request, created: false)
+                    : DirectoryFailure(request, new StorageIpcFailure(
+                        "storage.directory.conflict",
+                        StorageIpcFailureCategory.Conflict,
+                        "A non-directory item already uses the destination path.",
+                        IsTransient: false));
+            }
+
+            if (existing.Error.Kind != StorageFailureKind.NotFound)
+            {
+                return DirectoryFailure(request, SanitizeFailure(existing.Error));
+            }
+
+            if (!connection.Session.Capabilities.Supports(StorageFeature.CreateDirectory))
+            {
+                return DirectorySuccess(request, created: false);
+            }
+
+            var created = await connection.Session.CreateDirectoryAsync(
+                validated.Address!,
+                cancellationToken).ConfigureAwait(false);
+            return created.IsSuccess
+                ? DirectorySuccess(request, created: true)
+                : DirectoryFailure(request, SanitizeFailure(created.Error));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return DirectoryFailure(request, InspectorUnavailable());
+        }
+    }
+
     private static AddressValidation ValidateAndCreateAddress(
         IStorageEndpointSession? session,
         ObjectInspectorAddress requested)
@@ -473,6 +759,46 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
             request.ContractVersion,
             request.Address,
             [],
+            failure));
+
+    private static AgentIpcCommandResponse DownloadFailure(
+        EditableFileDownloadRequest request,
+        StorageIpcFailure failure) => AgentIpcCommandResponse.Create(
+        EditableFileIpcMessageTypes.DownloadResponse,
+        new EditableFileDownloadResponse(
+            request.ContractVersion,
+            request.Address,
+            [],
+            Failure: failure));
+
+    private static AgentIpcCommandResponse UploadFailure(
+        EditableFileUploadRequest request,
+        StorageIpcFailure failure) => AgentIpcCommandResponse.Create(
+        EditableFileIpcMessageTypes.UploadResponse,
+        new EditableFileUploadResponse(
+            request.ContractVersion,
+            request.Address,
+            0,
+            null,
+            failure));
+
+    private static AgentIpcCommandResponse DirectorySuccess(
+        StorageDirectoryEnsureRequest request,
+        bool created) => AgentIpcCommandResponse.Create(
+        EditableFileIpcMessageTypes.DirectoryEnsureResponse,
+        new StorageDirectoryEnsureResponse(
+            request.ContractVersion,
+            request.Address,
+            created));
+
+    private static AgentIpcCommandResponse DirectoryFailure(
+        StorageDirectoryEnsureRequest request,
+        StorageIpcFailure failure) => AgentIpcCommandResponse.Create(
+        EditableFileIpcMessageTypes.DirectoryEnsureResponse,
+        new StorageDirectoryEnsureResponse(
+            request.ContractVersion,
+            request.Address,
+            Created: false,
             failure));
 
     private sealed record AddressValidation(StorageAddress? Address, StorageIpcFailure? Failure);

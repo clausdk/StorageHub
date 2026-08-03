@@ -5,9 +5,10 @@ namespace StorageHub.Contracts.Ipc;
 /// <summary>Independently versioned normal-pipe contract for preview-only schedule management.</summary>
 public static class ScheduleManagementIpcContract
 {
-    public const int CurrentVersion = 1;
+    public const int LegacyVersion = 1;
+    public const int CurrentVersion = 2;
 
-    public static bool IsSupported(int version) => version == CurrentVersion;
+    public static bool IsSupported(int version) => version is LegacyVersion or CurrentVersion;
 }
 
 public static class ScheduleManagementIpcLimits
@@ -41,7 +42,8 @@ public static class ScheduleManagementIpcMessageTypes
 [JsonConverter(typeof(JsonStringEnumConverter<ScheduleIpcExecutionMode>))]
 public enum ScheduleIpcExecutionMode
 {
-    PreviewOnly
+    PreviewOnly,
+    SafeAutomatic
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<ScheduleMutationOutcome>))]
@@ -63,7 +65,7 @@ public sealed record ScheduleDraftDocument(
     int MisfireGraceSeconds,
     bool QueueOneWhileRunning,
     bool Enabled,
-    ScheduleIpcExecutionMode ExecutionMode = ScheduleIpcExecutionMode.PreviewOnly)
+    ScheduleIpcExecutionMode ExecutionMode = ScheduleIpcExecutionMode.SafeAutomatic)
 {
     public bool HasValidBounds =>
         ProfileId != Guid.Empty &&
@@ -71,8 +73,7 @@ public sealed record ScheduleDraftDocument(
         IsSafeText(TimeZoneId, ScheduleManagementIpcLimits.MaximumTimeZoneIdLength) &&
         MisfireGraceSeconds is >= ScheduleManagementIpcLimits.MinimumMisfireGraceSeconds and
             <= ScheduleManagementIpcLimits.MaximumMisfireGraceSeconds &&
-        Enum.IsDefined(ExecutionMode) &&
-        ExecutionMode == ScheduleIpcExecutionMode.PreviewOnly;
+        Enum.IsDefined(ExecutionMode);
 
     private static bool IsSafeText(string? value, int maximumLength) =>
         !string.IsNullOrWhiteSpace(value) &&

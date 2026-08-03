@@ -4,7 +4,7 @@ using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
-/// <summary>Manages durable preview-only schedules through the local agent.</summary>
+/// <summary>Manages durable review-only and safety-gated automatic schedules.</summary>
 public sealed class ScheduleManagerForm : KryptonForm
 {
     private readonly IScheduleManagementAgentClient _scheduleClient;
@@ -13,11 +13,22 @@ public sealed class ScheduleManagerForm : KryptonForm
     private readonly CancellationTokenSource _lifetime = new();
     private readonly DataGridView _grid;
     private readonly ComboBox _profile;
+    private readonly ComboBox _frequency;
+    private readonly DateTimePicker _scheduleTime;
+    private readonly ComboBox _weekDay;
+    private readonly NumericUpDown _monthDay;
     private readonly TextBox _cron;
+    private readonly TableLayoutPanel _scheduleBuilder;
+    private readonly Label _weekDayLabel;
+    private readonly Label _monthDayLabel;
+    private readonly Label _cronLabel;
+    private readonly Label _scheduleSummary;
     private readonly ComboBox _timeZone;
     private readonly NumericUpDown _misfireGraceMinutes;
     private readonly CheckBox _queueOne;
     private readonly CheckBox _enabled;
+    private readonly ComboBox _executionMode;
+    private readonly Label _modeNotice;
     private readonly Label _nextOccurrence;
     private readonly Label _runState;
     private readonly Label _status;
@@ -47,7 +58,7 @@ public sealed class ScheduleManagerForm : KryptonForm
         _ownsClients = ownsClients;
         Text = "Synchronization Schedules — StorageHub";
         AccessibleName = "Synchronization schedule manager";
-        AccessibleDescription = "Manage durable schedules that generate reviewable previews only.";
+        AccessibleDescription = "Manage durable schedules that review or safely execute eligible plans.";
         StartPosition = FormStartPosition.CenterParent;
         MinimumSize = new Size(980, 640);
         Size = new Size(1220, 760);
@@ -55,15 +66,14 @@ public sealed class ScheduleManagerForm : KryptonForm
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
 
-        var banner = new Label
+        _modeNotice = new Label
         {
             Dock = DockStyle.Top,
             Height = 62,
-            Text = "PREVIEW ONLY — Schedules generate immutable sync previews in the background. They do not approve plans or apply provider changes unattended.",
             ForeColor = StorageHubTheme.Warning,
             BackColor = Color.FromArgb(255, 244, 224),
             Padding = new Padding(18, 13, 18, 8),
-            AccessibleName = "Preview-only schedule safety notice"
+            AccessibleName = "Schedule execution mode notice"
         };
 
         var toolbar = new FlowLayoutPanel
@@ -103,9 +113,9 @@ public sealed class ScheduleManagerForm : KryptonForm
         _grid.ColumnHeadersDefaultCellStyle.BackColor = StorageHubTheme.SurfaceMuted;
         _grid.ColumnHeadersDefaultCellStyle.ForeColor = StorageHubTheme.Text;
         _grid.Columns.Add("Profile", "Profile");
-        _grid.Columns.Add("Cron", "Cron");
+        _grid.Columns.Add("Cron", "Schedule");
         _grid.Columns.Add("TimeZone", "Time zone");
-        _grid.Columns.Add("Next", "Next preview");
+        _grid.Columns.Add("Next", "Next run");
         _grid.Columns.Add("Enabled", "Enabled");
         _grid.Columns.Add("State", "State");
         _grid.SelectionChanged += GridSelectionChanged;
@@ -116,6 +126,46 @@ public sealed class ScheduleManagerForm : KryptonForm
             DropDownStyle = ComboBoxStyle.DropDownList,
             AccessibleName = "Scheduled sync profile"
         };
+        _frequency = new ComboBox
+        {
+            Name = "ScheduleFrequency",
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            AccessibleName = "Schedule frequency"
+        };
+        _frequency.Items.AddRange(
+        [
+            new FrequencyChoice(ScheduleFrequency.Daily, "Every day"),
+            new FrequencyChoice(ScheduleFrequency.Weekdays, "Every weekday (Monday–Friday)"),
+            new FrequencyChoice(ScheduleFrequency.Weekly, "Every week"),
+            new FrequencyChoice(ScheduleFrequency.Monthly, "Every month"),
+            new FrequencyChoice(ScheduleFrequency.Custom, "Custom schedule (advanced)")
+        ]);
+        _scheduleTime = new DateTimePicker
+        {
+            Name = "ScheduleTime",
+            Format = DateTimePickerFormat.Custom,
+            CustomFormat = "HH:mm",
+            ShowUpDown = true,
+            Width = 110,
+            AccessibleName = "Schedule time"
+        };
+        _weekDay = new ComboBox
+        {
+            Name = "ScheduleWeekDay",
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            AccessibleName = "Day of week"
+        };
+        _weekDay.Items.AddRange(Enum.GetValues<DayOfWeek>().Cast<object>().ToArray());
+        _weekDay.SelectedItem = DayOfWeek.Monday;
+        _monthDay = new NumericUpDown
+        {
+            Name = "ScheduleMonthDay",
+            Minimum = 1,
+            Maximum = 31,
+            Value = 1,
+            Width = 110,
+            AccessibleName = "Day of month"
+        };
         _cron = new TextBox
         {
             Name = "ScheduleCron",
@@ -123,17 +173,38 @@ public sealed class ScheduleManagerForm : KryptonForm
             MaxLength = ScheduleManagementIpcLimits.MaximumCronExpressionLength,
             AccessibleName = "Five-field cron expression"
         };
+        _scheduleBuilder = BuildScheduleBuilder();
+        _weekDayLabel = GetScheduleBuilderLabel("WeekDayLabel");
+        _monthDayLabel = GetScheduleBuilderLabel("MonthDayLabel");
+        _cronLabel = GetScheduleBuilderLabel("CronLabel");
+        _scheduleSummary = new Label
+        {
+            Name = "ScheduleSummary",
+            AutoSize = true,
+            ForeColor = StorageHubTheme.TextMuted,
+            MaximumSize = new Size(390, 0),
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        _scheduleBuilder.Controls.Add(_scheduleSummary, 0, 5);
+        _scheduleBuilder.SetColumnSpan(_scheduleSummary, 2);
+        _frequency.SelectedIndexChanged += ScheduleBuilderChanged;
+        _scheduleTime.ValueChanged += ScheduleBuilderChanged;
+        _weekDay.SelectedIndexChanged += ScheduleBuilderChanged;
+        _monthDay.ValueChanged += ScheduleBuilderChanged;
+        _cron.TextChanged += ScheduleBuilderChanged;
+        _frequency.SelectedIndex = 0;
         _timeZone = new ComboBox
         {
             Name = "ScheduleTimeZone",
             DropDownStyle = ComboBoxStyle.DropDownList,
             AccessibleName = "Schedule time zone"
         };
+        _timeZone.DropDownWidth = 520;
         _timeZone.Items.AddRange(TimeZoneInfo.GetSystemTimeZones()
-            .Select(static zone => zone.Id)
+            .Select(static zone => new TimeZoneChoice(zone))
             .Cast<object>()
             .ToArray());
-        SelectTimeZone("UTC");
+        SelectTimeZone(TimeZoneInfo.Local.Id);
         _misfireGraceMinutes = new NumericUpDown
         {
             Name = "ScheduleMisfireGrace",
@@ -146,7 +217,7 @@ public sealed class ScheduleManagerForm : KryptonForm
         };
         _queueOne = new CheckBox
         {
-            Text = "Keep one coalesced preview while the profile is already running",
+            Text = "Keep one coalesced occurrence while the profile is already running",
             Checked = true,
             AutoSize = true
         };
@@ -156,8 +227,18 @@ public sealed class ScheduleManagerForm : KryptonForm
             Checked = false,
             AutoSize = true
         };
+        _executionMode = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            AccessibleName = "Schedule execution mode"
+        };
+        _executionMode.Items.AddRange(Enum.GetValues<ScheduleIpcExecutionMode>().Cast<object>().ToArray());
+        _executionMode.Format += FormatExecutionMode;
+        _executionMode.SelectedIndexChanged += ExecutionModeChanged;
+        _executionMode.SelectedItem = ScheduleIpcExecutionMode.SafeAutomatic;
         _nextOccurrence = UiControlFactory.CreateDescription("Not scheduled until saved and enabled.");
-        _runState = UiControlFactory.CreateDescription("No active preview run.");
+        _runState = UiControlFactory.CreateDescription("No active scheduled run.");
+        UpdateExecutionModeNotice();
 
         var editor = BuildEditor();
         var split = new SplitContainer
@@ -216,7 +297,7 @@ public sealed class ScheduleManagerForm : KryptonForm
 
         Controls.Add(split);
         Controls.Add(footer);
-        Controls.Add(banner);
+        Controls.Add(_modeNotice);
         BeginNewSchedule();
     }
 
@@ -270,8 +351,8 @@ public sealed class ScheduleManagerForm : KryptonForm
         }
 
         _status.Text = schedules.Schedules.Length == 0
-            ? "No schedules yet. New schedules are disabled by default and generate previews only."
-            : $"Loaded {schedules.Schedules.Length} preview-only schedule(s).";
+            ? "No schedules yet. New schedules default to Safe automatic and remain disabled until enabled."
+            : $"Loaded {schedules.Schedules.Length} schedule(s).";
         _status.ForeColor = StorageHubTheme.Success;
     }
 
@@ -318,7 +399,9 @@ public sealed class ScheduleManagerForm : KryptonForm
         var saved = RequireSuccessfulSchedule(response);
         ApplySchedule(saved);
         UpsertGrid(saved);
-        _status.Text = "Schedule saved. It will generate previews only; unattended apply is not enabled.";
+        _status.Text = saved.ExecutionMode == ScheduleIpcExecutionMode.SafeAutomatic
+            ? "Schedule saved. Eligible create and guarded-update plans will execute automatically."
+            : "Schedule saved in Review only mode; it will prepare a plan without changing either location.";
         _status.ForeColor = StorageHubTheme.Success;
         return saved;
     }
@@ -337,8 +420,8 @@ public sealed class ScheduleManagerForm : KryptonForm
         ApplySchedule(updated);
         UpsertGrid(updated);
         _status.Text = enabled
-            ? "Schedule enabled for background preview generation only."
-            : "Schedule disabled. No future preview occurrence is queued.";
+            ? "Schedule enabled for background synchronization."
+            : "Schedule disabled. No future occurrence is queued.";
         _status.ForeColor = StorageHubTheme.Success;
         return updated;
     }
@@ -358,7 +441,7 @@ public sealed class ScheduleManagerForm : KryptonForm
 
         RemoveGridRow(current.ScheduleId);
         BeginNewSchedule();
-        _status.Text = "Schedule deleted. Any previously generated preview remains reviewable by run ID.";
+        _status.Text = "Schedule deleted. Existing run history remains available.";
         _status.ForeColor = StorageHubTheme.Success;
     }
 
@@ -391,6 +474,13 @@ public sealed class ScheduleManagerForm : KryptonForm
         {
             _disposed = true;
             _grid.SelectionChanged -= GridSelectionChanged;
+            _executionMode.Format -= FormatExecutionMode;
+            _executionMode.SelectedIndexChanged -= ExecutionModeChanged;
+            _frequency.SelectedIndexChanged -= ScheduleBuilderChanged;
+            _scheduleTime.ValueChanged -= ScheduleBuilderChanged;
+            _weekDay.SelectedIndexChanged -= ScheduleBuilderChanged;
+            _monthDay.ValueChanged -= ScheduleBuilderChanged;
+            _cron.TextChanged -= ScheduleBuilderChanged;
             _lifetime.Cancel();
             _lifetime.Dispose();
             if (_ownsClients)
@@ -421,67 +511,251 @@ public sealed class ScheduleManagerForm : KryptonForm
         };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 165));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        var heading = UiControlFactory.CreateSectionTitle("Preview schedule");
+        var heading = UiControlFactory.CreateSectionTitle("Sync schedule");
         var description = UiControlFactory.CreateDescription(
-            "Cron uses five fields. Time-zone and daylight-saving rules are evaluated by the background agent.");
+            "Choose a familiar recurrence and local time. StorageHub handles the underlying schedule and daylight-saving rules.");
         table.Controls.Add(heading, 0, 0);
         table.SetColumnSpan(heading, 2);
         table.Controls.Add(description, 0, 1);
         table.SetColumnSpan(description, 2);
         table.RowCount = 2;
         UiControlFactory.AddLabeledRow(table, "Sync profile", _profile, "Only saved profiles can be scheduled.");
-        UiControlFactory.AddLabeledRow(table, "Cron expression", _cron, "Example: 0 2 * * * generates a preview daily at 02:00.");
-        UiControlFactory.AddLabeledRow(table, "Time zone", _timeZone, "DST gaps and overlaps use the selected system time-zone rules.");
+        UiControlFactory.AddLabeledRow(table, "Run schedule", _scheduleBuilder, "Custom cron is available only under Custom schedule (advanced).");
+        UiControlFactory.AddLabeledRow(table, "Time zone", _timeZone, "Offsets reflect today's daylight-saving rules; the named region controls future changes.");
         UiControlFactory.AddLabeledRow(table, "Misfire grace (min)", _misfireGraceMinutes, "Expired occurrences outside this window are skipped safely.");
-        UiControlFactory.AddLabeledRow(table, "Overlap", _queueOne, "At most one coalesced preview occurrence is retained.");
+        UiControlFactory.AddLabeledRow(table, "Overlap", _queueOne, "At most one coalesced occurrence is retained.");
         UiControlFactory.AddLabeledRow(table, "Enabled", _enabled, "New schedules remain disabled until explicitly enabled.");
         UiControlFactory.AddLabeledRow(
             table,
             "Execution mode",
-            new Label
-            {
-                Text = "Preview only (fixed)",
-                AutoSize = true,
-                ForeColor = StorageHubTheme.Success,
-                Padding = new Padding(0, 7, 0, 0)
-            },
-            "Approval and provider apply always require a separate reviewed action.");
-        UiControlFactory.AddLabeledRow(table, "Next preview", _nextOccurrence, "Calculated by the agent after save or enable.");
+            _executionMode,
+            "Safe automatic dispatches only create and guarded-update plans; everything else awaits approval.");
+        UiControlFactory.AddLabeledRow(table, "Next run", _nextOccurrence, "Calculated by the agent after save or enable.");
         UiControlFactory.AddLabeledRow(table, "Current state", _runState, "Active runs block destructive management changes.");
         panel.Controls.Add(table);
         return panel;
     }
 
+    private TableLayoutPanel BuildScheduleBuilder()
+    {
+        var builder = new TableLayoutPanel
+        {
+            Name = "ScheduleBuilder",
+            AutoSize = true,
+            ColumnCount = 2,
+            Padding = new Padding(12),
+            BackColor = StorageHubTheme.SurfaceMuted,
+            AccessibleName = "Friendly recurring schedule builder"
+        };
+        builder.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 105));
+        builder.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        AddBuilderRow(builder, 0, "Repeats", _frequency, "FrequencyLabel");
+        AddBuilderRow(builder, 1, "At", _scheduleTime, "TimeLabel");
+        AddBuilderRow(builder, 2, "On", _weekDay, "WeekDayLabel");
+        AddBuilderRow(builder, 3, "Day", _monthDay, "MonthDayLabel");
+        AddBuilderRow(builder, 4, "Cron", _cron, "CronLabel");
+        return builder;
+    }
+
+    private static void AddBuilderRow(
+        TableLayoutPanel builder,
+        int row,
+        string text,
+        Control control,
+        string labelName)
+    {
+        builder.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var label = new Label
+        {
+            Name = labelName,
+            Text = text,
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            ForeColor = StorageHubTheme.Text,
+            Margin = new Padding(0, 8, 10, 6)
+        };
+        control.Dock = DockStyle.Top;
+        control.Margin = new Padding(0, 4, 0, 4);
+        builder.Controls.Add(label, 0, row);
+        builder.Controls.Add(control, 1, row);
+    }
+
+    private Label GetScheduleBuilderLabel(string name) =>
+        _scheduleBuilder.Controls.OfType<Label>().Single(label => label.Name == name);
+
+    private void ExecutionModeChanged(object? sender, EventArgs e) => UpdateExecutionModeNotice();
+
+    private static void FormatExecutionMode(object? sender, ListControlConvertEventArgs e)
+    {
+        e.Value = e.ListItem switch
+        {
+            ScheduleIpcExecutionMode.SafeAutomatic => "Safe automatic",
+            ScheduleIpcExecutionMode.PreviewOnly => "Review only",
+            _ => e.ListItem?.ToString() ?? string.Empty
+        };
+    }
+
+    private void UpdateExecutionModeNotice()
+    {
+        var automatic = _executionMode.SelectedItem is ScheduleIpcExecutionMode.SafeAutomatic;
+        _modeNotice.Text = automatic
+            ? "SAFE AUTOMATIC — Eligible creates and guarded updates run automatically. Deletions, conflicts, capability gaps, or changed authorization stop for review."
+            : "REVIEW ONLY — The schedule scans both locations and prepares a plan without changing either location.";
+        _modeNotice.ForeColor = automatic ? StorageHubTheme.Success : StorageHubTheme.Warning;
+        _modeNotice.BackColor = automatic
+            ? Color.FromArgb(230, 247, 239)
+            : Color.FromArgb(255, 244, 224);
+    }
+
+    private void ScheduleBuilderChanged(object? sender, EventArgs e)
+    {
+        if (_frequency.SelectedItem is not FrequencyChoice choice)
+        {
+            return;
+        }
+
+        var custom = choice.Frequency == ScheduleFrequency.Custom;
+        var weekly = choice.Frequency == ScheduleFrequency.Weekly;
+        var monthly = choice.Frequency == ScheduleFrequency.Monthly;
+        _scheduleTime.Visible = !custom;
+        FindBuilderLabel("TimeLabel").Visible = !custom;
+        _weekDay.Visible = weekly;
+        _weekDayLabel.Visible = weekly;
+        _monthDay.Visible = monthly;
+        _monthDayLabel.Visible = monthly;
+        _cron.Visible = custom;
+        _cronLabel.Visible = custom;
+        _scheduleSummary.Text = DescribeSchedule(BuildCronExpression());
+    }
+
+    private Label FindBuilderLabel(string name) =>
+        _scheduleBuilder.Controls.OfType<Label>().Single(label => label.Name == name);
+
+    private string BuildCronExpression()
+    {
+        if (_frequency.SelectedItem is not FrequencyChoice choice ||
+            choice.Frequency == ScheduleFrequency.Custom)
+        {
+            return _cron.Text.Trim();
+        }
+
+        var minute = _scheduleTime.Value.Minute;
+        var hour = _scheduleTime.Value.Hour;
+        return choice.Frequency switch
+        {
+            ScheduleFrequency.Daily => $"{minute} {hour} * * *",
+            ScheduleFrequency.Weekdays => $"{minute} {hour} * * 1-5",
+            ScheduleFrequency.Weekly => $"{minute} {hour} * * {(int)(_weekDay.SelectedItem is DayOfWeek day ? day : DayOfWeek.Monday)}",
+            ScheduleFrequency.Monthly => $"{minute} {hour} {(int)_monthDay.Value} * *",
+            _ => _cron.Text.Trim()
+        };
+    }
+
+    private void ApplyCronExpression(string expression)
+    {
+        _cron.Text = expression;
+        var fields = expression.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (fields.Length != 5 ||
+            !int.TryParse(fields[0], NumberStyles.None, CultureInfo.InvariantCulture, out var minute) ||
+            !int.TryParse(fields[1], NumberStyles.None, CultureInfo.InvariantCulture, out var hour) ||
+            minute is < 0 or > 59 || hour is < 0 or > 23)
+        {
+            SelectFrequency(ScheduleFrequency.Custom);
+            return;
+        }
+
+        _scheduleTime.Value = DateTime.Today.AddHours(hour).AddMinutes(minute);
+        if (fields[2] == "*" && fields[3] == "*" && fields[4] == "*")
+        {
+            SelectFrequency(ScheduleFrequency.Daily);
+        }
+        else if (fields[2] == "*" && fields[3] == "*" && fields[4] == "1-5")
+        {
+            SelectFrequency(ScheduleFrequency.Weekdays);
+        }
+        else if (fields[2] == "*" && fields[3] == "*" &&
+            int.TryParse(fields[4], NumberStyles.None, CultureInfo.InvariantCulture, out var weekDay) &&
+            weekDay is >= 0 and <= 6)
+        {
+            _weekDay.SelectedItem = (DayOfWeek)weekDay;
+            SelectFrequency(ScheduleFrequency.Weekly);
+        }
+        else if (fields[3] == "*" && fields[4] == "*" &&
+            int.TryParse(fields[2], NumberStyles.None, CultureInfo.InvariantCulture, out var monthDay) &&
+            monthDay is >= 1 and <= 31)
+        {
+            _monthDay.Value = monthDay;
+            SelectFrequency(ScheduleFrequency.Monthly);
+        }
+        else
+        {
+            SelectFrequency(ScheduleFrequency.Custom);
+        }
+    }
+
+    private void SelectFrequency(ScheduleFrequency frequency)
+    {
+        for (var index = 0; index < _frequency.Items.Count; index++)
+        {
+            if (_frequency.Items[index] is FrequencyChoice choice && choice.Frequency == frequency)
+            {
+                _frequency.SelectedIndex = index;
+                ScheduleBuilderChanged(this, EventArgs.Empty);
+                return;
+            }
+        }
+    }
+
+    private static string DescribeSchedule(string expression)
+    {
+        var fields = expression.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (fields.Length == 5 && int.TryParse(fields[0], out var minute) && int.TryParse(fields[1], out var hour))
+        {
+            var time = DateTime.Today.AddHours(hour).AddMinutes(minute).ToString("t", CultureInfo.CurrentCulture);
+            if (fields[2] == "*" && fields[3] == "*" && fields[4] == "*") return $"Runs every day at {time}.";
+            if (fields[2] == "*" && fields[3] == "*" && fields[4] == "1-5") return $"Runs Monday through Friday at {time}.";
+            if (fields[2] == "*" && fields[3] == "*" && int.TryParse(fields[4], out var day) && day is >= 0 and <= 6)
+                return $"Runs every {(DayOfWeek)day} at {time}.";
+            if (int.TryParse(fields[2], out var monthDay) && fields[3] == "*" && fields[4] == "*")
+                return $"Runs on day {monthDay} of every month at {time}.";
+        }
+
+        return "Advanced recurring schedule.";
+    }
+
     private ScheduleDraftDocument BuildDraft() => new(
         (_profile.SelectedItem as ProfileChoice)?.ProfileId ?? Guid.Empty,
-        _cron.Text.Trim(),
-        _timeZone.SelectedItem?.ToString() ?? string.Empty,
+        BuildCronExpression(),
+        (_timeZone.SelectedItem as TimeZoneChoice)?.Id ?? string.Empty,
         checked(decimal.ToInt32(_misfireGraceMinutes.Value) * 60),
         _queueOne.Checked,
         _enabled.Checked,
-        ScheduleIpcExecutionMode.PreviewOnly);
+        _executionMode.SelectedItem is ScheduleIpcExecutionMode mode
+            ? mode
+            : ScheduleIpcExecutionMode.SafeAutomatic);
 
     private void BeginNewSchedule()
     {
         _current = null;
-        _cron.Text = "0 2 * * *";
-        SelectTimeZone("UTC");
+        ApplyCronExpression("0 2 * * *");
+        SelectTimeZone(TimeZoneInfo.Local.Id);
         _misfireGraceMinutes.Value = 24 * 60;
         _queueOne.Checked = true;
         _enabled.Checked = false;
+        _executionMode.SelectedItem = ScheduleIpcExecutionMode.SafeAutomatic;
         if (_profile.Items.Count > 0)
         {
             _profile.SelectedIndex = 0;
         }
 
         _nextOccurrence.Text = "Not scheduled until saved and enabled.";
-        _runState.Text = "No active preview run.";
+        _runState.Text = "No active scheduled run.";
         _toggle.Text = "Enable";
         _toggle.Enabled = false;
         _delete.Enabled = false;
         _save.Enabled = true;
         _grid.ClearSelection();
-        _status.Text = "New schedule draft. Preview-only is fixed; enabled is off by default.";
+        _status.Text = "New schedule draft. Safe automatic is selected; enabled is off by default.";
         _status.ForeColor = StorageHubTheme.TextMuted;
     }
 
@@ -489,7 +763,7 @@ public sealed class ScheduleManagerForm : KryptonForm
     {
         _current = schedule;
         SelectProfile(schedule.ProfileId, schedule.ProfileDisplayName);
-        _cron.Text = schedule.CronExpression;
+        ApplyCronExpression(schedule.CronExpression);
         SelectTimeZone(schedule.TimeZoneId);
         _misfireGraceMinutes.Value = Math.Clamp(
             schedule.MisfireGraceSeconds / 60,
@@ -497,11 +771,12 @@ public sealed class ScheduleManagerForm : KryptonForm
             _misfireGraceMinutes.Maximum);
         _queueOne.Checked = schedule.QueueOneWhileRunning;
         _enabled.Checked = schedule.Enabled;
+        _executionMode.SelectedItem = schedule.ExecutionMode;
         _nextOccurrence.Text = schedule.NextOccurrenceUtc is { } next
             ? $"{next.ToLocalTime():g} ({next:O})"
-            : "No future preview is scheduled.";
+            : "No future run is scheduled.";
         _runState.Text = schedule.IsBusy
-            ? "A preview occurrence is active; update, disable, and delete are blocked."
+            ? "A scheduled run is active; update, disable, and delete are blocked."
             : schedule.LastRunOutcome is { Length: > 0 } outcome
                 ? $"Idle · last outcome: {outcome}{FormatErrorCode(schedule.LastErrorCode)}"
                 : "Idle · no recorded outcome.";
@@ -553,11 +828,11 @@ public sealed class ScheduleManagerForm : KryptonForm
     {
         var index = _grid.Rows.Add(
             schedule.ProfileDisplayName,
-            schedule.CronExpression,
-            schedule.TimeZoneId,
+            DescribeSchedule(schedule.CronExpression),
+            FormatTimeZone(schedule.TimeZoneId),
             schedule.NextOccurrenceUtc is { } next ? next.ToLocalTime().ToString("g", CultureInfo.CurrentCulture) : "—",
             schedule.Enabled ? "Yes" : "No",
-            schedule.IsBusy ? "Preview active" : schedule.LastRunOutcome ?? "Idle");
+            schedule.IsBusy ? "Run active" : schedule.LastRunOutcome ?? "Idle");
         _grid.Rows[index].Tag = schedule;
     }
 
@@ -631,15 +906,28 @@ public sealed class ScheduleManagerForm : KryptonForm
     {
         for (var index = 0; index < _timeZone.Items.Count; index++)
         {
-            if (string.Equals(_timeZone.Items[index]?.ToString(), timeZoneId, StringComparison.Ordinal))
+            if (_timeZone.Items[index] is TimeZoneChoice choice &&
+                string.Equals(choice.Id, timeZoneId, StringComparison.Ordinal))
             {
                 _timeZone.SelectedIndex = index;
                 return;
             }
         }
 
-        _timeZone.Items.Add(timeZoneId);
+        _timeZone.Items.Add(TimeZoneChoice.Unavailable(timeZoneId));
         _timeZone.SelectedIndex = _timeZone.Items.Count - 1;
+    }
+
+    private static string FormatTimeZone(string timeZoneId)
+    {
+        try
+        {
+            return new TimeZoneChoice(TimeZoneInfo.FindSystemTimeZoneById(timeZoneId)).ToString();
+        }
+        catch (Exception error) when (error is TimeZoneNotFoundException or InvalidTimeZoneException)
+        {
+            return $"Unavailable region · {timeZoneId}";
+        }
     }
 
     private async void GridSelectionChanged(object? sender, EventArgs e)
@@ -679,7 +967,7 @@ public sealed class ScheduleManagerForm : KryptonForm
     {
         await RunBusyAsync(
             token => SaveCurrentScheduleAsync(token),
-            "Saving preview-only schedule…").ConfigureAwait(true);
+            "Saving schedule…").ConfigureAwait(true);
     }
 
     private async void ToggleClicked(object? sender, EventArgs e)
@@ -687,14 +975,14 @@ public sealed class ScheduleManagerForm : KryptonForm
         var target = !(_current?.Enabled ?? false);
         await RunBusyAsync(
             token => SetCurrentEnabledAsync(target, token),
-            target ? "Enabling preview schedule…" : "Disabling schedule…").ConfigureAwait(true);
+            target ? "Enabling schedule…" : "Disabling schedule…").ConfigureAwait(true);
     }
 
     private async void DeleteClicked(object? sender, EventArgs e)
     {
         if (MessageBox.Show(
                 this,
-                "Delete this preview-only schedule? Existing preview runs are not deleted.",
+                "Delete this schedule? Existing run history is not deleted.",
                 "Delete schedule",
                 MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Warning,
@@ -773,5 +1061,51 @@ public sealed class ScheduleManagerForm : KryptonForm
     private sealed record ProfileChoice(Guid ProfileId, string DisplayName, bool Enabled)
     {
         public override string ToString() => Enabled ? DisplayName : $"{DisplayName} (disabled)";
+    }
+
+    private enum ScheduleFrequency
+    {
+        Daily,
+        Weekdays,
+        Weekly,
+        Monthly,
+        Custom
+    }
+
+    private sealed record FrequencyChoice(ScheduleFrequency Frequency, string DisplayName)
+    {
+        public override string ToString() => DisplayName;
+    }
+
+    private sealed record TimeZoneChoice(string Id, string DisplayName)
+    {
+        public TimeZoneChoice(TimeZoneInfo zone)
+            : this(zone.Id, CreateDisplayName(zone))
+        {
+        }
+
+        public static TimeZoneChoice Unavailable(string id) => new(id, $"Unavailable region · {id}");
+
+        public override string ToString() => DisplayName;
+
+        private static string CreateDisplayName(TimeZoneInfo zone)
+        {
+            var offset = zone.GetUtcOffset(DateTimeOffset.Now);
+            var sign = offset < TimeSpan.Zero ? '-' : '+';
+            var absolute = offset.Duration();
+            var region = zone.DisplayName;
+            var close = region.IndexOf(')');
+            if (region.StartsWith("(UTC", StringComparison.OrdinalIgnoreCase) && close >= 0)
+            {
+                region = region[(close + 1)..].Trim();
+            }
+
+            if (string.IsNullOrWhiteSpace(region))
+            {
+                region = zone.StandardName;
+            }
+
+            return $"(UTC{sign}{absolute.Hours:00}:{absolute.Minutes:00}) {region}";
+        }
     }
 }

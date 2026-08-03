@@ -1,5 +1,6 @@
 using StorageHub.Sync;
 using StorageHub.Sync.Persistence;
+using StorageHub.Agent;
 
 namespace StorageHub.Agent.Sync;
 
@@ -22,6 +23,7 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
     private readonly TimeProvider _timeProvider;
     private readonly string _ownerId;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly AdaptiveConcurrencyController _adaptiveConcurrency;
     private CancellationTokenSource? _lifetime;
     private Task[] _workers = [];
     private string? _lastInfrastructureFailure;
@@ -46,6 +48,10 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
         _options = options ?? new SyncOutboxWorkerOptions();
         _options.Validate();
+        _adaptiveConcurrency = new AdaptiveConcurrencyController(
+            _options.AdaptiveConcurrency,
+            _options.MinimumConcurrency,
+            _options.MaximumConcurrency);
         _timeProvider = timeProvider ?? TimeProvider.System;
         _ownerId = ownerId ?? $"storagehub-sync-{Guid.NewGuid():N}";
         if (string.IsNullOrWhiteSpace(_ownerId) || _ownerId.Length > 256 || _ownerId.Any(char.IsControl))
@@ -61,6 +67,8 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
     public bool CanRunInRecoveryMode => false;
 
     public int ActiveCount => Volatile.Read(ref _activeCount);
+
+    public int CurrentConcurrencyLimit => _adaptiveConcurrency.CurrentLimit;
 
     public long CompletedCount => Interlocked.Read(ref _completed);
 
@@ -101,7 +109,7 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
 
             _lifetime = new CancellationTokenSource();
             _workers = Enumerable.Range(0, _options.MaximumConcurrency)
-                .Select(_ => Task.Run(() => WorkerLoopAsync(_lifetime.Token), CancellationToken.None))
+                .Select(index => Task.Run(() => WorkerLoopAsync(index, _lifetime.Token), CancellationToken.None))
                 .ToArray();
             _started = true;
         }
@@ -176,11 +184,13 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
         }
 
         _ = Interlocked.Increment(ref _activeCount);
+        var startedAt = _timeProvider.GetTimestamp();
+        var succeeded = false;
         try
         {
             try
             {
-                await ProcessLeaseAsync(leases[0], cancellationToken).ConfigureAwait(false);
+                succeeded = await ProcessLeaseAsync(leases[0], cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -198,6 +208,16 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
         }
         finally
         {
+            var elapsed = _timeProvider.GetElapsedTime(startedAt, _timeProvider.GetTimestamp());
+            if (succeeded)
+            {
+                _adaptiveConcurrency.ReportSuccess(1, elapsed);
+            }
+            else if (!cancellationToken.IsCancellationRequested)
+            {
+                _adaptiveConcurrency.ReportFailure();
+            }
+
             _ = Interlocked.Decrement(ref _activeCount);
         }
     }
@@ -223,7 +243,7 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
         }
 
         return Task.FromResult(SubsystemHealth.Healthy(
-            $"Sync outbox healthy; active={ActiveCount}, completed={CompletedCount}, retries={RetryCount}, dead-lettered={DeadLetterCount}, lease-lost={LeaseLossCount}."));
+            $"Sync outbox healthy; active={ActiveCount}, concurrency={CurrentConcurrencyLimit}/{_options.MaximumConcurrency}, completed={CompletedCount}, retries={RetryCount}, dead-lettered={DeadLetterCount}, lease-lost={LeaseLossCount}."));
     }
 
     public async ValueTask DisposeAsync()
@@ -238,10 +258,16 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
         _lifecycleGate.Dispose();
     }
 
-    private async Task WorkerLoopAsync(CancellationToken cancellationToken)
+    private async Task WorkerLoopAsync(int workerIndex, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            if (workerIndex >= _adaptiveConcurrency.CurrentLimit)
+            {
+                await DelayForNextPollAsync(cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
             var claimed = false;
             try
             {
@@ -261,18 +287,22 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
                 continue;
             }
 
-            try
-            {
-                await Task.Delay(_options.PollInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
+            await DelayForNextPollAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private async Task ProcessLeaseAsync(
+    private async Task DelayForNextPollAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(_options.PollInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task<bool> ProcessLeaseAsync(
         OutboxDeliveryLease initialLease,
         CancellationToken hostCancellationToken)
     {
@@ -310,12 +340,12 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
             result?.Outcome == SyncOutboxProcessingOutcome.LeaseLost)
         {
             RecordLeaseLoss(monitorOutcome == LeaseMonitorOutcome.InfrastructureFailure);
-            return;
+            return false;
         }
 
         if (processingCancelled || hostCancellationToken.IsCancellationRequested || result is null)
         {
-            return;
+            return false;
         }
 
         var currentLease = leaseContext.Current;
@@ -330,7 +360,7 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
                     SyncPersistenceMutationStatus.AlreadyApplied)
                 {
                     _ = Interlocked.Increment(ref _completed);
-                    return;
+                    return true;
                 }
 
                 break;
@@ -351,7 +381,7 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
                     _ = deadLetter
                         ? Interlocked.Increment(ref _deadLettered)
                         : Interlocked.Increment(ref _retried);
-                    return;
+                    return false;
                 }
 
                 break;
@@ -369,16 +399,17 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
                     SyncPersistenceMutationStatus.AlreadyApplied)
                 {
                     _ = Interlocked.Increment(ref _deadLettered);
-                    return;
+                    return false;
                 }
 
                 break;
 
             default:
-                return;
+                return false;
         }
 
         RecordLeaseLoss(infrastructureFailure: false);
+        return false;
     }
 
     private async Task<LeaseMonitorOutcome> MonitorLeaseAsync(

@@ -30,6 +30,14 @@ public sealed class SqliteSyncDurabilityStoresTests : IAsyncLifetime, IDisposabl
     }
 
     [Fact]
+    public async Task Run_history_query_uses_the_durable_run_timestamp()
+    {
+        var runs = await new SqliteSyncRunStore(_database).ListAsync(SyncProfileId.New(), 0, 100);
+
+        Assert.Empty(runs);
+    }
+
+    [Fact]
     public async Task Baseline_replace_is_atomic_revisioned_and_idempotent()
     {
         var store = new SqliteSyncBaselineStore(_database);
@@ -578,7 +586,7 @@ public sealed class SyncDurabilityMigrationTests : IDisposable
         var upgraded = await new StorageHubDatabaseInitializer(options).InitializeAsync();
 
         Assert.True(upgraded.IsReady, upgraded.Message);
-        Assert.Equal(PortableChecksumEvidenceSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
+        Assert.Equal(SymmetricSyncSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
         await using var read = new SqliteConnection($"Data Source={options.DatabasePath};Mode=ReadOnly;Pooling=False");
         await read.OpenAsync();
         await using var count = read.CreateCommand();

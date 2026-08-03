@@ -3,7 +3,7 @@ namespace StorageHub.Desktop.Tests;
 public sealed class SyncRunsControlTests
 {
     [Fact]
-    public void Runs_surface_is_inert_until_a_known_run_is_explicitly_loaded()
+    public void Runs_surface_browses_history_and_loads_a_selected_run()
     {
         SyncRunReviewControlTests.RunOnSta(() =>
         {
@@ -16,6 +16,9 @@ public sealed class SyncRunsControlTests
             System.Windows.Forms.Application.DoEvents();
 
             Assert.Equal(0, client.RunStatusCount);
+            control.RefreshHistoryAsync().GetAwaiter().GetResult();
+            Assert.Equal(1, client.RunListCount);
+            Assert.Equal(1, control.DisplayedRunCount);
             control.LoadRunAsync(client.Run.SyncRunId).GetAwaiter().GetResult();
 
             Assert.Equal(1, client.RunStatusCount);

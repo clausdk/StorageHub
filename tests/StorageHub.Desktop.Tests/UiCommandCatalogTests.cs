@@ -13,7 +13,7 @@ public sealed class UiCommandCatalogTests
     [Theory]
     [InlineData("Connections", "Connection Manager...")]
     [InlineData("Transfer", "Pause All")]
-    [InlineData("Sync", "Preview Sync...")]
+    [InlineData("Sync", "Review & Run...")]
     [InlineData("Tools", "Diagnostics...")]
     public void CriticalCommandsAreReachableFromTopMenus(string menu, string command)
     {

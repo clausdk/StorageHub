@@ -18,18 +18,23 @@ public sealed class ShellWiringTests
             tabs.PerformLayout();
 
             Assert.Equal(TabDrawMode.OwnerDrawFixed, tabs.DrawMode);
-            Assert.Equal(2, tabs.TabPages.Count);
+            Assert.Equal(4, tabs.TabPages.Count);
+            Assert.Equal("Welcome", tabs.TabPages[0].AccessibleName);
+            Assert.Equal("Sync tasks", tabs.TabPages[1].AccessibleName);
 
-            var firstTab = tabs.GetTabRect(0);
-            RaiseMouseDown(tabs, new Point(firstTab.Right - 14, firstTab.Top + (firstTab.Height / 2)));
+            var workspaceTab = tabs.GetTabRect(2);
+            RaiseMouseDown(tabs, new Point(
+                workspaceTab.Right - 14,
+                workspaceTab.Top + (workspaceTab.Height / 2)));
 
-            Assert.Single(tabs.TabPages);
-            Assert.Equal("+", tabs.TabPages[0].Text);
-            Assert.Equal(-1, tabs.SelectedIndex);
+            Assert.Equal(3, tabs.TabPages.Count);
+            Assert.Equal("+", tabs.TabPages[^1].Text);
+            Assert.Equal(0, tabs.SelectedIndex);
+            Assert.Equal("Welcome", tabs.SelectedTab!.AccessibleName);
 
-            tabs.SelectedIndex = 0;
+            tabs.SelectedIndex = tabs.TabPages.Count - 1;
 
-            Assert.Equal(2, tabs.TabPages.Count);
+            Assert.Equal(4, tabs.TabPages.Count);
             Assert.NotEqual("+", tabs.SelectedTab!.Text);
         });
     }
@@ -67,7 +72,7 @@ public sealed class ShellWiringTests
                 .Select(name => name!)
                 .ToArray();
             Assert.Equal(
-                ["New tab", "Connection Manager", "Back", "Forward", "Up", "Refresh"],
+                ["New tab", "Connection Manager"],
                 toolbarActions);
         });
     }
@@ -174,16 +179,23 @@ public sealed class ShellWiringTests
         SyncRunReviewControlTests.RunOnSta(() =>
         {
             using var settings = new SettingsForm();
-            var categories = GetField<ListBox>(settings, "_categories");
+            settings.Show();
+            System.Windows.Forms.Application.DoEvents();
+            var categories = GetField<TreeView>(settings, "_categories");
             Assert.Equal(
-                ["General", "Connections & trust", "Updates", "About"],
-                categories.Items.Cast<string>());
+                ["Transfers & sync", "Editing", "Connections & trust", "Updates"],
+                categories.Nodes.Cast<TreeNode>().Select(static node => node.Text));
+            var transfers = categories.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Transfers & sync");
+            Assert.Equal("Concurrency", Assert.Single(transfers.Nodes.Cast<TreeNode>()).Text);
             var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
-            Assert.Equal(categories.Items.Count, pages.Count);
-            for (var index = 0; index < categories.Items.Count; index++)
+            Assert.Equal(4, pages.Count);
+            var pageNodes = categories.Nodes.Cast<TreeNode>()
+                .SelectMany(static node => node.Nodes.Count == 0 ? [node] : node.Nodes.Cast<TreeNode>())
+                .ToArray();
+            foreach (var node in pageNodes)
             {
-                categories.SelectedIndex = index;
-                var selectedPage = pages[(string)categories.Items[index]!];
+                categories.SelectedNode = node;
+                var selectedPage = pages[node.Name];
                 Assert.Equal(0, selectedPage.Parent!.Controls.GetChildIndex(selectedPage));
             }
 

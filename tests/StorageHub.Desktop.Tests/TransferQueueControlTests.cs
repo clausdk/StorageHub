@@ -31,6 +31,42 @@ public sealed class TransferQueueControlTests
         });
     }
 
+    [Fact]
+    public void Every_transfer_state_tab_queries_its_exact_durable_states()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            var client = new FakeQueueClient();
+            using var control = new TransferQueueControl(client);
+            var tabs = Assert.Single(control.Controls.OfType<TabControl>());
+            var expected = new Dictionary<string, TransferQueueState[]>
+            {
+                ["Active"] =
+                [
+                    TransferQueueState.Preparing, TransferQueueState.Connecting,
+                    TransferQueueState.Transferring, TransferQueueState.Verifying,
+                    TransferQueueState.Finalizing, TransferQueueState.CleanupPending
+                ],
+                ["Queued"] = [TransferQueueState.Pending, TransferQueueState.Retrying],
+                ["Paused"] =
+                [
+                    TransferQueueState.Paused, TransferQueueState.BlockedCredential,
+                    TransferQueueState.BlockedTrust, TransferQueueState.RestartRequired
+                ],
+                ["Failed"] = [TransferQueueState.Failed],
+                ["Completed"] = [TransferQueueState.Completed, TransferQueueState.Cancelled],
+                ["Conflicts"] = [TransferQueueState.Interrupted, TransferQueueState.NeedsReconciliation]
+            };
+
+            foreach (var (name, states) in expected)
+            {
+                tabs.SelectedTab = tabs.TabPages.Cast<TabPage>().Single(page => page.Text == name);
+                control.RefreshQueueAsync().GetAwaiter().GetResult();
+                Assert.Equal(states, client.LastStates);
+            }
+        });
+    }
+
     private sealed class FakeQueueClient : ITransferQueueAgentClient
     {
         public int ListCount { get; private set; }

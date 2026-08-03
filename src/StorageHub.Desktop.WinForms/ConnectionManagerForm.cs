@@ -413,8 +413,81 @@ public sealed class ConnectionManagerForm : KryptonForm
             provider.AuthenticationFields,
             provider));
         ReplacePageContent(_securityPage, BuildSecurityPage(provider));
+        if (provider.Kind == StorageProviderKind.S3)
+        {
+            ConfigureS3Editor();
+        }
+
         _testState.Text = "Not tested";
         _testState.ForeColor = StorageHubTheme.TextMuted;
+    }
+
+    private void ConfigureS3Editor()
+    {
+        if (!_editorFields.TryGetValue("s3ServiceType", out var serviceControl) ||
+            serviceControl is not ComboBox serviceType ||
+            !_editorFields.TryGetValue("endpoint", out var endpointControl) ||
+            endpointControl is not TextBox endpoint ||
+            !_editorFields.TryGetValue("region", out var regionControl) ||
+            regionControl is not TextBox region ||
+            !_editorFields.TryGetValue("addressingStyle", out var addressingControl) ||
+            addressingControl is not ComboBox addressingStyle)
+        {
+            return;
+        }
+
+        void ApplyServicePreset()
+        {
+            var selected = serviceType.SelectedItem as string;
+            var isR2 = string.Equals(
+                selected,
+                ConnectionEditorDraftFactory.CloudflareR2ServiceType,
+                StringComparison.Ordinal);
+            region.ReadOnly = isR2;
+            region.AccessibleDescription = isR2
+                ? "Cloudflare R2 signing region; fixed to auto."
+                : "Signing region used by the selected S3-compatible service.";
+            if (isR2)
+            {
+                region.Text = "auto";
+                addressingStyle.SelectedItem = "Path-style";
+                if (string.Equals(endpoint.Text.Trim(), "https://s3.amazonaws.com", StringComparison.OrdinalIgnoreCase))
+                {
+                    endpoint.Clear();
+                }
+
+                endpoint.PlaceholderText = "account-id.r2.cloudflarestorage.com";
+            }
+            else
+            {
+                if (string.Equals(
+                        selected,
+                        ConnectionEditorDraftFactory.AmazonS3ServiceType,
+                        StringComparison.Ordinal) &&
+                    ConnectionEditorDraftFactory.IsCloudflareR2Endpoint(endpoint.Text))
+                {
+                    endpoint.Text = "https://s3.amazonaws.com";
+                    region.Text = "us-east-1";
+                    addressingStyle.SelectedItem = "Virtual-hosted (recommended)";
+                }
+
+                endpoint.PlaceholderText = "https://s3.example.com";
+            }
+        }
+
+        serviceType.SelectedIndexChanged += (_, _) => ApplyServicePreset();
+        endpoint.TextChanged += (_, _) =>
+        {
+            if (ConnectionEditorDraftFactory.IsCloudflareR2Endpoint(endpoint.Text) &&
+                !string.Equals(
+                    serviceType.SelectedItem as string,
+                    ConnectionEditorDraftFactory.CloudflareR2ServiceType,
+                    StringComparison.Ordinal))
+            {
+                serviceType.SelectedItem = ConnectionEditorDraftFactory.CloudflareR2ServiceType;
+            }
+        };
+        ApplyServicePreset();
     }
 
     private Panel BuildProviderPage(

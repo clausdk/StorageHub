@@ -37,6 +37,14 @@ public interface ISyncManagementAgentClient : IAsyncDisposable
         SyncRunStatusRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<SyncRunListResponse> ListRunsAsync(
+        SyncRunListRequest request,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new SyncRunListResponse(
+            SyncManagementIpcContract.CurrentVersion,
+            [],
+            null));
+
     Task<SyncPlanPageResponse> GetPlanPageAsync(
         SyncPlanPageRequest request,
         CancellationToken cancellationToken = default);
@@ -149,6 +157,19 @@ public sealed class NamedPipeSyncManagementAgentClient : ISyncManagementAgentCli
             SyncManagementIpcMessageTypes.RunStatusResponse,
             request!,
             response => ValidateRunStatusResponse(request!, response),
+            cancellationToken);
+    }
+
+    public Task<SyncRunListResponse> ListRunsAsync(
+        SyncRunListRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequest(request, request?.HasValidBounds ?? false, nameof(request));
+        return ExecuteAsync<SyncRunListRequest, SyncRunListResponse>(
+            SyncManagementIpcMessageTypes.RunListRequest,
+            SyncManagementIpcMessageTypes.RunListResponse,
+            request!,
+            response => ValidateRunListResponse(request!, response),
             cancellationToken);
     }
 
@@ -295,7 +316,25 @@ public sealed class NamedPipeSyncManagementAgentClient : ISyncManagementAgentCli
 
         if (string.Equals(envelope.MessageType, IpcProtocol.ErrorResponseMessageType, StringComparison.Ordinal))
         {
-            throw new InvalidDataException("The local agent rejected the sync request.");
+            IpcErrorResponse error;
+            try
+            {
+                error = envelope.DeserializePayload<IpcErrorResponse>();
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidDataException("The local agent returned an invalid sync error response.", exception);
+            }
+
+            if (string.IsNullOrWhiteSpace(error.Code) || string.IsNullOrWhiteSpace(error.Message) ||
+                error.Code.Length > StorageIpcLimits.MaximumFailureCodeLength ||
+                error.Message.Length > StorageIpcLimits.MaximumFailureMessageLength ||
+                error.Code.Any(char.IsControl) || error.Message.Any(char.IsControl))
+            {
+                throw new InvalidDataException("The local agent returned an invalid sync error response.");
+            }
+
+            throw new InvalidOperationException(error.Message);
         }
 
         if (!string.Equals(envelope.MessageType, responseType, StringComparison.Ordinal))
@@ -401,6 +440,24 @@ public sealed class NamedPipeSyncManagementAgentClient : ISyncManagementAgentCli
         }
     }
 
+    private static void ValidateRunListResponse(
+        SyncRunListRequest request,
+        SyncRunListResponse response)
+    {
+        ValidateContract(response.ContractVersion);
+        if (response.Runs is null || response.Runs.Length > request.PageSize ||
+            !IsValidFailure(response.Failure) ||
+            response.Failure is not null && response.Runs.Length != 0 ||
+            response.Runs.Any(run => !IsValidRun(run) ||
+                request.ProfileId is { } profileId && run.ProfileId != profileId) ||
+            response.ContinuationToken is not null &&
+                (response.ContinuationToken.Length > SyncManagementIpcLimits.MaximumContinuationTokenLength ||
+                 !response.ContinuationToken.All(char.IsAsciiDigit)))
+        {
+            throw InvalidResponse();
+        }
+    }
+
     private static void ValidatePlanPageResponse(
         SyncPlanPageRequest request,
         SyncPlanPageResponse response)
@@ -481,9 +538,8 @@ public sealed class NamedPipeSyncManagementAgentClient : ISyncManagementAgentCli
     private static bool IsValidProfileSummary(SyncProfileSummary profile) =>
         profile.ProfileId != Guid.Empty &&
         IsSafeText(profile.DisplayName, SyncManagementIpcLimits.MaximumDisplayNameLength, required: true) &&
-        profile.LeftConnectionId != Guid.Empty &&
-        profile.RightConnectionId != Guid.Empty &&
-        profile.LeftConnectionId != profile.RightConnectionId &&
+        profile.LocationAConnectionId != Guid.Empty &&
+        profile.LocationBConnectionId != Guid.Empty &&
         Enum.IsDefined(profile.Direction) &&
         Enum.IsDefined(profile.DeletionMode) &&
         profile.Revision >= 1 &&
@@ -605,6 +661,7 @@ public sealed class NamedPipeSyncManagementAgentClient : ISyncManagementAgentCli
             SyncProfileUpdateRequest value => value.ContractVersion,
             SyncPreviewGenerateRequest value => value.ContractVersion,
             SyncRunStatusRequest value => value.ContractVersion,
+            SyncRunListRequest value => value.ContractVersion,
             SyncPlanPageRequest value => value.ContractVersion,
             SyncConflictPageRequest value => value.ContractVersion,
             SyncApproveDispatchRequest value => value.ContractVersion,

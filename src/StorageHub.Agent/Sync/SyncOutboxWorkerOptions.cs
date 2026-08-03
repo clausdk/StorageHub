@@ -3,6 +3,8 @@ namespace StorageHub.Agent.Sync;
 public sealed record SyncOutboxWorkerOptions
 {
     public int MaximumConcurrency { get; init; } = 1;
+    public int MinimumConcurrency { get; init; } = 1;
+    public bool AdaptiveConcurrency { get; init; }
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan LeaseDuration { get; init; } = TimeSpan.FromMinutes(2);
     public TimeSpan LeaseRenewalInterval { get; init; } = TimeSpan.FromSeconds(30);
@@ -16,6 +18,11 @@ public sealed record SyncOutboxWorkerOptions
             throw new ArgumentOutOfRangeException(
                 nameof(MaximumConcurrency),
                 "Sync outbox concurrency must be between 1 and 8.");
+        }
+
+        if (MinimumConcurrency < 1 || MinimumConcurrency > MaximumConcurrency)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MinimumConcurrency));
         }
 
         ValidatePositive(PollInterval, nameof(PollInterval));

@@ -44,9 +44,10 @@ public static class VerifiedSyncBaselineBuilder
             right.CaseSensitivity == StorageCaseSensitivity.Sensitive
                 ? StringComparer.Ordinal
                 : StringComparer.OrdinalIgnoreCase;
-        if (!TryIndex(left.Entries, comparer, out var leftEntries) ||
-            !TryIndex(right.Entries, comparer, out var rightEntries) ||
-            !TryIndex(previousBaseline.Items, comparer, out var previous))
+        var caseSensitive = comparer == StringComparer.Ordinal;
+        if (!TryIndex(left.Entries.Where(pair => profile.FilterPolicy.Includes(pair.Key, caseSensitive)), comparer, out var leftEntries) ||
+            !TryIndex(right.Entries.Where(pair => profile.FilterPolicy.Includes(pair.Key, caseSensitive)), comparer, out var rightEntries) ||
+            !TryIndex(previousBaseline.Items.Where(pair => profile.FilterPolicy.Includes(pair.Key, caseSensitive)), comparer, out var previous))
         {
             return Fail("sync.baseline.path_collision", "The verified baseline contains a cross-endpoint path collision.");
         }
@@ -146,7 +147,7 @@ public static class VerifiedSyncBaselineBuilder
     }
 
     private static bool TryIndex<T>(
-        IReadOnlyDictionary<string, T> source,
+        IEnumerable<KeyValuePair<string, T>> source,
         StringComparer comparer,
         out Dictionary<string, T> result)
     {

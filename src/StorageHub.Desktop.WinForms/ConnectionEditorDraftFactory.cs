@@ -6,6 +6,10 @@ namespace StorageHub.Desktop;
 /// <summary>Maps visible protocol-aware editor fields to the reference-only IPC draft.</summary>
 public static class ConnectionEditorDraftFactory
 {
+    internal const string AmazonS3ServiceType = "Amazon S3";
+    internal const string CloudflareR2ServiceType = "Cloudflare R2";
+    internal const string OtherS3ServiceType = "Other S3-compatible";
+
     public static ConnectionProfileDraft Build(
         StorageProviderKind provider,
         IReadOnlyDictionary<string, string> values)
@@ -91,24 +95,85 @@ public static class ConnectionEditorDraftFactory
 
     private static ConnectionEndpointDocument BuildS3Endpoint(IReadOnlyDictionary<string, string> values)
     {
-        var endpoint = Get(values, "endpoint");
-        if (endpoint is not null &&
-            Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) &&
-            string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+        var endpoint = NormalizeS3ServiceEndpoint(Require(
+            values,
+            "endpoint",
+            "An HTTPS S3 service endpoint is required."));
+        var serviceType = Get(values, "s3ServiceType") ?? AmazonS3ServiceType;
+        var isCloudflareR2 = string.Equals(
+                serviceType,
+                CloudflareR2ServiceType,
+                StringComparison.Ordinal) ||
+            IsCloudflareR2Endpoint(endpoint);
+        var region = isCloudflareR2
+            ? "auto"
+            : Require(values, "region", "A signing region is required for this S3-compatible service.");
+        var bucket = Require(values, "bucket", "An S3 bucket is required.");
+        if (bucket.Length is < 3 or > 255 ||
+            bucket.Any(static character => char.IsControl(character) ||
+                char.IsWhiteSpace(character) || character is '/' or '\\'))
         {
-            throw new ArgumentException("Insecure HTTP S3 endpoints are not enabled by this editor.", nameof(values));
+            throw new ArgumentException("The S3 bucket name must be 3-255 characters with no spaces or slashes.", nameof(values));
         }
 
         return new ConnectionEndpointDocument(
             StorageConnectionProvider.S3,
             RootPath: NormalizeProviderRoot(Get(values, "prefix")),
-            Bucket: Require(values, "bucket", "An S3 bucket is required."),
-            Region: Require(values, "region", "An S3 region is required."),
+            Bucket: bucket,
+            Region: region,
             ServiceEndpoint: endpoint,
-            ForcePathStyle: string.Equals(
+            ForcePathStyle: isCloudflareR2 || string.Equals(
                 Get(values, "addressingStyle"),
                 "Path-style",
                 StringComparison.Ordinal));
+    }
+
+    internal static bool IsCloudflareR2Endpoint(string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return false;
+        }
+
+        var candidate = endpoint.Contains("://", StringComparison.Ordinal)
+            ? endpoint
+            : "https://" + endpoint;
+        return Uri.TryCreate(candidate, UriKind.Absolute, out var uri) &&
+            (uri.IdnHost.Equals("r2.cloudflarestorage.com", StringComparison.OrdinalIgnoreCase) ||
+                uri.IdnHost.EndsWith(".r2.cloudflarestorage.com", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeS3ServiceEndpoint(string value)
+    {
+        var candidate = value.Contains("://", StringComparison.Ordinal)
+            ? value
+            : "https://" + value;
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri) ||
+            string.IsNullOrWhiteSpace(uri.Host))
+        {
+            throw new ArgumentException(
+                "The S3 service endpoint must be a valid hostname or absolute HTTPS URL.",
+                nameof(value));
+        }
+
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "The S3 service endpoint must use HTTPS; insecure HTTP endpoints are not enabled.",
+                nameof(value));
+        }
+
+        if (!string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            uri.AbsolutePath is not "" and not "/")
+        {
+            throw new ArgumentException(
+                "Enter the S3 service endpoint only, without credentials, query text, fragments, or a bucket path.",
+                nameof(value));
+        }
+
+        return uri.GetLeftPart(UriPartial.Authority);
     }
 
     private static ConnectionEndpointDocument BuildFtpEndpoint(IReadOnlyDictionary<string, string> values)
@@ -257,6 +322,13 @@ public static class ConnectionEditorDraftFactory
         Add(values, "bucket", endpoint.Bucket);
         Add(values, "region", endpoint.Region);
         Add(values, "endpoint", endpoint.ServiceEndpoint);
+        Add(values, "s3ServiceType", endpoint.Provider == StorageConnectionProvider.S3
+            ? IsCloudflareR2Endpoint(endpoint.ServiceEndpoint)
+                ? CloudflareR2ServiceType
+                : endpoint.ServiceEndpoint?.Contains("amazonaws.com", StringComparison.OrdinalIgnoreCase) == true
+                    ? AmazonS3ServiceType
+                    : OtherS3ServiceType
+            : null);
         Add(values, "addressingStyle", endpoint.ForcePathStyle
             ? "Path-style"
             : "Virtual-hosted (recommended)");

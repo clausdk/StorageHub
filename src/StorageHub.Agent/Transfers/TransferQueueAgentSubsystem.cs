@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using StorageHub.Agent;
 using StorageHub.Contracts.Results;
 using StorageHub.Domain.Storage;
 using StorageHub.Transfers;
@@ -17,6 +18,8 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
     private readonly TimeProvider _timeProvider;
     private readonly string _ownerId;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly AdaptiveConcurrencyController _adaptiveConcurrency;
+    private readonly ConcurrentDictionary<Domain.Identifiers.ConnectionProfileId, SemaphoreSlim> _connectionSlots = new();
     private readonly ConcurrentDictionary<Domain.Identifiers.TransferJobId, ActiveExecutionControl> _activeExecutions = new();
     private CancellationTokenSource? _lifetime;
     private Task[] _workers = [];
@@ -45,6 +48,10 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
         _connector = connector ?? throw new ArgumentNullException(nameof(connector));
         _options = options ?? new TransferQueueWorkerOptions();
         _options.Validate();
+        _adaptiveConcurrency = new AdaptiveConcurrencyController(
+            _options.AdaptiveConcurrency,
+            _options.MinimumConcurrency,
+            _options.MaximumConcurrency);
         _timeProvider = timeProvider ?? TimeProvider.System;
         _ownerId = ownerId ?? $"storagehub-agent-{Guid.NewGuid():N}";
         if (string.IsNullOrWhiteSpace(_ownerId) || _ownerId.Length > 256 || _ownerId.Any(char.IsControl))
@@ -62,6 +69,8 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
     public int ActiveExecutionCount => Volatile.Read(ref _activeExecutionCount);
 
     public int RecoveredInterruptedCount => Volatile.Read(ref _recoveredInterruptedCount);
+
+    public int CurrentConcurrencyLimit => _adaptiveConcurrency.CurrentLimit;
 
     /// <summary>
     /// Requests cancellation of a currently streaming attempt. The durable transition remains
@@ -126,7 +135,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
 
             _lifetime = new CancellationTokenSource();
             _workers = Enumerable.Range(0, _options.MaximumConcurrency)
-                .Select(_ => Task.Run(() => WorkerLoopAsync(_lifetime.Token), CancellationToken.None))
+                .Select(index => Task.Run(() => WorkerLoopAsync(index, _lifetime.Token), CancellationToken.None))
                 .ToArray();
             _started = true;
         }
@@ -203,12 +212,19 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
             return false;
         }
 
+        await using var connectionLease = await AcquireConnectionSlotsAsync(
+            claim.Job.Intent.Source.ProfileId,
+            claim.Job.Intent.Destination.ProfileId,
+            cancellationToken).ConfigureAwait(false);
+
         _ = Interlocked.Increment(ref _activeExecutionCount);
+        var startedAt = _timeProvider.GetTimestamp();
+        var succeeded = false;
         try
         {
             try
             {
-                await ExecuteClaimAsync(claim, cancellationToken).ConfigureAwait(false);
+                succeeded = await ExecuteClaimAsync(claim, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -226,6 +242,16 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
         }
         finally
         {
+            var elapsed = _timeProvider.GetElapsedTime(startedAt, _timeProvider.GetTimestamp());
+            if (succeeded)
+            {
+                _adaptiveConcurrency.ReportSuccess(claim.Job.Intent.ExpectedLength ?? 1, elapsed);
+            }
+            else if (!cancellationToken.IsCancellationRequested)
+            {
+                _adaptiveConcurrency.ReportFailure();
+            }
+
             _ = Interlocked.Decrement(ref _activeExecutionCount);
         }
     }
@@ -252,7 +278,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
 
         return Task.FromResult(SubsystemHealth.Healthy(string.Create(
             provider: null,
-            $"Transfer queue healthy; active={ActiveExecutionCount}, completed={Interlocked.Read(ref _completed)}, failed={Interlocked.Read(ref _failed)}, retried={Interlocked.Read(ref _retried)}, interrupted={Interlocked.Read(ref _interrupted)}, cancelled={Interlocked.Read(ref _cancelled)}, lease-lost={Interlocked.Read(ref _leaseLosses)}, recovered={RecoveredInterruptedCount}.")));
+            $"Transfer queue healthy; active={ActiveExecutionCount}, concurrency={CurrentConcurrencyLimit}/{_options.MaximumConcurrency}, completed={Interlocked.Read(ref _completed)}, failed={Interlocked.Read(ref _failed)}, retried={Interlocked.Read(ref _retried)}, interrupted={Interlocked.Read(ref _interrupted)}, cancelled={Interlocked.Read(ref _cancelled)}, lease-lost={Interlocked.Read(ref _leaseLosses)}, recovered={RecoveredInterruptedCount}.")));
     }
 
     public async ValueTask DisposeAsync()
@@ -264,13 +290,25 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
 
         await StopAsync(CancellationToken.None).ConfigureAwait(false);
         _disposed = true;
+        foreach (var slot in _connectionSlots.Values)
+        {
+            slot.Dispose();
+        }
+
+        _connectionSlots.Clear();
         _lifecycleGate.Dispose();
     }
 
-    private async Task WorkerLoopAsync(CancellationToken cancellationToken)
+    private async Task WorkerLoopAsync(int workerIndex, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            if (workerIndex >= _adaptiveConcurrency.CurrentLimit)
+            {
+                await DelayForNextPollAsync(cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
             var claimed = false;
             try
             {
@@ -290,31 +328,68 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
                 continue;
             }
 
-            try
-            {
-                await Task.Delay(_options.PollInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
+            await DelayForNextPollAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private async Task ExecuteClaimAsync(TransferJobClaim claim, CancellationToken hostCancellationToken)
+    private async Task DelayForNextPollAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(_options.PollInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async ValueTask<ConnectionSlotLease> AcquireConnectionSlotsAsync(
+        Domain.Identifiers.ConnectionProfileId source,
+        Domain.Identifiers.ConnectionProfileId destination,
+        CancellationToken cancellationToken)
+    {
+        var ids = source == destination
+            ? [source]
+            : new[] { source, destination }.OrderBy(static id => id.ToString(), StringComparer.Ordinal).ToArray();
+        var acquired = new List<SemaphoreSlim>(ids.Length);
+        try
+        {
+            foreach (var id in ids)
+            {
+                var slot = _connectionSlots.GetOrAdd(
+                    id,
+                    _ => new SemaphoreSlim(_options.PerConnectionConcurrency, _options.PerConnectionConcurrency));
+                await slot.WaitAsync(cancellationToken).ConfigureAwait(false);
+                acquired.Add(slot);
+            }
+
+            return new ConnectionSlotLease(acquired);
+        }
+        catch
+        {
+            foreach (var slot in acquired)
+            {
+                slot.Release();
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<bool> ExecuteClaimAsync(TransferJobClaim claim, CancellationToken hostCancellationToken)
     {
         var context = new ClaimContext(claim);
         if (!await ClearPriorCheckpointAsync(context, hostCancellationToken).ConfigureAwait(false))
         {
             RecordLeaseLoss();
-            return;
+            return false;
         }
 
         if (!await TryTransitionAsync(context, TransferState.Connecting, cancellationToken: hostCancellationToken)
                 .ConfigureAwait(false))
         {
             RecordLeaseLoss();
-            return;
+            return false;
         }
 
         ITransferEndpointConnection? sourceConnection = null;
@@ -327,7 +402,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
                 hostCancellationToken).ConfigureAwait(false);
             if (source is null)
             {
-                return;
+                return false;
             }
 
             sourceConnection = source;
@@ -337,7 +412,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
                 hostCancellationToken).ConfigureAwait(false);
             if (destination is null)
             {
-                return;
+                return false;
             }
 
             destinationConnection = destination;
@@ -345,7 +420,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
                     .ConfigureAwait(false))
             {
                 RecordLeaseLoss();
-                return;
+                return false;
             }
 
             using var executionLifetime = CancellationTokenSource.CreateLinkedTokenSource(hostCancellationToken);
@@ -400,7 +475,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
             if (leaseOutcome == MonitorOutcome.LeaseLost || checkpointOutcome == MonitorOutcome.LeaseLost)
             {
                 RecordLeaseLoss();
-                return;
+                return false;
             }
 
             if (leaseOutcome == MonitorOutcome.InfrastructureFailure ||
@@ -409,7 +484,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
                 Volatile.Write(
                     ref _lastInfrastructureFailure,
                     "The transfer worker could not maintain its durable execution lease or checkpoint.");
-                return;
+                return false;
             }
 
             if (executionResult is null)
@@ -417,32 +492,32 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
                 if (activeControl.IsCancellationRequestedByUser)
                 {
                     await TransitionCancelledAsync(context).ConfigureAwait(false);
-                    return;
+                    return false;
                 }
 
                 if (hostCancellationToken.IsCancellationRequested)
                 {
                     await TransitionInterruptedAsync(context).ConfigureAwait(false);
-                    return;
+                    return false;
                 }
 
                 await TransitionUncertainAsync(context, unexpectedFailure is null
                     ? "Transfer execution was cancelled after its ownership monitor stopped."
                     : "The transfer executor stopped unexpectedly after provider I/O began.").ConfigureAwait(false);
-                return;
+                return false;
             }
 
             if (executionResult.IsFailure)
             {
                 await HandleExecutionFailureAsync(context, executionResult.Error).ConfigureAwait(false);
-                return;
+                return false;
             }
 
             if (!await SaveLatestCheckpointAsync(context, progress.BytesTransferred, CancellationToken.None)
                     .ConfigureAwait(false))
             {
                 RecordLeaseLoss();
-                return;
+                return false;
             }
 
             if (!await TryTransitionAsync(
@@ -459,11 +534,12 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
                     cancellationToken: CancellationToken.None).ConfigureAwait(false))
             {
                 RecordLeaseLoss();
-                return;
+                return false;
             }
 
             _ = Interlocked.Increment(ref _completed);
             Volatile.Write(ref _lastLeaseLoss, null);
+            return true;
         }
         finally
         {
@@ -920,6 +996,25 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
 
             executionLifetime.Cancel();
             return true;
+        }
+    }
+
+    private sealed class ConnectionSlotLease(IReadOnlyList<SemaphoreSlim> slots) : IAsyncDisposable
+    {
+        private IReadOnlyList<SemaphoreSlim>? _slots = slots;
+
+        public ValueTask DisposeAsync()
+        {
+            var held = Interlocked.Exchange(ref _slots, null);
+            if (held is not null)
+            {
+                foreach (var slot in held)
+                {
+                    slot.Release();
+                }
+            }
+
+            return ValueTask.CompletedTask;
         }
     }
 

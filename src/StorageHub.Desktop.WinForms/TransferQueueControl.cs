@@ -93,7 +93,7 @@ public sealed class TransferQueueControl : UserControl
         {
             Alignment = ToolStripItemAlignment.Right,
             ForeColor = StorageHubTheme.TextMuted,
-            AccessibleName = "Queue status"
+            AccessibleDescription = "Current durable transfer queue status"
         };
         toolbar.Items.Add(refresh);
         toolbar.Items.Add(new ToolStripSeparator());
@@ -119,7 +119,7 @@ public sealed class TransferQueueControl : UserControl
         }
 
         AddSyncRunsTab();
-        AddPlaceholderTab("Logs", "Safe agent and transfer diagnostics will appear here.");
+        AddLogsTab();
         _tabs.SelectedIndex = 0;
         _tabs.SelectedIndexChanged += SelectedTabChanged;
         Controls.Add(_tabs);
@@ -197,21 +197,14 @@ public sealed class TransferQueueControl : UserControl
         _tabs.TabPages.Add(page);
     }
 
-    private void AddPlaceholderTab(string name, string description)
+    private void AddLogsTab()
     {
-        var page = new TabPage(name)
+        var page = new TabPage("Logs")
         {
             BackColor = StorageHubTheme.Surface,
-            AccessibleName = name
+            AccessibleName = "Durable activity log"
         };
-        page.Controls.Add(new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = description,
-            TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = StorageHubTheme.TextMuted,
-            AccessibleName = description
-        });
+        page.Controls.Add(new ActivityLogControl());
         _tabs.TabPages.Add(page);
     }
 
@@ -414,7 +407,7 @@ public sealed class TransferQueueControl : UserControl
             _nextCursor = response.ContinuationToken;
             _nextButton.Enabled = _nextCursor is not null;
             _status.Text = response.Transfers.Length == 0
-                ? $"No {definition.Name.ToLowerInvariant()} transfers."
+                ? EmptyStatus(definition.Name)
                 : $"{response.Transfers.Length} {definition.Name.ToLowerInvariant()} transfer(s).";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -452,6 +445,12 @@ public sealed class TransferQueueControl : UserControl
 
     private static string FormatEndpoint(Guid connectionId, string path) =>
         $"{connectionId.ToString("N")[..8]} · {(path.Length == 0 ? "/" : path)}";
+
+    private static string EmptyStatus(string tabName) => tabName switch
+    {
+        "Conflicts" => "No transfers require reconciliation.",
+        _ => $"No {tabName.ToLowerInvariant()} transfers."
+    };
 
     private static string FormatProgress(long progress, long? expected) => expected switch
     {

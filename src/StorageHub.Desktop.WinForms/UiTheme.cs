@@ -100,12 +100,16 @@ public enum UiGlyph
     Pause,
     Search,
     Folder,
+    File,
     Save,
     Delete,
     Test,
     Lock,
     Warning,
-    More
+    More,
+    Home,
+    Settings,
+    Info
 }
 
 public static class UiIconFactory
@@ -188,6 +192,23 @@ public static class UiIconFactory
                     graphics.DrawPath(pen, path);
                 }
                 break;
+            case UiGlyph.File:
+                graphics.DrawLines(pen,
+                [
+                    new PointF(6, 3),
+                    new PointF(15, 3),
+                    new PointF(19, 7),
+                    new PointF(19, 21),
+                    new PointF(6, 21),
+                    new PointF(6, 3)
+                ]);
+                graphics.DrawLines(pen,
+                [
+                    new PointF(15, 3),
+                    new PointF(15, 7),
+                    new PointF(19, 7)
+                ]);
+                break;
             case UiGlyph.Save:
                 graphics.DrawRectangle(pen, 5, 4, 14, 16);
                 graphics.DrawRectangle(pen, 8, 4, 8, 5);
@@ -217,6 +238,24 @@ public static class UiIconFactory
                 graphics.FillEllipse(brush, 4, 10, 3, 3);
                 graphics.FillEllipse(brush, 10.5F, 10, 3, 3);
                 graphics.FillEllipse(brush, 17, 10, 3, 3);
+                break;
+            case UiGlyph.Home:
+                graphics.DrawLines(pen, [new PointF(3, 11), new PointF(12, 4), new PointF(21, 11)]);
+                graphics.DrawLines(pen, [new PointF(6, 10), new PointF(6, 20), new PointF(18, 20), new PointF(18, 10)]);
+                graphics.DrawRectangle(pen, 10, 14, 4, 6);
+                break;
+            case UiGlyph.Settings:
+                graphics.DrawEllipse(pen, 8, 8, 8, 8);
+                graphics.DrawEllipse(pen, 4, 4, 16, 16);
+                graphics.DrawLine(pen, 12, 2, 12, 5);
+                graphics.DrawLine(pen, 12, 19, 12, 22);
+                graphics.DrawLine(pen, 2, 12, 5, 12);
+                graphics.DrawLine(pen, 19, 12, 22, 12);
+                break;
+            case UiGlyph.Info:
+                graphics.DrawEllipse(pen, 4, 4, 16, 16);
+                graphics.DrawLine(pen, 12, 10, 12, 17);
+                graphics.FillEllipse(brush, 11, 7, 2, 2);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(glyph), glyph, "Unknown UI glyph.");

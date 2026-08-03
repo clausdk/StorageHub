@@ -108,6 +108,7 @@ public sealed class ConnectionEditorDraftFactoryTests
         StorageProviderKind.S3 => new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["profileName"] = "S3",
+            ["endpoint"] = "https://s3.amazonaws.com",
             ["bucket"] = "archive",
             ["region"] = "eu-north-1",
             ["authenticationMode"] = "Default credential chain"

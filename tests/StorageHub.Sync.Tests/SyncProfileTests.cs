@@ -67,6 +67,35 @@ public sealed class SyncProfileTests
             deletionMode: SyncDeletionMode.Mirror));
     }
 
+    [Fact]
+    public void Same_connection_allows_only_non_overlapping_location_roots()
+    {
+        var valid = new SyncProfile(
+            SyncProfileId.New(), "Same connection", _left, "incoming", _left, "archive",
+            SyncDirection.LeftToRight, SyncDeletionMode.Disabled, SyncConflictPolicy.Block,
+            DeletionSafetyPolicy.Default, new TransferExecutionOptions(Overwrite: true), true, 1, Now, Now);
+
+        Assert.Equal(valid.LocationAConnectionProfileId, valid.LocationBConnectionProfileId);
+        Assert.Throws<ArgumentException>(() => new SyncProfile(
+            SyncProfileId.New(), "Overlap", _left, "incoming", _left, "incoming/child",
+            SyncDirection.LeftToRight, SyncDeletionMode.Disabled, SyncConflictPolicy.Block,
+            DeletionSafetyPolicy.Default, new TransferExecutionOptions(), true, 1, Now, Now));
+    }
+
+    [Fact]
+    public void Filters_conflicts_and_behavior_are_bound_into_policy_hash()
+    {
+        var baseline = Create();
+        var filtered = new SyncProfile(
+            SyncProfileId.New(), "Sync", _left, "documents", _right, "backup",
+            SyncDirection.LeftToRight, SyncDeletionMode.Disabled, SyncConflictPolicy.KeepBoth,
+            DeletionSafetyPolicy.Default, new TransferExecutionOptions(Overwrite: true), true, 1, Now, Now,
+            new SyncPathFilterPolicy(["**/*.txt"], ["private/**"], includeHiddenFiles: false),
+            SyncBehavior.UpdateAToB);
+
+        Assert.NotEqual(baseline.PolicySha256, filtered.PolicySha256);
+    }
+
     private SyncProfile Create(
         string displayName = "Sync",
         bool enabled = true,

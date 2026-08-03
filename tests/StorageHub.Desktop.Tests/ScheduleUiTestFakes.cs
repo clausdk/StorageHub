@@ -131,7 +131,7 @@ internal sealed class FakeScheduleManagementClient : IScheduleManagementAgentCli
         LastRunOutcome: null,
         LastErrorCode: null,
         revision,
-        ScheduleIpcExecutionMode.PreviewOnly);
+        draft.ExecutionMode);
 
     private static ScheduleMutationResponse Succeeded(ScheduleDocument schedule) => new(
         ScheduleManagementIpcContract.CurrentVersion,

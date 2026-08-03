@@ -51,6 +51,7 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
         SyncManagementIpcMessageTypes.ProfileUpdateRequest or
         SyncManagementIpcMessageTypes.PreviewGenerateRequest or
         SyncManagementIpcMessageTypes.RunStatusRequest or
+        SyncManagementIpcMessageTypes.RunListRequest or
         SyncManagementIpcMessageTypes.PlanPageRequest or
         SyncManagementIpcMessageTypes.ConflictPageRequest or
         SyncManagementIpcMessageTypes.ApproveDispatchRequest;
@@ -68,6 +69,7 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
             SyncManagementIpcMessageTypes.ProfileUpdateRequest => UpdateProfileAsync(request, cancellationToken),
             SyncManagementIpcMessageTypes.PreviewGenerateRequest => GeneratePreviewAsync(request, cancellationToken),
             SyncManagementIpcMessageTypes.RunStatusRequest => GetRunStatusAsync(request, cancellationToken),
+            SyncManagementIpcMessageTypes.RunListRequest => ListRunsAsync(request, cancellationToken),
             SyncManagementIpcMessageTypes.PlanPageRequest => GetPlanPageAsync(request, cancellationToken),
             SyncManagementIpcMessageTypes.ConflictPageRequest => GetConflictPageAsync(request, cancellationToken),
             SyncManagementIpcMessageTypes.ApproveDispatchRequest => ApproveAndDispatchAsync(request, cancellationToken),
@@ -155,7 +157,10 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
         CancellationToken cancellationToken)
     {
         var request = envelope.DeserializePayload<SyncProfileCreateRequest>();
-        var invalid = ValidateRequest(request.ContractVersion, request.HasValidBounds);
+        var invalid = ValidateRequest(
+            request.ContractVersion,
+            request.HasValidBounds &&
+            (request.ContractVersion == SyncManagementIpcContract.LegacyVersion || request.Draft.HasValidV2Bounds));
         if (invalid is not null)
         {
             return invalid;
@@ -207,7 +212,10 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
         CancellationToken cancellationToken)
     {
         var request = envelope.DeserializePayload<SyncProfileUpdateRequest>();
-        var invalid = ValidateRequest(request.ContractVersion, request.HasValidBounds);
+        var invalid = ValidateRequest(
+            request.ContractVersion,
+            request.HasValidBounds &&
+            (request.ContractVersion == SyncManagementIpcContract.LegacyVersion || request.Draft.HasValidV2Bounds));
         if (invalid is not null)
         {
             return invalid;
@@ -348,6 +356,52 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
         catch (Exception)
         {
             return RunStatusFailure(request.SyncRunId, UnavailableFailure());
+        }
+    }
+
+    private async ValueTask<AgentIpcCommandResponse> ListRunsAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        var request = envelope.DeserializePayload<SyncRunListRequest>();
+        var invalid = ValidateRequest(request.ContractVersion, request.HasValidBounds);
+        if (invalid is not null)
+        {
+            return invalid;
+        }
+
+        var offset = request.ContinuationToken is null
+            ? 0
+            : int.Parse(request.ContinuationToken, CultureInfo.InvariantCulture);
+        try
+        {
+            var profileId = request.ProfileId is { } value ? new SyncProfileId(value) : (SyncProfileId?)null;
+            var records = await _runs.ListAsync(
+                profileId,
+                offset,
+                request.PageSize + 1,
+                cancellationToken).ConfigureAwait(false);
+            var hasMore = records.Count > request.PageSize;
+            return AgentIpcCommandResponse.Create(
+                SyncManagementIpcMessageTypes.RunListResponse,
+                new SyncRunListResponse(
+                    SyncManagementIpcContract.CurrentVersion,
+                    records.Take(request.PageSize).Select(MapRun).ToArray(),
+                    hasMore ? checked(offset + request.PageSize).ToString(CultureInfo.InvariantCulture) : null));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return AgentIpcCommandResponse.Create(
+                SyncManagementIpcMessageTypes.RunListResponse,
+                new SyncRunListResponse(
+                    SyncManagementIpcContract.CurrentVersion,
+                    [],
+                    null,
+                    UnavailableFailure()));
         }
     }
 
@@ -556,7 +610,12 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
             draft.Enabled,
             revision,
             createdUtc,
-            updatedUtc);
+            updatedUtc,
+            new SyncPathFilterPolicy(
+                draft.IncludeGlobs,
+                draft.ExcludeGlobs,
+                draft.IncludeHiddenFiles),
+            Map(draft.Behavior));
 
     private static SyncProfileSummary MapProfileSummary(SyncProfile profile) => new(
         profile.ProfileId.Value,
@@ -577,12 +636,13 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
             profile.LeftRoot,
             profile.RightConnectionProfileId.Value,
             profile.RightRoot,
-            Map(profile.Direction),
-            Map(profile.DeletionMode),
+            Map(profile.Behavior),
             Map(profile.ConflictPolicy),
+            profile.FilterPolicy.IncludeGlobs,
+            profile.FilterPolicy.ExcludeGlobs,
+            profile.FilterPolicy.IncludeHiddenFiles,
             profile.DeletionSafetyPolicy.MaximumDeletionCount,
             profile.DeletionSafetyPolicy.MaximumDeletionPercentage,
-            profile.TransferOptions.Overwrite,
             profile.TransferOptions.BufferSize,
             profile.Enabled),
         profile.Revision,
@@ -957,12 +1017,42 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
     private static SyncConflictPolicy Map(SyncIpcConflictPolicy value) => value switch
     {
         SyncIpcConflictPolicy.Block => SyncConflictPolicy.Block,
+        SyncIpcConflictPolicy.KeepBoth => SyncConflictPolicy.KeepBoth,
         _ => throw new ArgumentOutOfRangeException(nameof(value))
     };
 
     private static SyncIpcConflictPolicy Map(SyncConflictPolicy value) => value switch
     {
         SyncConflictPolicy.Block => SyncIpcConflictPolicy.Block,
+        SyncConflictPolicy.KeepBoth => SyncIpcConflictPolicy.KeepBoth,
+        _ => throw new ArgumentOutOfRangeException(nameof(value))
+    };
+
+    private static SyncBehavior Map(SyncIpcBehavior value) => value switch
+    {
+        SyncIpcBehavior.CopyNewFilesAToB => SyncBehavior.CopyNewFilesAToB,
+        SyncIpcBehavior.UpdateAToB => SyncBehavior.UpdateAToB,
+        SyncIpcBehavior.MirrorAToB => SyncBehavior.MirrorAToB,
+        SyncIpcBehavior.CopyNewFilesBToA => SyncBehavior.CopyNewFilesBToA,
+        SyncIpcBehavior.UpdateBToA => SyncBehavior.UpdateBToA,
+        SyncIpcBehavior.MirrorBToA => SyncBehavior.MirrorBToA,
+        SyncIpcBehavior.TwoWaySync => SyncBehavior.TwoWaySync,
+        SyncIpcBehavior.TwoWayWithDeletionPropagation => SyncBehavior.TwoWayWithDeletionPropagation,
+        SyncIpcBehavior.CompareOnly => SyncBehavior.CompareOnly,
+        _ => throw new ArgumentOutOfRangeException(nameof(value))
+    };
+
+    private static SyncIpcBehavior Map(SyncBehavior value) => value switch
+    {
+        SyncBehavior.CopyNewFilesAToB => SyncIpcBehavior.CopyNewFilesAToB,
+        SyncBehavior.UpdateAToB => SyncIpcBehavior.UpdateAToB,
+        SyncBehavior.MirrorAToB => SyncIpcBehavior.MirrorAToB,
+        SyncBehavior.CopyNewFilesBToA => SyncIpcBehavior.CopyNewFilesBToA,
+        SyncBehavior.UpdateBToA => SyncIpcBehavior.UpdateBToA,
+        SyncBehavior.MirrorBToA => SyncIpcBehavior.MirrorBToA,
+        SyncBehavior.TwoWaySync => SyncIpcBehavior.TwoWaySync,
+        SyncBehavior.TwoWayWithDeletionPropagation => SyncIpcBehavior.TwoWayWithDeletionPropagation,
+        SyncBehavior.CompareOnly => SyncIpcBehavior.CompareOnly,
         _ => throw new ArgumentOutOfRangeException(nameof(value))
     };
 

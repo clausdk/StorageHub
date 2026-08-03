@@ -56,6 +56,14 @@ public static class ConnectionProviderCatalog
     private static readonly ReadOnlyCollection<string> AddressingStyles =
         Array.AsReadOnly(new[] { "Virtual-hosted (recommended)", "Path-style" });
 
+    private static readonly ReadOnlyCollection<string> S3ServiceTypes =
+        Array.AsReadOnly(new[]
+        {
+            ConnectionEditorDraftFactory.AmazonS3ServiceType,
+            ConnectionEditorDraftFactory.CloudflareR2ServiceType,
+            ConnectionEditorDraftFactory.OtherS3ServiceType
+        });
+
     private static readonly ReadOnlyCollection<string> FtpTlsModes =
         Array.AsReadOnly(new[] { "Explicit TLS (recommended)", "Implicit TLS" });
 
@@ -94,11 +102,12 @@ public static class ConnectionProviderCatalog
             "https://s3.example.com",
             "The current CL.Storage S3 provider uses system TLS and hostname validation. Per-connection S3 certificate pins are not offered until the provider can enforce them.",
             [
-                Field("endpoint", "Service endpoint", ConnectionFieldKind.Text, required: true, defaultValue: "https://s3.amazonaws.com", placeholder: "https://s3.example.com"),
-                Field("region", "Region", ConnectionFieldKind.Text, required: true, defaultValue: "us-east-1"),
+                Field("s3ServiceType", "Object-store service", ConnectionFieldKind.Choice, defaultValue: S3ServiceTypes[0], choices: S3ServiceTypes),
+                Field("endpoint", "Service endpoint", ConnectionFieldKind.Text, required: true, defaultValue: "https://s3.amazonaws.com", placeholder: "account-id.r2.cloudflarestorage.com", help: "A hostname is accepted and upgraded to HTTPS automatically. Do not use a public bucket URL."),
+                Field("region", "Signing region", ConnectionFieldKind.Text, defaultValue: "us-east-1", help: "Amazon and most compatible services require a signing region. Cloudflare R2 uses 'auto', which StorageHub selects automatically."),
                 Field("bucket", "Bucket", ConnectionFieldKind.Text, required: true),
                 Field("prefix", "Initial prefix", ConnectionFieldKind.Text, placeholder: "team/archive/"),
-                Field("addressingStyle", "Addressing style", ConnectionFieldKind.Choice, defaultValue: AddressingStyles[0], choices: AddressingStyles)
+                Field("addressingStyle", "Addressing style", ConnectionFieldKind.Choice, defaultValue: AddressingStyles[0], choices: AddressingStyles, help: "Cloudflare R2 and many compatible services use path-style addressing; Amazon S3 normally uses virtual-hosted addressing.")
             ],
             [
                 Field("accessKeyReference", "Access key reference", ConnectionFieldKind.SecretReference, placeholder: "Optional when using a provider credential chain"),

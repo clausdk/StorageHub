@@ -14,10 +14,12 @@ internal sealed class FakeSyncManagementClient : ISyncManagementAgentClient
     public int UpdateProfileCount { get; private set; }
     public int PreviewCount { get; private set; }
     public int RunStatusCount { get; private set; }
+    public int RunListCount { get; private set; }
     public int PlanPageCount { get; private set; }
     public int ConflictPageCount { get; private set; }
     public int ApprovalCount { get; private set; }
     public int DisposeCount { get; private set; }
+    public Exception? ListProfilesError { get; set; }
     public SyncApproveDispatchRequest? LastApproval { get; private set; }
     public SyncRunSummary Run { get; set; } = CreateRun(Guid.NewGuid(), Guid.NewGuid());
 
@@ -29,6 +31,11 @@ internal sealed class FakeSyncManagementClient : ISyncManagementAgentClient
     {
         cancellationToken.ThrowIfCancellationRequested();
         ListProfilesCount++;
+        if (ListProfilesError is not null)
+        {
+            return Task.FromException<SyncProfileListResponse>(ListProfilesError);
+        }
+
         return Task.FromResult(new SyncProfileListResponse(
             SyncManagementIpcContract.CurrentVersion,
             _profiles.Values
@@ -139,11 +146,34 @@ internal sealed class FakeSyncManagementClient : ISyncManagementAgentClient
     {
         cancellationToken.ThrowIfCancellationRequested();
         RunStatusCount++;
+        if (Run.DispatchState == SyncIpcDispatchState.DurablyDispatched &&
+            Run.Phase == SyncIpcRunPhase.Ready)
+        {
+            Run = Run with
+            {
+                Phase = SyncIpcRunPhase.Completed,
+                Revision = Run.Revision + 1,
+                UpdatedUtc = Now.AddSeconds(2)
+            };
+        }
+
         return Task.FromResult(new SyncRunStatusResponse(
             SyncManagementIpcContract.CurrentVersion,
             request.SyncRunId,
             Run.SyncRunId == request.SyncRunId ? Run : null,
             Run.SyncRunId == request.SyncRunId ? null : NotFound()));
+    }
+
+    public Task<SyncRunListResponse> ListRunsAsync(
+        SyncRunListRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RunListCount++;
+        return Task.FromResult(new SyncRunListResponse(
+            SyncManagementIpcContract.CurrentVersion,
+            [Run],
+            ContinuationToken: null));
     }
 
     public Task<SyncPlanPageResponse> GetPlanPageAsync(
