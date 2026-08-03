@@ -3,13 +3,20 @@ using StorageHub.Domain.Identifiers;
 
 namespace StorageHub.Persistence.Scheduling;
 
+public enum SyncScheduleExecutionMode
+{
+    PreviewOnly = 0,
+    SafeAutomatic = 1,
+}
+
 public sealed record SyncScheduleManagementDraft(
     SyncProfileId ProfileId,
     string CronExpression,
     string TimeZoneId,
     TimeSpan MisfireGrace,
     bool QueueOneWhileRunning,
-    bool Enabled);
+    bool Enabled,
+    SyncScheduleExecutionMode ExecutionMode = SyncScheduleExecutionMode.PreviewOnly);
 
 /// <summary>Management-safe schedule state. Ownership and fencing evidence never leaves the store.</summary>
 public sealed record SyncScheduleManagementRecord(
@@ -26,7 +33,8 @@ public sealed record SyncScheduleManagementRecord(
     bool IsBusy,
     string? LastRunOutcome,
     string? LastErrorCode,
-    long Revision);
+    long Revision,
+    SyncScheduleExecutionMode ExecutionMode = SyncScheduleExecutionMode.PreviewOnly);
 
 public enum SyncScheduleManagementMutationStatus
 {

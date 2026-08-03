@@ -29,7 +29,10 @@ internal static class Program
             GlobalPaletteMode = PaletteMode.Microsoft365Blue,
             GlobalApplyToolstrips = false
         };
-        System.Windows.Forms.Application.Run(new MainForm());
+        System.Windows.Forms.Application.Run(new MainForm(
+            DesktopUpdatePreferencesStore.CreateDefault(),
+            updateEngineFactory: null,
+            lifecycle));
         return 0;
     }
 }

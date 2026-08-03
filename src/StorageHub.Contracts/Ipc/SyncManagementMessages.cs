@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace StorageHub.Contracts.Ipc;
@@ -5,9 +6,10 @@ namespace StorageHub.Contracts.Ipc;
 /// <summary>Independently versioned normal-pipe contract for preview-first sync management.</summary>
 public static class SyncManagementIpcContract
 {
-    public const int CurrentVersion = 1;
+    public const int LegacyVersion = 1;
+    public const int CurrentVersion = 2;
 
-    public static bool IsSupported(int version) => version == CurrentVersion;
+    public static bool IsSupported(int version) => version is LegacyVersion or CurrentVersion;
 }
 
 public static class SyncManagementIpcLimits
@@ -23,6 +25,8 @@ public static class SyncManagementIpcLimits
     public const int MaximumConflictKindLength = 128;
     public const int MaximumDeletionCount = 1_000_000;
     public const int MaximumTransferBufferSize = 1_048_576;
+    public const int MaximumFilterCount = 128;
+    public const int MaximumGlobLength = 512;
 }
 
 public static class SyncManagementIpcMessageTypes
@@ -39,6 +43,8 @@ public static class SyncManagementIpcMessageTypes
     public const string PreviewGenerateResponse = "sync.preview.generate.response";
     public const string RunStatusRequest = "sync.run.status.request";
     public const string RunStatusResponse = "sync.run.status.response";
+    public const string RunListRequest = "sync.run.list.request";
+    public const string RunListResponse = "sync.run.list.response";
     public const string PlanPageRequest = "sync.plan.page.request";
     public const string PlanPageResponse = "sync.plan.page.response";
     public const string ConflictPageRequest = "sync.conflict.page.request";
@@ -66,7 +72,22 @@ public enum SyncIpcDeletionMode
 [JsonConverter(typeof(JsonStringEnumConverter<SyncIpcConflictPolicy>))]
 public enum SyncIpcConflictPolicy
 {
-    Block
+    Block,
+    KeepBoth
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<SyncIpcBehavior>))]
+public enum SyncIpcBehavior
+{
+    CopyNewFilesAToB,
+    UpdateAToB,
+    MirrorAToB,
+    CopyNewFilesBToA,
+    UpdateBToA,
+    MirrorBToA,
+    TwoWaySync,
+    TwoWayWithDeletionPropagation,
+    CompareOnly
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<SyncProfileMutationOutcome>))]
@@ -141,6 +162,7 @@ public enum SyncIpcConflictState
     Dismissed
 }
 
+[JsonConverter(typeof(SyncProfileDraftDocumentJsonConverter))]
 public sealed record SyncProfileDraftDocument(
     string DisplayName,
     Guid LeftConnectionId,
@@ -156,11 +178,98 @@ public sealed record SyncProfileDraftDocument(
     int TransferBufferSize,
     bool Enabled)
 {
+    public bool Equals(SyncProfileDraftDocument? other) => other is not null &&
+        string.Equals(DisplayName, other.DisplayName, StringComparison.Ordinal) &&
+        LeftConnectionId == other.LeftConnectionId && string.Equals(LeftRoot, other.LeftRoot, StringComparison.Ordinal) &&
+        RightConnectionId == other.RightConnectionId && string.Equals(RightRoot, other.RightRoot, StringComparison.Ordinal) &&
+        Direction == other.Direction && DeletionMode == other.DeletionMode &&
+        ConflictPolicy == other.ConflictPolicy && MaximumDeletionCount == other.MaximumDeletionCount &&
+        MaximumDeletionPercentage == other.MaximumDeletionPercentage && Overwrite == other.Overwrite &&
+        TransferBufferSize == other.TransferBufferSize && Enabled == other.Enabled && Behavior == other.Behavior &&
+        IncludeHiddenFiles == other.IncludeHiddenFiles && IncludeGlobs.SequenceEqual(other.IncludeGlobs, StringComparer.Ordinal) &&
+        ExcludeGlobs.SequenceEqual(other.ExcludeGlobs, StringComparer.Ordinal);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(DisplayName, StringComparer.Ordinal);
+        hash.Add(LeftConnectionId);
+        hash.Add(LeftRoot, StringComparer.Ordinal);
+        hash.Add(RightConnectionId);
+        hash.Add(RightRoot, StringComparer.Ordinal);
+        hash.Add(Direction);
+        hash.Add(DeletionMode);
+        hash.Add(ConflictPolicy);
+        hash.Add(MaximumDeletionCount);
+        hash.Add(MaximumDeletionPercentage);
+        hash.Add(Overwrite);
+        hash.Add(TransferBufferSize);
+        hash.Add(Enabled);
+        hash.Add(Behavior);
+        hash.Add(IncludeHiddenFiles);
+        foreach (var glob in IncludeGlobs)
+        {
+            hash.Add(glob, StringComparer.Ordinal);
+        }
+        foreach (var glob in ExcludeGlobs)
+        {
+            hash.Add(glob, StringComparer.Ordinal);
+        }
+        return hash.ToHashCode();
+    }
+
+    /// <summary>Neutral v2 name. The legacy JSON field remains accepted during migration.</summary>
+    public Guid LocationAConnectionId => LeftConnectionId;
+    public string LocationARoot => LeftRoot;
+    public Guid LocationBConnectionId => RightConnectionId;
+    public string LocationBRoot => RightRoot;
+
+    public SyncIpcBehavior Behavior { get; init; } = ToBehavior(Direction, DeletionMode, Overwrite);
+    public string[] IncludeGlobs { get; init; } = [];
+    public string[] ExcludeGlobs { get; init; } = [".storagehub", ".storagehub/**", "**/.storagehub/**"];
+    public bool IncludeHiddenFiles { get; init; } = true;
+
+    public SyncProfileDraftDocument(
+        string displayName,
+        Guid locationAConnectionId,
+        string locationARoot,
+        Guid locationBConnectionId,
+        string locationBRoot,
+        SyncIpcBehavior behavior,
+        SyncIpcConflictPolicy conflictPolicy,
+        IEnumerable<string>? includeGlobs,
+        IEnumerable<string>? excludeGlobs,
+        bool includeHiddenFiles,
+        int maximumDeletionCount,
+        decimal maximumDeletionPercentage,
+        int transferBufferSize,
+        bool enabled)
+        : this(
+            displayName,
+            locationAConnectionId,
+            locationARoot,
+            locationBConnectionId,
+            locationBRoot,
+            ToDirection(behavior),
+            ToDeletionMode(behavior),
+            conflictPolicy,
+            maximumDeletionCount,
+            maximumDeletionPercentage,
+            IsUpdateBehavior(behavior),
+            transferBufferSize,
+            enabled)
+    {
+        Behavior = behavior;
+        IncludeGlobs = includeGlobs?.ToArray() ?? [];
+        ExcludeGlobs = excludeGlobs?.ToArray() ?? [];
+        IncludeHiddenFiles = includeHiddenFiles;
+    }
+
     public bool HasValidBounds =>
         IsSafeText(DisplayName, SyncManagementIpcLimits.MaximumDisplayNameLength, required: true) &&
         LeftConnectionId != Guid.Empty &&
         RightConnectionId != Guid.Empty &&
-        LeftConnectionId != RightConnectionId &&
+        LocationsAreDistinctAndNonOverlapping() &&
         IsSafeText(LeftRoot, SyncManagementIpcLimits.MaximumRelativeRootLength, allowEmpty: true) &&
         IsSafeText(RightRoot, SyncManagementIpcLimits.MaximumRelativeRootLength, allowEmpty: true) &&
         Enum.IsDefined(Direction) &&
@@ -170,6 +279,70 @@ public sealed record SyncProfileDraftDocument(
         MaximumDeletionCount is >= 1 and <= SyncManagementIpcLimits.MaximumDeletionCount &&
         MaximumDeletionPercentage is > 0 and <= 100 &&
         TransferBufferSize is >= 1 and <= SyncManagementIpcLimits.MaximumTransferBufferSize;
+
+    public bool HasValidV2Bounds => HasValidBounds &&
+        Enum.IsDefined(Behavior) &&
+        (Behavior == SyncIpcBehavior.CompareOnly || Behavior == ToBehavior(Direction, DeletionMode, Overwrite)) &&
+        ValidateGlobs(IncludeGlobs) &&
+        ValidateGlobs(ExcludeGlobs);
+
+    private bool LocationsAreDistinctAndNonOverlapping()
+    {
+        if (LeftConnectionId != RightConnectionId)
+        {
+            return true;
+        }
+
+        var a = LeftRoot.Trim('/');
+        var b = RightRoot.Trim('/');
+        return a.Length > 0 && b.Length > 0 &&
+               !string.Equals(a, b, StringComparison.OrdinalIgnoreCase) &&
+               !a.StartsWith(b + "/", StringComparison.OrdinalIgnoreCase) &&
+               !b.StartsWith(a + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ValidateGlobs(string[]? globs) =>
+        globs is not null && globs.Length <= SyncManagementIpcLimits.MaximumFilterCount &&
+        globs.All(static glob => IsSafeText(
+            glob,
+            SyncManagementIpcLimits.MaximumGlobLength,
+            required: true));
+
+    private static SyncIpcBehavior ToBehavior(
+        SyncIpcDirection direction,
+        SyncIpcDeletionMode deletionMode,
+        bool overwrite) => (direction, deletionMode, overwrite) switch
+        {
+            (SyncIpcDirection.LeftToRight, SyncIpcDeletionMode.Mirror, _) => SyncIpcBehavior.MirrorAToB,
+            (SyncIpcDirection.LeftToRight, _, true) => SyncIpcBehavior.UpdateAToB,
+            (SyncIpcDirection.LeftToRight, _, false) => SyncIpcBehavior.CopyNewFilesAToB,
+            (SyncIpcDirection.RightToLeft, SyncIpcDeletionMode.Mirror, _) => SyncIpcBehavior.MirrorBToA,
+            (SyncIpcDirection.RightToLeft, _, true) => SyncIpcBehavior.UpdateBToA,
+            (SyncIpcDirection.RightToLeft, _, false) => SyncIpcBehavior.CopyNewFilesBToA,
+            (SyncIpcDirection.TwoWay, SyncIpcDeletionMode.Propagate, _) => SyncIpcBehavior.TwoWayWithDeletionPropagation,
+            _ => SyncIpcBehavior.TwoWaySync,
+        };
+
+    private static SyncIpcDirection ToDirection(SyncIpcBehavior behavior) => behavior switch
+    {
+        SyncIpcBehavior.CopyNewFilesAToB or SyncIpcBehavior.UpdateAToB or SyncIpcBehavior.MirrorAToB or
+            SyncIpcBehavior.CompareOnly => SyncIpcDirection.LeftToRight,
+        SyncIpcBehavior.CopyNewFilesBToA or SyncIpcBehavior.UpdateBToA or SyncIpcBehavior.MirrorBToA =>
+            SyncIpcDirection.RightToLeft,
+        _ => SyncIpcDirection.TwoWay,
+    };
+
+    private static SyncIpcDeletionMode ToDeletionMode(SyncIpcBehavior behavior) => behavior switch
+    {
+        SyncIpcBehavior.MirrorAToB or SyncIpcBehavior.MirrorBToA => SyncIpcDeletionMode.Mirror,
+        SyncIpcBehavior.TwoWayWithDeletionPropagation => SyncIpcDeletionMode.Propagate,
+        _ => SyncIpcDeletionMode.Disabled,
+    };
+
+    private static bool IsUpdateBehavior(SyncIpcBehavior behavior) => behavior is
+        SyncIpcBehavior.UpdateAToB or SyncIpcBehavior.MirrorAToB or
+        SyncIpcBehavior.UpdateBToA or SyncIpcBehavior.MirrorBToA or
+        SyncIpcBehavior.TwoWaySync or SyncIpcBehavior.TwoWayWithDeletionPropagation;
 
     private static bool IsCompatible(SyncIpcDirection direction, SyncIpcDeletionMode deletionMode) =>
         direction == SyncIpcDirection.TwoWay
@@ -207,7 +380,140 @@ public sealed record SyncProfileSummary(
     SyncIpcDeletionMode DeletionMode,
     bool Enabled,
     long Revision,
-    DateTimeOffset UpdatedUtc);
+    DateTimeOffset UpdatedUtc)
+{
+    public Guid LocationAConnectionId => LeftConnectionId;
+    public Guid LocationBConnectionId => RightConnectionId;
+    public SyncIpcBehavior Behavior => new SyncProfileDraftDocument(
+        DisplayName, LeftConnectionId, string.Empty, RightConnectionId, string.Empty,
+        Direction, DeletionMode, SyncIpcConflictPolicy.Block, 1, 100, false, 1, Enabled).Behavior;
+}
+
+internal sealed class SyncProfileDraftDocumentJsonConverter : JsonConverter<SyncProfileDraftDocument>
+{
+    public override SyncProfileDraftDocument Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        var root = document.RootElement;
+        if (TryGet(root, "LocationAConnectionId", out _))
+        {
+            return new SyncProfileDraftDocument(
+                Text(root, "DisplayName"),
+                GuidValue(root, "LocationAConnectionId"),
+                Text(root, "LocationARoot"),
+                GuidValue(root, "LocationBConnectionId"),
+                Text(root, "LocationBRoot"),
+                EnumValue<SyncIpcBehavior>(root, "Behavior"),
+                EnumValue<SyncIpcConflictPolicy>(root, "ConflictPolicy"),
+                Strings(root, "IncludeGlobs"),
+                Strings(root, "ExcludeGlobs"),
+                Bool(root, "IncludeHiddenFiles"),
+                Int(root, "MaximumDeletionCount"),
+                Decimal(root, "MaximumDeletionPercentage"),
+                Int(root, "TransferBufferSize"),
+                Bool(root, "Enabled"));
+        }
+
+        var legacy = new SyncProfileDraftDocument(
+            Text(root, "DisplayName"),
+            GuidValue(root, "LeftConnectionId"),
+            Text(root, "LeftRoot"),
+            GuidValue(root, "RightConnectionId"),
+            Text(root, "RightRoot"),
+            EnumValue<SyncIpcDirection>(root, "Direction"),
+            EnumValue<SyncIpcDeletionMode>(root, "DeletionMode"),
+            EnumValue<SyncIpcConflictPolicy>(root, "ConflictPolicy"),
+            Int(root, "MaximumDeletionCount"),
+            Decimal(root, "MaximumDeletionPercentage"),
+            Bool(root, "Overwrite"),
+            Int(root, "TransferBufferSize"),
+            Bool(root, "Enabled"));
+        return legacy with
+        {
+            Behavior = TryGet(root, "Behavior", out _) ? EnumValue<SyncIpcBehavior>(root, "Behavior") : legacy.Behavior,
+            IncludeGlobs = TryGet(root, "IncludeGlobs", out _) ? Strings(root, "IncludeGlobs") : legacy.IncludeGlobs,
+            ExcludeGlobs = TryGet(root, "ExcludeGlobs", out _) ? Strings(root, "ExcludeGlobs") : legacy.ExcludeGlobs,
+            IncludeHiddenFiles = !TryGet(root, "IncludeHiddenFiles", out _) || Bool(root, "IncludeHiddenFiles"),
+        };
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        SyncProfileDraftDocument value,
+        JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        Write(writer, options, "DisplayName", value.DisplayName);
+        Write(writer, options, "LocationAConnectionId", value.LocationAConnectionId);
+        Write(writer, options, "LocationARoot", value.LocationARoot);
+        Write(writer, options, "LocationBConnectionId", value.LocationBConnectionId);
+        Write(writer, options, "LocationBRoot", value.LocationBRoot);
+        Write(writer, options, "Behavior", value.Behavior.ToString());
+        Write(writer, options, "ConflictPolicy", value.ConflictPolicy.ToString());
+        WriteArray(writer, options, "IncludeGlobs", value.IncludeGlobs);
+        WriteArray(writer, options, "ExcludeGlobs", value.ExcludeGlobs);
+        Write(writer, options, "IncludeHiddenFiles", value.IncludeHiddenFiles);
+        Write(writer, options, "MaximumDeletionCount", value.MaximumDeletionCount);
+        Write(writer, options, "MaximumDeletionPercentage", value.MaximumDeletionPercentage);
+        Write(writer, options, "TransferBufferSize", value.TransferBufferSize);
+        Write(writer, options, "Enabled", value.Enabled);
+        writer.WriteEndObject();
+    }
+
+    private static bool TryGet(JsonElement root, string name, out JsonElement value)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static JsonElement Required(JsonElement root, string name) =>
+        TryGet(root, name, out var value) ? value : throw new JsonException($"Required property '{name}' is missing.");
+    private static string Text(JsonElement root, string name) => Required(root, name).GetString() ?? throw new JsonException();
+    private static Guid GuidValue(JsonElement root, string name) => Required(root, name).GetGuid();
+    private static int Int(JsonElement root, string name) => Required(root, name).GetInt32();
+    private static decimal Decimal(JsonElement root, string name) => Required(root, name).GetDecimal();
+    private static bool Bool(JsonElement root, string name) => Required(root, name).GetBoolean();
+    private static string[] Strings(JsonElement root, string name) =>
+        Required(root, name).EnumerateArray().Select(static item => item.GetString() ?? throw new JsonException()).ToArray();
+    private static T EnumValue<T>(JsonElement root, string name) where T : struct, Enum =>
+        Enum.TryParse<T>(Required(root, name).GetString(), ignoreCase: false, out var value)
+            ? value
+            : throw new JsonException($"Property '{name}' is not a valid {typeof(T).Name}.");
+
+    private static string Name(JsonSerializerOptions options, string value) =>
+        options.PropertyNamingPolicy?.ConvertName(value) ?? value;
+    private static void Write(Utf8JsonWriter writer, JsonSerializerOptions options, string name, string value) =>
+        writer.WriteString(Name(options, name), value);
+    private static void Write(Utf8JsonWriter writer, JsonSerializerOptions options, string name, Guid value) =>
+        writer.WriteString(Name(options, name), value);
+    private static void Write(Utf8JsonWriter writer, JsonSerializerOptions options, string name, bool value) =>
+        writer.WriteBoolean(Name(options, name), value);
+    private static void Write(Utf8JsonWriter writer, JsonSerializerOptions options, string name, int value) =>
+        writer.WriteNumber(Name(options, name), value);
+    private static void Write(Utf8JsonWriter writer, JsonSerializerOptions options, string name, decimal value) =>
+        writer.WriteNumber(Name(options, name), value);
+    private static void WriteArray(Utf8JsonWriter writer, JsonSerializerOptions options, string name, IEnumerable<string> values)
+    {
+        writer.WriteStartArray(Name(options, name));
+        foreach (var value in values)
+        {
+            writer.WriteStringValue(value);
+        }
+        writer.WriteEndArray();
+    }
+}
 
 public sealed record SyncProfileDocument(
     Guid ProfileId,
@@ -299,6 +605,26 @@ public sealed record SyncRunStatusResponse(
     SyncRunSummary? Run,
     StorageIpcFailure? Failure = null);
 
+public sealed record SyncRunListRequest(
+    int ContractVersion = SyncManagementIpcContract.CurrentVersion,
+    Guid? ProfileId = null,
+    int PageSize = 50,
+    string? ContinuationToken = null)
+{
+    public bool HasValidBounds => ContractVersion > 0 &&
+        (ProfileId is null || ProfileId != Guid.Empty) &&
+        PageSize is >= 1 and <= SyncManagementIpcLimits.MaximumPageSize &&
+        (ContinuationToken is null ||
+         ContinuationToken.Length is > 0 and <= SyncManagementIpcLimits.MaximumContinuationTokenLength &&
+         ContinuationToken.All(char.IsAsciiDigit));
+}
+
+public sealed record SyncRunListResponse(
+    int ContractVersion,
+    SyncRunSummary[] Runs,
+    string? ContinuationToken,
+    StorageIpcFailure? Failure = null);
+
 public sealed record SyncRunSummary(
     Guid SyncRunId,
     Guid ProfileId,
@@ -318,7 +644,13 @@ public sealed record SyncRunSummary(
     long LeftItemCount,
     long RightItemCount,
     bool LeftSnapshotComplete,
-    bool RightSnapshotComplete);
+    bool RightSnapshotComplete)
+{
+    public long LocationAItemCount => LeftItemCount;
+    public long LocationBItemCount => RightItemCount;
+    public bool LocationASnapshotComplete => LeftSnapshotComplete;
+    public bool LocationBSnapshotComplete => RightSnapshotComplete;
+}
 
 public sealed record SyncPlanOverview(
     Guid SyncRunId,
@@ -356,7 +688,13 @@ public sealed record SyncPlanOperationSummary(
     Guid? DestinationConnectionId,
     string? DestinationPath,
     long? ExpectedLength,
-    bool IsDestructive);
+    bool IsDestructive)
+{
+    public Guid FromLocationConnectionId => SourceConnectionId;
+    public string FromLocationPath => SourcePath;
+    public Guid? ToLocationConnectionId => DestinationConnectionId;
+    public string? ToLocationPath => DestinationPath;
+}
 
 public sealed record SyncPlanPageResponse(
     int ContractVersion,

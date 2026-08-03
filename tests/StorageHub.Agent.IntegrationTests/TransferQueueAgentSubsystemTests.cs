@@ -317,6 +317,56 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
     }
 
     [Fact]
+    public async Task Per_connection_limit_applies_before_provider_io()
+    {
+        var fixture = await CreateFixtureAsync();
+        Assert.True(await fixture.InnerStore.TryEnqueueAsync(CreateSiblingIntent(fixture.Intent, "second.bin")));
+        var entered = 0;
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new FakeSession(
+            fixture.Intent.Source.ProfileId,
+            fixture.Intent.Source.RootIdentity,
+            Capabilities(StorageFeature.ReadStream))
+        {
+            Entry = StorageEntry.Create(
+                fixture.Intent.Source,
+                StorageEntryKind.File,
+                fixture.Intent.ExpectedLength).Value,
+            ReadStreamFactory = () => new CountingBlockingReadStream(() =>
+            {
+                Interlocked.Increment(ref entered);
+                firstEntered.TrySetResult();
+            })
+        };
+        var destination = new FakeSession(
+            fixture.Intent.Destination.ProfileId,
+            fixture.Intent.Destination.RootIdentity,
+            Capabilities(StorageFeature.WriteStream, StorageFeature.ConditionalCreate));
+        var connector = new FakeConnector(new Dictionary<ConnectionProfileId, Func<FakeConnection>>
+        {
+            [source.ProfileId] = () => new FakeConnection(source),
+            [destination.ProfileId] = () => new FakeConnection(destination)
+        });
+        await using var worker = CreateWorker(
+            fixture.Store,
+            connector,
+            Options() with
+            {
+                MaximumConcurrency = 2,
+                PerConnectionConcurrency = 1
+            });
+        await worker.InitializeAsync(CancellationToken.None);
+        await worker.StartAsync(CancellationToken.None);
+
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(250);
+
+        Assert.Equal(1, Volatile.Read(ref entered));
+        Assert.Equal(1, worker.ActiveExecutionCount);
+        await worker.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task Polling_recovers_a_lease_that_expires_after_initialization()
     {
         var fixture = await CreateFixtureAsync();

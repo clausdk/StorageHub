@@ -347,7 +347,10 @@ public sealed class ScheduleManagementIpcCommandService : IAgentIpcCommandHandle
         draft.TimeZoneId,
         TimeSpan.FromSeconds(draft.MisfireGraceSeconds),
         draft.QueueOneWhileRunning,
-        draft.Enabled);
+        draft.Enabled,
+        draft.ExecutionMode == ScheduleIpcExecutionMode.SafeAutomatic
+            ? SyncScheduleExecutionMode.SafeAutomatic
+            : SyncScheduleExecutionMode.PreviewOnly);
 
     private static ScheduleDocument Map(SyncScheduleManagementRecord schedule)
     {
@@ -376,7 +379,9 @@ public sealed class ScheduleManagementIpcCommandService : IAgentIpcCommandHandle
             SafeNullableText(schedule.LastRunOutcome, ScheduleManagementIpcLimits.MaximumOutcomeLength),
             SafeNullableText(schedule.LastErrorCode, ScheduleManagementIpcLimits.MaximumErrorCodeLength),
             schedule.Revision,
-            ScheduleIpcExecutionMode.PreviewOnly);
+            schedule.ExecutionMode == SyncScheduleExecutionMode.SafeAutomatic
+                ? ScheduleIpcExecutionMode.SafeAutomatic
+                : ScheduleIpcExecutionMode.PreviewOnly);
     }
 
     private static AgentIpcCommandResponse? ValidateRequest(int version, bool hasValidBounds)

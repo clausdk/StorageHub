@@ -17,8 +17,21 @@
 
   <ItemGroup>
     <ProjectReference Include="..\StorageHub.Agent\StorageHub.Agent.csproj" />
+    <ProjectReference Include="..\StorageHub.Agent.Windows\StorageHub.Agent.Windows.csproj"
+                      ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\StorageHub.Contracts\StorageHub.Contracts.csproj" />
   </ItemGroup>
+
+  <Target Name="StageCurrentDevelopmentAgent"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(StorageHubPackagedAgent)' != 'true' and '$(ArtifactsPath)' == ''">
+    <ItemGroup>
+      <_StorageHubAgentFiles Include="$(MSBuildProjectDirectory)\..\StorageHub.Agent.Windows\bin\$(Configuration)\net10.0-windows10.0.19041.0\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_StorageHubAgentFiles)"
+          DestinationFiles="@(_StorageHubAgentFiles->'$(OutDir)Agent\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
   <ItemGroup>
     <InternalsVisibleTo Include="StorageHub.Desktop.Tests" />

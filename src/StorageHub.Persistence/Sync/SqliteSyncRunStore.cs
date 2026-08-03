@@ -22,6 +22,36 @@ public sealed class SqliteSyncRunStore(SingleWriterSqliteDatabase database) : IS
         return await ReadAsync(connection, null, syncRunId, cancellationToken).ConfigureAwait(false);
     }
 
+    public async ValueTask<IReadOnlyList<SyncPreviewRecord>> ListAsync(
+        SyncProfileId? profileId,
+        int offset,
+        int maximumCount,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumCount, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumCount, 101);
+        await using var connection = await _database.OpenReadConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT {Projection}
+            FROM sync_runs AS runs
+            WHERE $profileId IS NULL OR sync_profile_id = $profileId
+            ORDER BY started_utc DESC, sync_run_id DESC
+            LIMIT $limit OFFSET $offset;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId is { } id ? id.ToString() : DBNull.Value);
+        command.Parameters.AddWithValue("$limit", maximumCount);
+        command.Parameters.AddWithValue("$offset", offset);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var runs = new List<SyncPreviewRecord>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            runs.Add(ReadRecord(reader));
+        }
+        return runs;
+    }
+
     public async ValueTask<SyncPreviewRecord?> GetByTriggerAsync(
         SyncProfileId profileId,
         string triggerIdempotencyKey,

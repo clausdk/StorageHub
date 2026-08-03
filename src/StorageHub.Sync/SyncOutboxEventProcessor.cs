@@ -66,6 +66,7 @@ public sealed class SyncOutboxEventProcessor : ISyncOutboxEventProcessor
     private readonly ISyncPlanStore _plans;
     private readonly ISyncExecutionStore _executions;
     private readonly ISyncEndpointConnector _connector;
+    private readonly IAuditEventStore? _auditEvents;
     private readonly SyncSnapshotScanOptions _scanOptions;
     private readonly TimeProvider _timeProvider;
 
@@ -75,6 +76,7 @@ public sealed class SyncOutboxEventProcessor : ISyncOutboxEventProcessor
         ISyncPlanStore plans,
         ISyncExecutionStore executions,
         ISyncEndpointConnector connector,
+        IAuditEventStore? auditEvents = null,
         SyncSnapshotScanOptions? scanOptions = null,
         TimeProvider? timeProvider = null)
     {
@@ -83,6 +85,7 @@ public sealed class SyncOutboxEventProcessor : ISyncOutboxEventProcessor
         _plans = plans ?? throw new ArgumentNullException(nameof(plans));
         _executions = executions ?? throw new ArgumentNullException(nameof(executions));
         _connector = connector ?? throw new ArgumentNullException(nameof(connector));
+        _auditEvents = auditEvents;
         _scanOptions = scanOptions ?? SyncSnapshotScanOptions.SynchronizationDefault;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -130,6 +133,68 @@ public sealed class SyncOutboxEventProcessor : ISyncOutboxEventProcessor
             $"outbox:{lease.Event.EventId:D}",
             cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (preview.IsSuccess && StringComparer.Ordinal.Equals(payload.ExecutionMode, "safe-automatic"))
+        {
+            var profile = await _profiles.GetAsync(profileId, cancellationToken).ConfigureAwait(false);
+            var candidate = preview.Value;
+            var safe = profile is not null &&
+                profile.Revision == payload.AuthorizedProfileRevision &&
+                StringComparer.Ordinal.Equals(profile.PolicySha256, payload.AuthorizedProfilePolicySha256) &&
+                profile.ConflictPolicy == SyncConflictPolicy.Block &&
+                candidate.Conflicts.Count == 0 &&
+                candidate.Plan.Operations.All(static operation => operation.Kind != SyncPlanOperationKind.Delete) &&
+                candidate.Preview.State.Phase == SyncRunPhase.AwaitingApproval;
+            if (safe)
+            {
+                var dispatch = await _orchestration.ApproveAndDispatchAsync(
+                    candidate.Preview.SyncRunId,
+                    candidate.Preview.State.Revision,
+                    candidate.Preview.ApprovalChallengeSha256,
+                    cancellationToken).ConfigureAwait(false);
+                if (dispatch.IsFailure)
+                {
+                    return dispatch.Error.IsTransient
+                        ? SyncOutboxProcessingResult.Retry(
+                            dispatch.Error.Code,
+                            "The safety-authorized automatic dispatch could not be recorded yet.")
+                        : SyncOutboxProcessingResult.DeadLetter(
+                            dispatch.Error.Code,
+                            "The automatic run stopped at approval because its authorization changed.");
+                }
+
+                if (_auditEvents is not null)
+                {
+                    var audit = await _auditEvents.AppendAsync(
+                        new AuditAppendRequest(
+                            new AuditEventDraft(
+                                lease.Event.EventId,
+                                "sync.schedule.automatic-dispatch",
+                                "scheduler",
+                                "sync-run",
+                                candidate.Preview.SyncRunId.ToString(),
+                                JsonSerializer.Serialize(new
+                                {
+                                    profileRevision = payload.AuthorizedProfileRevision,
+                                    profilePolicySha256 = payload.AuthorizedProfilePolicySha256,
+                                    planSha256 = candidate.Plan.Digest.Sha256Hex,
+                                }, JsonOptions),
+                                _timeProvider.GetUtcNow(),
+                                lease.Event.EventId.ToString("D"),
+                                $"sync-auto:{lease.Event.EventId:D}"),
+                            OutboxEvent: null),
+                        cancellationToken).ConfigureAwait(false);
+                    if (audit.Status is not (
+                        SyncPersistenceMutationStatus.Applied or
+                        SyncPersistenceMutationStatus.AlreadyApplied))
+                    {
+                        return SyncOutboxProcessingResult.Retry(
+                            "sync.schedule.audit_pending",
+                            "The automatic dispatch is durable but its audit event still needs to be recorded.");
+                    }
+                }
+            }
+        }
 
         return preview.IsSuccess
             ? SyncOutboxProcessingResult.Complete()
@@ -218,20 +283,25 @@ public sealed class SyncOutboxEventProcessor : ISyncOutboxEventProcessor
         }
 
         await using var leftConnection = leftOpen.Value;
-        var rightOpen = await _connector.OpenAsync(
-            profile.RightConnectionProfileId,
-            cancellationToken).ConfigureAwait(false);
-        if (rightOpen.IsFailure)
+        ISyncEndpointConnection? rightConnection = null;
+        if (profile.LocationAConnectionProfileId != profile.LocationBConnectionProfileId)
         {
-            return await HandleConnectionFailureAsync(lease, current, rightOpen.Error).ConfigureAwait(false);
+            var rightOpen = await _connector.OpenAsync(
+                profile.LocationBConnectionProfileId,
+                cancellationToken).ConfigureAwait(false);
+            if (rightOpen.IsFailure)
+            {
+                return await HandleConnectionFailureAsync(lease, current, rightOpen.Error).ConfigureAwait(false);
+            }
+
+            rightConnection = rightOpen.Value;
         }
 
-        await using var rightConnection = rightOpen.Value;
         var left = leftConnection.Session;
-        var right = rightConnection.Session;
+        await using var rightConnectionLease = rightConnection;
+        var right = rightConnection?.Session ?? left;
         if (left.ProfileId != profile.LeftConnectionProfileId ||
-            right.ProfileId != profile.RightConnectionProfileId ||
-            left.ProfileId == right.ProfileId)
+            right.ProfileId != profile.RightConnectionProfileId)
         {
             return await FailBeforeMutationAsync(
                 lease,
@@ -255,7 +325,8 @@ public sealed class SyncOutboxEventProcessor : ISyncOutboxEventProcessor
                 current.Snapshots,
                 SyncPlanExecutionMode.Execute,
                 profile.DeletionSafetyPolicy,
-                profile.TransferOptions) != approved)
+                profile.TransferOptions,
+                profile.PolicySha256) != approved)
         {
             return await FailBeforeMutationAsync(
                 lease,
@@ -291,7 +362,8 @@ public sealed class SyncOutboxEventProcessor : ISyncOutboxEventProcessor
                 current.Snapshots,
                 SyncPlanExecutionMode.Execute,
                 profile.DeletionSafetyPolicy,
-                profile.TransferOptions),
+                profile.TransferOptions,
+                profile.PolicySha256),
             progress,
             _timeProvider,
             cancellationToken).ConfigureAwait(false);
@@ -336,19 +408,27 @@ public sealed class SyncOutboxEventProcessor : ISyncOutboxEventProcessor
         }
 
         current = verifying.Value;
-        var leftScanTask = SyncSnapshotScanner.ScanAsync(
-            left,
-            leftRoot.Value,
-            _scanOptions,
-            cancellationToken).AsTask();
-        var rightScanTask = SyncSnapshotScanner.ScanAsync(
-            right,
-            rightRoot.Value,
-            _scanOptions,
-            cancellationToken).AsTask();
-        await Task.WhenAll(leftScanTask, rightScanTask).ConfigureAwait(false);
-        var leftScan = await leftScanTask.ConfigureAwait(false);
-        var rightScan = await rightScanTask.ConfigureAwait(false);
+        StorageResult<SyncEndpointSnapshot> leftScan;
+        StorageResult<SyncEndpointSnapshot> rightScan;
+        if (ReferenceEquals(left, right))
+        {
+            leftScan = await SyncSnapshotScanner.ScanAsync(
+                left, leftRoot.Value, _scanOptions, cancellationToken).ConfigureAwait(false);
+            rightScan = leftScan.IsSuccess
+                ? await SyncSnapshotScanner.ScanAsync(
+                    right, rightRoot.Value, _scanOptions, cancellationToken).ConfigureAwait(false)
+                : leftScan;
+        }
+        else
+        {
+            var leftScanTask = SyncSnapshotScanner.ScanAsync(
+                left, leftRoot.Value, _scanOptions, cancellationToken).AsTask();
+            var rightScanTask = SyncSnapshotScanner.ScanAsync(
+                right, rightRoot.Value, _scanOptions, cancellationToken).AsTask();
+            await Task.WhenAll(leftScanTask, rightScanTask).ConfigureAwait(false);
+            leftScan = await leftScanTask.ConfigureAwait(false);
+            rightScan = await rightScanTask.ConfigureAwait(false);
+        }
         cancellationToken.ThrowIfCancellationRequested();
 
         if (leftScan.IsFailure || rightScan.IsFailure)

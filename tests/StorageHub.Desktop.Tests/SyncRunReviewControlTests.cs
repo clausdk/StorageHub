@@ -17,7 +17,7 @@ public sealed class SyncRunReviewControlTests
 
             Assert.Equal(1, control.LoadedOperationCount);
             Assert.Equal(0, control.LoadedConflictCount);
-            Assert.Contains("no provider changes have been requested", control.StatusText, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("no provider changes have started", control.StatusText, StringComparison.OrdinalIgnoreCase);
             var reviewed = control.CurrentRun!;
 
             Assert.True(control.ApproveAndDispatchAsync().GetAwaiter().GetResult());
@@ -25,8 +25,7 @@ public sealed class SyncRunReviewControlTests
             Assert.Equal(reviewed.SyncRunId, client.LastApproval?.SyncRunId);
             Assert.Equal(reviewed.Revision, client.LastApproval?.ExpectedRevision);
             Assert.Equal(reviewed.ApprovalSha256, client.LastApproval?.ApprovalSha256);
-            Assert.Contains("durably dispatched", control.StatusText, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("not reported complete", control.StatusText, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("completed", control.StatusText, StringComparison.OrdinalIgnoreCase);
         });
     }
 

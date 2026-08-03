@@ -9,6 +9,8 @@ namespace StorageHub.Desktop;
 /// </summary>
 public sealed class SyncRunReviewControl : UserControl
 {
+    private const int CompletionPollLimit = 20;
+    private static readonly TimeSpan CompletionPollInterval = TimeSpan.FromMilliseconds(500);
     private readonly ISyncManagementAgentClient _client;
     private readonly bool _ownsClient;
     private readonly CancellationTokenSource _lifetime = new();
@@ -36,7 +38,7 @@ public sealed class SyncRunReviewControl : UserControl
         Dock = DockStyle.Fill;
         BackColor = StorageHubTheme.Surface;
         AccessibleName = "Synchronization run review";
-        AccessibleDescription = "Immutable preview operations, conflicts, run status, and explicit durable dispatch.";
+        AccessibleDescription = "Immutable sync operations, conflicts, approval, and live run status.";
 
         var heading = new TableLayoutPanel
         {
@@ -55,9 +57,9 @@ public sealed class SyncRunReviewControl : UserControl
             WrapContents = false,
             Margin = Padding.Empty
         };
-        _summary = UiControlFactory.CreateSectionTitle("No sync preview loaded");
+        _summary = UiControlFactory.CreateSectionTitle("No sync plan loaded");
         _status = UiControlFactory.CreateDescription(
-            "Generate or load a preview. Previewing never changes either provider.");
+            "Choose Review & run from a sync profile, or load an existing run.");
         _status.Name = "SyncRunStatus";
         text.Controls.Add(_summary);
         text.Controls.Add(_status);
@@ -91,13 +93,13 @@ public sealed class SyncRunReviewControl : UserControl
         {
             Dock = DockStyle.Fill,
             Padding = new Point(14, 4),
-            AccessibleName = "Sync preview details"
+            AccessibleName = "Sync plan details"
         };
         _planGrid = CreateGrid("Immutable plan operations");
         _planGrid.Columns.Add("Sequence", "#");
         _planGrid.Columns.Add("Action", "Action");
-        _planGrid.Columns.Add("Source", "Source");
-        _planGrid.Columns.Add("Destination", "Destination");
+        _planGrid.Columns.Add("FromLocation", "From location");
+        _planGrid.Columns.Add("ToLocation", "To location");
         _planGrid.Columns.Add("Bytes", "Expected bytes");
         _planGrid.Columns.Add("Safety", "Safety");
         _nextPlanButton = CreateNextButton("Load next operations", NextPlanClicked);
@@ -199,6 +201,7 @@ public sealed class SyncRunReviewControl : UserControl
             }
 
             SetRun(approved, resetPages: false);
+            await PollForCompletionAsync(approved.SyncRunId, token).ConfigureAwait(true);
             return true;
         }, cancellationToken).ConfigureAwait(true);
     }
@@ -238,7 +241,7 @@ public sealed class SyncRunReviewControl : UserControl
         if (response.PlanId != run.PlanId ||
             !string.Equals(response.PlanSha256, run.PlanSha256, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidDataException("The plan page no longer matches the reviewed immutable preview.");
+            throw new InvalidDataException("The plan page no longer matches the reviewed immutable plan.");
         }
 
         if (reset)
@@ -256,7 +259,7 @@ public sealed class SyncRunReviewControl : UserControl
                     ? FormatEndpoint(destinationId, operation.DestinationPath ?? string.Empty)
                     : string.Empty,
                 operation.ExpectedLength?.ToString("N0", CultureInfo.CurrentCulture) ?? "—",
-                operation.IsDestructive ? "Destructive — approval required" : "Previewed");
+                operation.IsDestructive ? "Destructive — approval required" : "Guarded");
         }
 
         _planContinuation = response.ContinuationToken;
@@ -313,12 +316,21 @@ public sealed class SyncRunReviewControl : UserControl
         _summary.Text = $"Run {run.SyncRunId:D} · {run.Phase} · revision {run.Revision}";
         if (run.DispatchState == SyncIpcDispatchState.DurablyDispatched)
         {
-            _status.Text = "Apply request durably dispatched to the background agent. Provider execution is not reported complete.";
-            _status.ForeColor = StorageHubTheme.Success;
+            (_status.Text, _status.ForeColor) = run.Phase switch
+            {
+                SyncIpcRunPhase.Completed => ("Synchronization completed and both locations were verified.", StorageHubTheme.Success),
+                SyncIpcRunPhase.Failed => ("Synchronization failed. Review the run status before retrying.", StorageHubTheme.Danger),
+                SyncIpcRunPhase.NeedsReconciliation => ("Synchronization stopped with uncertain provider state and requires reconciliation.", StorageHubTheme.Warning),
+                SyncIpcRunPhase.Cancelled => ("Synchronization was cancelled before completion.", StorageHubTheme.Warning),
+                SyncIpcRunPhase.Executing => ("Synchronizing provider content…", StorageHubTheme.Primary),
+                SyncIpcRunPhase.Verifying => ("Provider changes finished; verifying both locations…", StorageHubTheme.Primary),
+                SyncIpcRunPhase.CommittingBaseline => ("Locations verified; committing the new baseline…", StorageHubTheme.Primary),
+                _ => ("Synchronization is queued in the background agent.", StorageHubTheme.Primary)
+            };
         }
         else if (run.Phase == SyncIpcRunPhase.AwaitingApproval)
         {
-            _status.Text = "Awaiting explicit approval. Preview only; no provider changes have been requested.";
+            _status.Text = "Awaiting approval. No provider changes have started.";
             _status.ForeColor = StorageHubTheme.Warning;
         }
         else
@@ -331,6 +343,39 @@ public sealed class SyncRunReviewControl : UserControl
             run.Phase == SyncIpcRunPhase.AwaitingApproval &&
             run.DispatchState == SyncIpcDispatchState.NotDispatched;
     }
+
+    private async Task PollForCompletionAsync(Guid runId, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < CompletionPollLimit; attempt++)
+        {
+            var response = await _client.GetRunStatusAsync(new SyncRunStatusRequest(
+                SyncManagementIpcContract.CurrentVersion,
+                runId), cancellationToken).ConfigureAwait(true);
+            var current = Require(response.Run, response.Failure);
+            SetRun(current, resetPages: false);
+            if (IsTerminal(current.Phase))
+            {
+                return;
+            }
+
+            await Task.Delay(CompletionPollInterval, cancellationToken).ConfigureAwait(true);
+        }
+
+        _status.Text = "Synchronization is still running in the background. Use Refresh status for the latest result.";
+        _status.ForeColor = StorageHubTheme.Primary;
+    }
+
+    private static bool IsTerminal(SyncIpcRunPhase phase) => phase is
+        SyncIpcRunPhase.Completed or
+        SyncIpcRunPhase.Failed or
+        SyncIpcRunPhase.Cancelled or
+        SyncIpcRunPhase.Interrupted or
+        SyncIpcRunPhase.NeedsReconciliation or
+        SyncIpcRunPhase.BlockedConflict or
+        SyncIpcRunPhase.BlockedDeletionGuard or
+        SyncIpcRunPhase.BlockedEndpoint or
+        SyncIpcRunPhase.BlockedCredential or
+        SyncIpcRunPhase.BlockedTrust;
 
     private async Task ExecuteSerializedAsync(
         Func<CancellationToken, Task> action,

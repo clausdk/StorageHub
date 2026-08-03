@@ -133,12 +133,12 @@ public sealed class SqliteSyncScheduleManagementRepository : ISyncScheduleManage
                     sync_schedule_id, sync_profile_id, cron_expression, time_zone_id,
                     time_zone_rule_version, enabled, next_due_utc, last_due_utc,
                     misfire_policy, misfire_grace_seconds, queue_one_while_running,
-                    queued_due_utc, revision
+                    queued_due_utc, revision, execution_mode
                 )
                 VALUES
                 (
                     $scheduleId, $profileId, $cron, $timeZone, NULL, $enabled, $nextDue, NULL,
-                    'coalesce-one', $misfireGrace, $queueOne, NULL, 1
+                    'coalesce-one', $misfireGrace, $queueOne, NULL, 1, $executionMode
                 );
                 """;
             AddDefinitionParameters(command, scheduleId, normalized, nextOccurrence);
@@ -247,6 +247,7 @@ public sealed class SqliteSyncScheduleManagementRepository : ISyncScheduleManage
                     misfire_policy = 'coalesce-one',
                     misfire_grace_seconds = $misfireGrace,
                     queue_one_while_running = $queueOne,
+                    execution_mode = $executionMode,
                     revision = revision + 1
                 WHERE sync_schedule_id = $scheduleId
                   AND revision = $expectedRevision
@@ -492,7 +493,8 @@ public sealed class SqliteSyncScheduleManagementRepository : ISyncScheduleManage
             !IsSafeText(draft.TimeZoneId, MaximumTimeZoneIdLength) ||
             draft.MisfireGrace < MinimumMisfireGrace ||
             draft.MisfireGrace > MaximumMisfireGrace ||
-            draft.MisfireGrace.Ticks % TimeSpan.TicksPerSecond != 0)
+            draft.MisfireGrace.Ticks % TimeSpan.TicksPerSecond != 0 ||
+            !Enum.IsDefined(draft.ExecutionMode))
         {
             throw new ArgumentException("The schedule definition is outside safe bounds.", nameof(draft));
         }
@@ -535,7 +537,8 @@ public sealed class SqliteSyncScheduleManagementRepository : ISyncScheduleManage
         string.Equals(current.TimeZoneId, draft.TimeZoneId, StringComparison.Ordinal) &&
         current.MisfireGrace == draft.MisfireGrace &&
         current.QueueOneWhileRunning == draft.QueueOneWhileRunning &&
-        current.Enabled == draft.Enabled;
+        current.Enabled == draft.Enabled &&
+        current.ExecutionMode == draft.ExecutionMode;
 
     private static SyncScheduleManagementDraft ToDraft(
         SyncScheduleManagementRecord current,
@@ -545,7 +548,8 @@ public sealed class SqliteSyncScheduleManagementRepository : ISyncScheduleManage
         current.TimeZoneId,
         current.MisfireGrace,
         current.QueueOneWhileRunning,
-        enabled);
+        enabled,
+        current.ExecutionMode);
 
     private static async Task<bool> ProfileCanBeScheduledAsync(
         SqliteConnection connection,
@@ -655,7 +659,8 @@ public sealed class SqliteSyncScheduleManagementRepository : ISyncScheduleManage
             reader.GetInt64(10) == 1,
             ReadSafeNullableText(reader, 11, 64),
             ReadSafeNullableText(reader, 12, 256),
-            revision);
+            revision,
+            ParseExecutionMode(reader.GetString(14)));
     }
 
     private static void AddDefinitionParameters(
@@ -676,6 +681,9 @@ public sealed class SqliteSyncScheduleManagementRepository : ISyncScheduleManage
             "$misfireGrace",
             checked((long)draft.MisfireGrace.TotalSeconds));
         command.Parameters.AddWithValue("$queueOne", draft.QueueOneWhileRunning ? 1 : 0);
+        command.Parameters.AddWithValue(
+            "$executionMode",
+            draft.ExecutionMode == SyncScheduleExecutionMode.SafeAutomatic ? "safe-automatic" : "preview-only");
     }
 
     private static DateTimeOffset? ReadNullableTimestamp(SqliteDataReader reader, int ordinal)
@@ -762,6 +770,14 @@ public sealed class SqliteSyncScheduleManagementRepository : ISyncScheduleManage
         END,
         schedule.last_run_outcome,
         schedule.last_error_code,
-        schedule.revision
+        schedule.revision,
+        schedule.execution_mode
         """;
+
+    private static SyncScheduleExecutionMode ParseExecutionMode(string value) => value switch
+    {
+        "preview-only" => SyncScheduleExecutionMode.PreviewOnly,
+        "safe-automatic" => SyncScheduleExecutionMode.SafeAutomatic,
+        _ => throw new InvalidDataException("A stored schedule execution mode is invalid."),
+    };
 }

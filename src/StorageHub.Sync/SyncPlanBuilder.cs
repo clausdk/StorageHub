@@ -39,7 +39,10 @@ public sealed record SyncPlanBuildRequest
         IReadOnlyDictionary<string, SyncBaselineObservation> baseline,
         SyncDirection direction,
         SyncDeletionMode deletionMode,
-        DateTimeOffset createdAtUtc)
+        DateTimeOffset createdAtUtc,
+        SyncBehavior? behavior = null,
+        SyncPathFilterPolicy? filterPolicy = null,
+        SyncConflictPolicy conflictPolicy = SyncConflictPolicy.Block)
     {
         if (planId.IsEmpty)
         {
@@ -83,6 +86,9 @@ public sealed record SyncPlanBuildRequest
         Direction = direction;
         DeletionMode = deletionMode;
         CreatedAtUtc = createdAtUtc;
+        Behavior = behavior ?? InferBehavior(direction, deletionMode);
+        FilterPolicy = filterPolicy ?? new SyncPathFilterPolicy([], [], includeHiddenFiles: true);
+        ConflictPolicy = conflictPolicy;
     }
 
     public OperationPlanId PlanId { get; }
@@ -106,6 +112,20 @@ public sealed record SyncPlanBuildRequest
     public SyncDeletionMode DeletionMode { get; }
 
     public DateTimeOffset CreatedAtUtc { get; }
+    public SyncBehavior Behavior { get; }
+    public SyncPathFilterPolicy FilterPolicy { get; }
+    public SyncConflictPolicy ConflictPolicy { get; }
+
+    private static SyncBehavior InferBehavior(SyncDirection direction, SyncDeletionMode deletionMode) =>
+        (direction, deletionMode) switch
+        {
+            (SyncDirection.LeftToRight, SyncDeletionMode.Mirror) => SyncBehavior.MirrorAToB,
+            (SyncDirection.LeftToRight, _) => SyncBehavior.UpdateAToB,
+            (SyncDirection.RightToLeft, SyncDeletionMode.Mirror) => SyncBehavior.MirrorBToA,
+            (SyncDirection.RightToLeft, _) => SyncBehavior.UpdateBToA,
+            (SyncDirection.TwoWay, SyncDeletionMode.Propagate) => SyncBehavior.TwoWayWithDeletionPropagation,
+            _ => SyncBehavior.TwoWaySync,
+        };
 }
 
 public sealed record SyncPlanBuildResult(
@@ -129,8 +149,11 @@ public static class SyncPlanBuilder
         }
 
         var comparer = SelectComparer(request.Left, request.Right);
-        if (!TryCreatePlanningIndex(request.Left.Entries, comparer, out var leftEntries) ||
-            !TryCreatePlanningIndex(request.Right.Entries, comparer, out var rightEntries))
+        var caseSensitive = comparer == StringComparer.Ordinal;
+        var filteredLeft = request.Left.Entries.Where(pair => request.FilterPolicy.Includes(pair.Key, caseSensitive));
+        var filteredRight = request.Right.Entries.Where(pair => request.FilterPolicy.Includes(pair.Key, caseSensitive));
+        if (!TryCreatePlanningIndex(filteredLeft, comparer, out var leftEntries) ||
+            !TryCreatePlanningIndex(filteredRight, comparer, out var rightEntries))
         {
             return Invalid(
                 "sync.plan.path_collision",
@@ -144,6 +167,10 @@ public static class SyncPlanBuilder
             {
                 SyncEndpointSnapshot.ValidateRelativePath(path, nameof(request));
                 ArgumentNullException.ThrowIfNull(observation);
+                if (!request.FilterPolicy.Includes(path, caseSensitive))
+                {
+                    continue;
+                }
                 if (!baseline.TryAdd(path, observation))
                 {
                     return Invalid("sync.plan.baseline_collision", "The baseline contains a path collision.");
@@ -157,7 +184,11 @@ public static class SyncPlanBuilder
 
         var operations = new List<PendingOperation>();
         var conflicts = new List<SyncPlanningConflict>();
-        if (request.Direction == SyncDirection.TwoWay)
+        if (request.Behavior == SyncBehavior.CompareOnly)
+        {
+            AddComparisonConflicts(leftEntries, rightEntries, comparer, conflicts);
+        }
+        else if (request.Direction == SyncDirection.TwoWay)
         {
             BuildTwoWay(
                 request,
@@ -304,6 +335,11 @@ public static class SyncPlanBuilder
                 continue;
             }
 
+            if (request.Behavior is SyncBehavior.CopyNewFilesAToB or SyncBehavior.CopyNewFilesBToA)
+            {
+                continue;
+            }
+
             if (!KindsAreCompatible(sourceEntry, destinationEntry))
             {
                 if (request.DeletionMode != SyncDeletionMode.Mirror)
@@ -352,6 +388,27 @@ public static class SyncPlanBuilder
                     prefix)))
             {
                 operations[index] = operation with { BeforeWrites = true };
+            }
+        }
+    }
+
+    private static void AddComparisonConflicts(
+        IReadOnlyDictionary<string, StorageEntry> locationA,
+        IReadOnlyDictionary<string, StorageEntry> locationB,
+        StringComparer comparer,
+        List<SyncPlanningConflict> conflicts)
+    {
+        foreach (var path in locationA.Keys.Concat(locationB.Keys).Distinct(comparer).OrderBy(path => path, comparer))
+        {
+            _ = locationA.TryGetValue(path, out var a);
+            _ = locationB.TryGetValue(path, out var b);
+            if (a is null || b is null || !KindsAreCompatible(a, b) ||
+                a.Kind == StorageEntryKind.File && a.Size != b.Size)
+            {
+                conflicts.Add(new SyncPlanningConflict(
+                    path,
+                    SyncChangeKind.ConflictIndeterminate,
+                    "The locations differ at this path (compare-only profile)."));
             }
         }
     }
@@ -447,10 +504,17 @@ public static class SyncPlanBuilder
                 case SyncChangeKind.ConflictBothModified:
                 case SyncChangeKind.ConflictDeleteModify:
                 case SyncChangeKind.ConflictIndeterminate:
-                    conflicts.Add(new SyncPlanningConflict(
-                        path,
-                        classification.Kind,
-                        "Both endpoints changed incompatibly or could not be compared safely."));
+                    if (request.ConflictPolicy == SyncConflictPolicy.KeepBoth && left is not null && right is not null)
+                    {
+                        AddKeepBothOperations(request, path, left, right, leftEntries, rightEntries, operations, conflicts);
+                    }
+                    else
+                    {
+                        conflicts.Add(new SyncPlanningConflict(
+                            path,
+                            classification.Kind,
+                            "Both locations changed incompatibly or could not be compared safely."));
+                    }
                     break;
                 case SyncChangeKind.Unchanged:
                 case SyncChangeKind.BothCreatedIdentical:
@@ -461,6 +525,36 @@ public static class SyncPlanBuilder
                     throw new InvalidOperationException("Unhandled two-way change classification.");
             }
         }
+    }
+
+    private static void AddKeepBothOperations(
+        SyncPlanBuildRequest request,
+        string path,
+        StorageEntry locationA,
+        StorageEntry locationB,
+        IReadOnlyDictionary<string, StorageEntry> locationAEntries,
+        IReadOnlyDictionary<string, StorageEntry> locationBEntries,
+        List<PendingOperation> operations,
+        List<SyncPlanningConflict> conflicts)
+    {
+        var extension = Path.GetExtension(path);
+        var stem = extension.Length == 0 ? path : path[..^extension.Length];
+        var aName = stem + ".storagehub-conflict-location-a" + extension;
+        var bName = stem + ".storagehub-conflict-location-b" + extension;
+        if (locationAEntries.ContainsKey(aName) || locationAEntries.ContainsKey(bName) ||
+            locationBEntries.ContainsKey(aName) || locationBEntries.ContainsKey(bName))
+        {
+            AddConflict(conflicts, path, "A deterministic Keep-both conflict name already exists.");
+            return;
+        }
+
+        var aDigest = GetDigest(request.Left.PortableDigests, path);
+        var bDigest = GetDigest(request.Right.PortableDigests, path);
+        operations.Add(PendingOperation.Copy(locationA, Destination(request.LeftRoot, aName), aDigest, null));
+        operations.Add(PendingOperation.Copy(locationA, Destination(request.RightRoot, aName), aDigest, null));
+        operations.Add(PendingOperation.Copy(locationB, Destination(request.LeftRoot, bName), bDigest, null));
+        operations.Add(PendingOperation.Copy(locationB, Destination(request.RightRoot, bName), bDigest, null));
+        operations.Add(PendingOperation.Copy(locationA, locationB.Address, aDigest, bDigest));
     }
 
     private static void BuildTwoWayContainer(
@@ -639,7 +733,7 @@ public static class SyncPlanBuilder
             : StringComparer.OrdinalIgnoreCase;
 
     private static bool TryCreatePlanningIndex(
-        IReadOnlyDictionary<string, StorageEntry> source,
+        IEnumerable<KeyValuePair<string, StorageEntry>> source,
         StringComparer comparer,
         out IReadOnlyDictionary<string, StorageEntry> index)
     {

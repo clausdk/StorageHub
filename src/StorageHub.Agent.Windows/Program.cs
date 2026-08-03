@@ -56,6 +56,8 @@ catch (Exception error) when (error is ArgumentException or NotSupportedExceptio
 using var agentDataDirectoryLifetime = agentDataDirectoryLease;
 var storageHubRoot = agentDataDirectoryLease.RootDirectory;
 var agentRoot = agentDataDirectoryLease.AgentDirectory;
+var concurrencyConfiguration = AgentConcurrencyConfiguration.Load(
+    Path.Combine(storageHubRoot, "Desktop", "settings.json"));
 var runtimeSecretFileMaterializer = new WindowsRuntimeSecretFileMaterializer(
     Path.Combine(agentRoot, "runtime-secrets"));
 _ = runtimeSecretFileMaterializer.ScavengeOrphans(TimeSpan.FromHours(24));
@@ -109,7 +111,14 @@ var transferEndpointConnector = new CodeLogicTransferEndpointConnector(
         runtimeSecretFileMaterializer));
 await using var transferQueueSubsystem = new TransferQueueAgentSubsystem(
     transferStore,
-    transferEndpointConnector);
+    transferEndpointConnector,
+    new TransferQueueWorkerOptions
+    {
+        AdaptiveConcurrency = concurrencyConfiguration.Adaptive,
+        MinimumConcurrency = concurrencyConfiguration.Minimum,
+        MaximumConcurrency = concurrencyConfiguration.MaximumTransfers,
+        PerConnectionConcurrency = concurrencyConfiguration.PerConnection
+    });
 var storageCommands = new StorageIpcCommandService(
     databaseOptions,
     () => vaultSubsystem.Vault,
@@ -146,15 +155,23 @@ var syncOrchestration = new SyncOrchestrationService(
     syncConnector);
 var syncOutbox = new SqliteReliableOutboxStore(transferDatabase);
 var syncExecution = new SqliteSyncExecutionStore(transferDatabase);
+var syncAuditEvents = new SqliteAuditEventStore(transferDatabase);
 var syncOutboxProcessor = new SyncOutboxEventProcessor(
     syncOrchestration,
     syncProfiles,
     syncPlans,
     syncExecution,
-    syncConnector);
+    syncConnector,
+    syncAuditEvents);
 await using var syncOutboxSubsystem = new SyncOutboxAgentSubsystem(
     syncOutbox,
-    syncOutboxProcessor);
+    syncOutboxProcessor,
+    new SyncOutboxWorkerOptions
+    {
+        AdaptiveConcurrency = concurrencyConfiguration.Adaptive,
+        MinimumConcurrency = concurrencyConfiguration.Minimum,
+        MaximumConcurrency = concurrencyConfiguration.MaximumSyncs
+    });
 var syncCommands = new SyncManagementIpcCommandService(
     syncProfiles,
     syncOrchestration,

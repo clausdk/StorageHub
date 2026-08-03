@@ -32,7 +32,7 @@ public static class UiCommandCatalog
             ["Go"] = ["Back", "Forward", "Up", "Home", "History", "Favorites"],
             ["Connections"] = ["Connection Manager...", "Quick Connect...", "Reconnect", "Disconnect", "Test Connection"],
             ["Transfer"] = ["Enqueue", "Start Queue", "Pause All", "Resume All", "Cancel Selected", "Speed Limits..."],
-            ["Sync"] = ["Compare Panes", "Preview Sync...", "Run Sync", "Sync Profiles...", "Schedules..."],
+            ["Sync"] = ["Compare Panes", "Review & Run...", "Sync Profiles...", "Schedules..."],
             ["Tools"] = ["Search...", "Checksums...", "Settings...", "Logs...", "Diagnostics..."],
             ["Help"] = ["Check for Updates...", "Keyboard Shortcuts", "Documentation", "Report Issue", "About StorageHub"]
         };
@@ -41,28 +41,29 @@ public static class UiCommandCatalog
         new Dictionary<string, (Keys, UiGlyph?, string)>(StringComparer.Ordinal)
         {
             ["New Workspace Tab"] = (Keys.Control | Keys.T, UiGlyph.Add, "Open another independent dual-pane workspace."),
-            ["Close Tab"] = (Keys.Control | Keys.W, null, "Close the active workspace tab."),
-            ["Cut"] = (Keys.Control | Keys.X, null, "Queue selected files for a fenced move to the opposite pane."),
-            ["Copy"] = (Keys.Control | Keys.C, null, "Queue selected files for a fenced copy to the opposite pane."),
-            ["Paste"] = (Keys.Control | Keys.V, null, "Enqueue the staged operation in this pane."),
+            ["Close Tab"] = (Keys.Control | Keys.W, UiGlyph.Delete, "Close the active workspace tab."),
+            ["Cut"] = (Keys.Control | Keys.X, UiGlyph.Forward, "Queue selected files for a fenced move to the opposite pane."),
+            ["Copy"] = (Keys.Control | Keys.C, UiGlyph.File, "Queue selected files for a fenced copy to the opposite pane."),
+            ["Paste"] = (Keys.Control | Keys.V, UiGlyph.Save, "Enqueue the staged operation in this pane."),
             ["Rename"] = (Keys.F2, null, "Rename the focused item."),
             ["Properties"] = (Keys.Alt | Keys.Enter, null, "Inspect read-only versions, metadata, and tags for one saved-connection file."),
-            ["Select All"] = (Keys.Control | Keys.A, null, "Select every visible item."),
+            ["Select All"] = (Keys.Control | Keys.A, UiGlyph.Test, "Select every visible item."),
             ["Refresh"] = (Keys.F5, UiGlyph.Refresh, "Refresh the focused pane."),
             ["Back"] = (Keys.Alt | Keys.Left, UiGlyph.Back, "Return to the previous location."),
             ["Forward"] = (Keys.Alt | Keys.Right, UiGlyph.Forward, "Move to the next location in history."),
             ["Up"] = (Keys.Alt | Keys.Up, UiGlyph.Up, "Open the parent location."),
             ["Connection Manager..."] = (Keys.Control | Keys.Shift | Keys.M, UiGlyph.Connections, "Create, organize, and test connection profiles."),
             ["Quick Connect..."] = (Keys.Control | Keys.K, UiGlyph.Connections, "Open a temporary connection without saving credentials in the profile."),
-            ["Enqueue"] = (Keys.F6, null, "Queue selected files for a fenced copy to the opposite pane."),
+            ["Enqueue"] = (Keys.F6, UiGlyph.Run, "Queue selected files for a fenced copy to the opposite pane."),
             ["Start Queue"] = (Keys.F7, UiGlyph.Run, "Start queued transfers."),
             ["Pause All"] = (Keys.F8, UiGlyph.Pause, "Pause active transfers at safe checkpoints."),
             ["Compare Panes"] = (Keys.Control | Keys.D, UiGlyph.Compare, "Compare the visible source and destination."),
-            ["Preview Sync..."] = (Keys.Control | Keys.Shift | Keys.P, UiGlyph.Compare, "Generate a reviewable sync plan without applying changes."),
-            ["Schedules..."] = (Keys.Control | Keys.Shift | Keys.S, UiGlyph.Run, "Manage durable preview-only synchronization schedules."),
+            ["Review & Run..."] = (Keys.Control | Keys.Shift | Keys.P, UiGlyph.Compare, "Review an exact sync plan, then run it when its safety checks pass."),
+            ["Schedules..."] = (Keys.Control | Keys.Shift | Keys.S, UiGlyph.Run, "Manage durable review-only or safety-gated automatic synchronization schedules."),
             ["Search..."] = (Keys.Control | Keys.F, UiGlyph.Search, "Search within the focused endpoint."),
-            ["Settings..."] = (Keys.Control | Keys.Oemcomma, null, "Configure automatic StorageHub updates."),
-            ["Check for Updates..."] = (Keys.None, null, "Check the official StorageHub GitHub releases for an update.")
+            ["Settings..."] = (Keys.Control | Keys.Oemcomma, UiGlyph.Settings, "Configure automatic StorageHub updates."),
+            ["Check for Updates..."] = (Keys.None, UiGlyph.Refresh, "Check the official StorageHub GitHub releases for an update."),
+            ["About StorageHub"] = (Keys.None, UiGlyph.Info, "Show StorageHub version and application information.")
         };
 
     private static readonly IReadOnlyList<UiCommandDefinition> CommandDefinitions = BuildDefinitions();

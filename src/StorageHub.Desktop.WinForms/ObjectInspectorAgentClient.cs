@@ -24,11 +24,26 @@ public interface IObjectInspectorAgentClient : IAsyncDisposable
     Task<ObjectTagsGetResponse> GetTagsAsync(
         ObjectTagsGetRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<EditableFileDownloadResponse> DownloadEditableFileAsync(
+        EditableFileDownloadRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This inspector client does not support bounded editor downloads.");
+
+    Task<EditableFileUploadResponse> UploadEditedFileAsync(
+        EditableFileUploadRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This inspector client does not support bounded editor uploads.");
+
+    Task<StorageDirectoryEnsureResponse> EnsureDirectoryAsync(
+        StorageDirectoryEnsureRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This inspector client does not support directory creation.");
 }
 
 /// <summary>
-/// Strict, correlated client for the read-only exact-object inspector. A cancelled framed exchange
-/// retires its pipe so a late response can never satisfy a subsequent request.
+/// Strict, correlated client for exact-object inspection and bounded external editing. A cancelled
+/// framed exchange retires its pipe so a late response can never satisfy a subsequent request.
 /// </summary>
 public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentClient
 {
@@ -91,6 +106,45 @@ public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentC
             ObjectInspectorIpcMessageTypes.TagsGetResponse,
             request!,
             response => ValidateTagsResponse(request!, response),
+            cancellationToken);
+    }
+
+    public Task<EditableFileDownloadResponse> DownloadEditableFileAsync(
+        EditableFileDownloadRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequest(request, request?.HasValidBounds == true, nameof(request));
+        return ExecuteAsync<EditableFileDownloadRequest, EditableFileDownloadResponse>(
+            EditableFileIpcMessageTypes.DownloadRequest,
+            EditableFileIpcMessageTypes.DownloadResponse,
+            request!,
+            response => ValidateDownloadResponse(request!, response),
+            cancellationToken);
+    }
+
+    public Task<EditableFileUploadResponse> UploadEditedFileAsync(
+        EditableFileUploadRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequest(request, request?.HasValidBounds == true, nameof(request));
+        return ExecuteAsync<EditableFileUploadRequest, EditableFileUploadResponse>(
+            EditableFileIpcMessageTypes.UploadRequest,
+            EditableFileIpcMessageTypes.UploadResponse,
+            request!,
+            response => ValidateUploadResponse(request!, response),
+            cancellationToken);
+    }
+
+    public Task<StorageDirectoryEnsureResponse> EnsureDirectoryAsync(
+        StorageDirectoryEnsureRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequest(request, request?.HasValidBounds == true, nameof(request));
+        return ExecuteAsync<StorageDirectoryEnsureRequest, StorageDirectoryEnsureResponse>(
+            EditableFileIpcMessageTypes.DirectoryEnsureRequest,
+            EditableFileIpcMessageTypes.DirectoryEnsureResponse,
+            request!,
+            response => ValidateDirectoryEnsureResponse(request!, response),
             cancellationToken);
     }
 
@@ -273,6 +327,59 @@ public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentC
             !response.HasValidTagBounds ||
             !IsValidFailure(response.Failure) ||
             response.Failure is not null && response.Tags.Length != 0)
+        {
+            throw InvalidResponse();
+        }
+    }
+
+    private static void ValidateDownloadResponse(
+        EditableFileDownloadRequest request,
+        EditableFileDownloadResponse response)
+    {
+        if (response.ContractVersion != request.ContractVersion ||
+            response.Address != request.Address ||
+            response.Content is null ||
+            response.Content.Length > request.MaximumBytes ||
+            response.Content.Length > EditableFileIpcContract.MaximumContentBytes ||
+            !IsSafeContentType(response.ContentType) ||
+            !IsValidFailure(response.Failure) ||
+            response.Failure is not null && response.Content.Length != 0)
+        {
+            throw InvalidResponse();
+        }
+    }
+
+    private static void ValidateUploadResponse(
+        EditableFileUploadRequest request,
+        EditableFileUploadResponse response)
+    {
+        if (response.ContractVersion != request.ContractVersion ||
+            response.Address?.HasValidBounds != true ||
+            response.Address.ConnectionId != request.Address.ConnectionId ||
+            !string.Equals(response.Address.RootIdentity, request.Address.RootIdentity, StringComparison.Ordinal) ||
+            !string.Equals(response.Address.RelativePath, request.Address.RelativePath, StringComparison.Ordinal) ||
+            response.Size is < 0 or > EditableFileIpcContract.MaximumContentBytes ||
+            response.LastModifiedUtc is { Offset: var offset } && offset != TimeSpan.Zero ||
+            !IsValidFailure(response.Failure) ||
+            response.Failure is not null && response.Size != 0)
+        {
+            throw InvalidResponse();
+        }
+    }
+
+    private static bool IsSafeContentType(string? value) => value is null ||
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= StorageIpcLimits.MaximumContentTypeLength &&
+        !value.Any(char.IsControl);
+
+    private static void ValidateDirectoryEnsureResponse(
+        StorageDirectoryEnsureRequest request,
+        StorageDirectoryEnsureResponse response)
+    {
+        if (response.ContractVersion != request.ContractVersion ||
+            response.Address != request.Address ||
+            !IsValidFailure(response.Failure) ||
+            response.Failure is not null && response.Created)
         {
             throw InvalidResponse();
         }

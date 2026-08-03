@@ -125,26 +125,15 @@ public sealed class SyncOrchestrationService : ISyncOrchestrationService
                 "The sync profile baseline state is unavailable.");
         }
 
-        var leftOpen = await _connector.OpenAsync(
-            profile.LeftConnectionProfileId,
-            cancellationToken).ConfigureAwait(false);
-        if (leftOpen.IsFailure)
+        var pairOpen = await OpenPairAsync(profile, cancellationToken).ConfigureAwait(false);
+        if (pairOpen.IsFailure)
         {
-            return StorageResult<SyncPreviewResult>.Fail(leftOpen.Error);
+            return StorageResult<SyncPreviewResult>.Fail(pairOpen.Error);
         }
 
-        await using var leftConnection = leftOpen.Value;
-        var left = leftConnection.Session;
-        var rightOpen = await _connector.OpenAsync(
-            profile.RightConnectionProfileId,
-            cancellationToken).ConfigureAwait(false);
-        if (rightOpen.IsFailure)
-        {
-            return StorageResult<SyncPreviewResult>.Fail(rightOpen.Error);
-        }
-
-        await using var rightConnection = rightOpen.Value;
-        var right = rightConnection.Session;
+        await using var pair = pairOpen.Value;
+        var left = pair.LocationA;
+        var right = pair.LocationB;
         var sessionValidation = ValidateSessions(profile, left, right);
         if (sessionValidation is not null)
         {
@@ -163,19 +152,27 @@ public sealed class SyncOrchestrationService : ISyncOrchestrationService
             return StorageResult<SyncPreviewResult>.Fail(rightRoot.Error);
         }
 
-        var leftScanTask = SyncSnapshotScanner.ScanAsync(
-            left,
-            leftRoot.Value,
-            _scanOptions,
-            cancellationToken).AsTask();
-        var rightScanTask = SyncSnapshotScanner.ScanAsync(
-            right,
-            rightRoot.Value,
-            _scanOptions,
-            cancellationToken).AsTask();
-        await Task.WhenAll(leftScanTask, rightScanTask).ConfigureAwait(false);
-        var leftScan = await leftScanTask.ConfigureAwait(false);
-        var rightScan = await rightScanTask.ConfigureAwait(false);
+        StorageResult<SyncEndpointSnapshot> leftScan;
+        StorageResult<SyncEndpointSnapshot> rightScan;
+        if (ReferenceEquals(left, right))
+        {
+            leftScan = await SyncSnapshotScanner.ScanAsync(
+                left, leftRoot.Value, _scanOptions, cancellationToken).ConfigureAwait(false);
+            rightScan = leftScan.IsSuccess
+                ? await SyncSnapshotScanner.ScanAsync(
+                    right, rightRoot.Value, _scanOptions, cancellationToken).ConfigureAwait(false)
+                : leftScan;
+        }
+        else
+        {
+            var leftScanTask = SyncSnapshotScanner.ScanAsync(
+                left, leftRoot.Value, _scanOptions, cancellationToken).AsTask();
+            var rightScanTask = SyncSnapshotScanner.ScanAsync(
+                right, rightRoot.Value, _scanOptions, cancellationToken).AsTask();
+            await Task.WhenAll(leftScanTask, rightScanTask).ConfigureAwait(false);
+            leftScan = await leftScanTask.ConfigureAwait(false);
+            rightScan = await rightScanTask.ConfigureAwait(false);
+        }
         if (leftScan.IsFailure)
         {
             return StorageResult<SyncPreviewResult>.Fail(leftScan.Error);
@@ -209,10 +206,39 @@ public sealed class SyncOrchestrationService : ISyncOrchestrationService
             baseline.Items,
             profile.Direction,
             profile.DeletionMode,
-            createdAtUtc));
+            createdAtUtc,
+            profile.Behavior,
+            profile.FilterPolicy,
+            profile.ConflictPolicy));
         if (planResult.IsFailure)
         {
             return StorageResult<SyncPreviewResult>.Fail(planResult.Error);
+        }
+
+        var sessions = new Dictionary<ConnectionProfileId, IStorageEndpointSession>
+        {
+            [left.ProfileId] = left,
+            [right.ProfileId] = right,
+        };
+        var capabilityPreflight = await SyncPlanExecutor.ExecuteAsync(
+            new SyncPlanExecutionRequest(
+                planResult.Value.Plan,
+                planResult.Value.Plan.Digest,
+                sessions,
+                planResult.Value.Snapshots,
+                SyncPlanExecutionMode.Preview,
+                profile.DeletionSafetyPolicy,
+                profile.TransferOptions),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (capabilityPreflight.IsFailure)
+        {
+            return StorageResult<SyncPreviewResult>.Fail(new StorageFailure(
+                "sync.preview.operation_blocked",
+                capabilityPreflight.Error.Kind,
+                $"A planned operation is blocked by endpoint capability or safety policy: {capabilityPreflight.Error.Message}",
+                capabilityPreflight.Error.IsTransient,
+                capabilityPreflight.Error.ProviderCode,
+                capabilityPreflight.Error.DiagnosticId));
         }
 
         var persistedPlan = await _plans.PutAsync(planResult.Value.Plan, cancellationToken)
@@ -227,18 +253,14 @@ public sealed class SyncOrchestrationService : ISyncOrchestrationService
                 "The immutable sync plan could not be durably persisted.");
         }
 
-        var sessions = new Dictionary<ConnectionProfileId, IStorageEndpointSession>
-        {
-            [left.ProfileId] = left,
-            [right.ProfileId] = right,
-        };
         var approval = SyncExecutionApproval.Create(
             planResult.Value.Plan,
             sessions,
             planResult.Value.Snapshots,
             SyncPlanExecutionMode.Execute,
             profile.DeletionSafetyPolicy,
-            profile.TransferOptions);
+            profile.TransferOptions,
+            profile.PolicySha256);
         var deletionCount = planResult.Value.Plan.Operations.LongCount(operation => operation.IsDestructive);
         var deletionDecision = profile.DeletionSafetyPolicy.Evaluate(
             deletionCount,
@@ -349,24 +371,15 @@ public sealed class SyncOrchestrationService : ISyncOrchestrationService
                 "The immutable plan no longer matches the preview.");
         }
 
-        var leftOpen = await _connector.OpenAsync(profile.LeftConnectionProfileId, cancellationToken)
-            .ConfigureAwait(false);
-        if (leftOpen.IsFailure)
+        var pairOpen = await OpenPairAsync(profile, cancellationToken).ConfigureAwait(false);
+        if (pairOpen.IsFailure)
         {
-            return StorageResult<SyncPreviewRecord>.Fail(leftOpen.Error);
+            return StorageResult<SyncPreviewRecord>.Fail(pairOpen.Error);
         }
 
-        await using var leftConnection = leftOpen.Value;
-        var left = leftConnection.Session;
-        var rightOpen = await _connector.OpenAsync(profile.RightConnectionProfileId, cancellationToken)
-            .ConfigureAwait(false);
-        if (rightOpen.IsFailure)
-        {
-            return StorageResult<SyncPreviewRecord>.Fail(rightOpen.Error);
-        }
-
-        await using var rightConnection = rightOpen.Value;
-        var right = rightConnection.Session;
+        await using var pair = pairOpen.Value;
+        var left = pair.LocationA;
+        var right = pair.LocationB;
         var sessionValidation = ValidateSessions(profile, left, right);
         if (sessionValidation is not null)
         {
@@ -384,7 +397,8 @@ public sealed class SyncOrchestrationService : ISyncOrchestrationService
             preview.Snapshots,
             SyncPlanExecutionMode.Execute,
             profile.DeletionSafetyPolicy,
-            profile.TransferOptions);
+            profile.TransferOptions,
+            profile.PolicySha256);
         if (currentApproval != suppliedApproval ||
             !StringComparer.OrdinalIgnoreCase.Equals(
                 preview.ApprovalChallengeSha256,
@@ -422,8 +436,7 @@ public sealed class SyncOrchestrationService : ISyncOrchestrationService
         IStorageEndpointSession right)
     {
         if (left.ProfileId != profile.LeftConnectionProfileId ||
-            right.ProfileId != profile.RightConnectionProfileId ||
-            left.ProfileId == right.ProfileId)
+            right.ProfileId != profile.RightConnectionProfileId)
         {
             return new StorageFailure(
                 "sync.session.identity_mismatch",
@@ -432,6 +445,55 @@ public sealed class SyncOrchestrationService : ISyncOrchestrationService
         }
 
         return null;
+    }
+
+    private async ValueTask<StorageResult<SyncEndpointPair>> OpenPairAsync(
+        SyncProfile profile,
+        CancellationToken cancellationToken)
+    {
+        var locationA = await _connector.OpenAsync(
+            profile.LocationAConnectionProfileId,
+            cancellationToken).ConfigureAwait(false);
+        if (locationA.IsFailure)
+        {
+            return StorageResult<SyncEndpointPair>.Fail(locationA.Error);
+        }
+
+        if (profile.LocationAConnectionProfileId == profile.LocationBConnectionProfileId)
+        {
+            return StorageResult<SyncEndpointPair>.Success(
+                new SyncEndpointPair(locationA.Value, null));
+        }
+
+        var locationB = await _connector.OpenAsync(
+            profile.LocationBConnectionProfileId,
+            cancellationToken).ConfigureAwait(false);
+        if (locationB.IsFailure)
+        {
+            await locationA.Value.DisposeAsync().ConfigureAwait(false);
+            return StorageResult<SyncEndpointPair>.Fail(locationB.Error);
+        }
+
+        return StorageResult<SyncEndpointPair>.Success(
+            new SyncEndpointPair(locationA.Value, locationB.Value));
+    }
+
+    private sealed class SyncEndpointPair(
+        ISyncEndpointConnection locationA,
+        ISyncEndpointConnection? locationB) : IAsyncDisposable
+    {
+        public IStorageEndpointSession LocationA => locationA.Session;
+        public IStorageEndpointSession LocationB => locationB?.Session ?? locationA.Session;
+
+        public async ValueTask DisposeAsync()
+        {
+            if (locationB is not null)
+            {
+                await locationB.DisposeAsync().ConfigureAwait(false);
+            }
+
+            await locationA.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private static StorageResult<StorageAddress> CreateRoot(

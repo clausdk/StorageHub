@@ -18,18 +18,23 @@ public sealed class ShellWiringTests
             tabs.PerformLayout();
 
             Assert.Equal(TabDrawMode.OwnerDrawFixed, tabs.DrawMode);
-            Assert.Equal(2, tabs.TabPages.Count);
+            Assert.Equal(4, tabs.TabPages.Count);
+            Assert.Equal("Welcome", tabs.TabPages[0].AccessibleName);
+            Assert.Equal("Sync tasks", tabs.TabPages[1].AccessibleName);
 
-            var firstTab = tabs.GetTabRect(0);
-            RaiseMouseDown(tabs, new Point(firstTab.Right - 14, firstTab.Top + (firstTab.Height / 2)));
+            var workspaceTab = tabs.GetTabRect(2);
+            RaiseMouseDown(tabs, new Point(
+                workspaceTab.Right - 14,
+                workspaceTab.Top + (workspaceTab.Height / 2)));
 
-            Assert.Single(tabs.TabPages);
-            Assert.Equal("+", tabs.TabPages[0].Text);
-            Assert.Equal(-1, tabs.SelectedIndex);
+            Assert.Equal(3, tabs.TabPages.Count);
+            Assert.Equal("+", tabs.TabPages[^1].Text);
+            Assert.Equal(0, tabs.SelectedIndex);
+            Assert.Equal("Welcome", tabs.SelectedTab!.AccessibleName);
 
-            tabs.SelectedIndex = 0;
+            tabs.SelectedIndex = tabs.TabPages.Count - 1;
 
-            Assert.Equal(2, tabs.TabPages.Count);
+            Assert.Equal(4, tabs.TabPages.Count);
             Assert.NotEqual("+", tabs.SelectedTab!.Text);
         });
     }
@@ -67,7 +72,7 @@ public sealed class ShellWiringTests
                 .Select(name => name!)
                 .ToArray();
             Assert.Equal(
-                ["New tab", "Connection Manager", "Back", "Forward", "Up", "Refresh"],
+                ["New tab", "Connection Manager"],
                 toolbarActions);
         });
     }
@@ -176,7 +181,7 @@ public sealed class ShellWiringTests
             using var settings = new SettingsForm();
             var categories = GetField<ListBox>(settings, "_categories");
             Assert.Equal(
-                ["General", "Connections & trust", "Updates", "About"],
+                ["General", "Editing", "Connections & trust", "Updates", "About"],
                 categories.Items.Cast<string>());
             var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
             Assert.Equal(categories.Items.Count, pages.Count);

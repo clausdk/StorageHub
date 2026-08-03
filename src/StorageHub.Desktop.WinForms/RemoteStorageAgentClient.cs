@@ -342,7 +342,7 @@ public sealed class NamedPipeRemoteStorageAgentClient : IRemoteStorageAgentClien
                     (entry.NativeItemId is not null ||
                      entry.VersionId is not null ||
                      entry.EntityTag is not null) ||
-                !IsWithinPage(entry.RelativePath, response.RelativePath) ||
+                !IsWithinPage(entry.RelativePath, response.RelativePath, request.Recursive) ||
                 entry.Kind is StorageItemKind.Directory or StorageItemKind.Prefix && !entry.IsContainer ||
                 entry.Kind == StorageItemKind.File && entry.IsContainer)
             {
@@ -357,7 +357,7 @@ public sealed class NamedPipeRemoteStorageAgentClient : IRemoteStorageAgentClien
         }
     }
 
-    private static bool IsWithinPage(string itemPath, string parentPath)
+    private static bool IsWithinPage(string itemPath, string parentPath, bool recursive)
     {
         if (string.Equals(itemPath, parentPath, StringComparison.Ordinal))
         {
@@ -371,7 +371,7 @@ public sealed class NamedPipeRemoteStorageAgentClient : IRemoteStorageAgentClien
         }
 
         var remainder = itemPath[prefix.Length..];
-        return remainder.Length > 0 && !remainder.Contains('/', StringComparison.Ordinal);
+        return remainder.Length > 0 && (recursive || !remainder.Contains('/', StringComparison.Ordinal));
     }
 
     private static void ValidateContract(int version)

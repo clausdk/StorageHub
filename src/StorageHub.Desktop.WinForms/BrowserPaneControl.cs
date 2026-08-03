@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using StorageHub.Contracts.Ipc;
 using StorageHub.Contracts.Results;
 
@@ -5,6 +6,8 @@ namespace StorageHub.Desktop;
 
 public sealed class BrowserPaneControl : UserControl
 {
+    private const string PaneDragDataFormat = "StorageHub.PaneSelection.v1";
+    private const int DragShiftKeyState = 4;
     private const int MaximumCachedConnections = 32;
     private const int MaximumCachedDirectoriesPerConnection = 2_000;
     private const int MaximumTreeDirectories = 2_000;
@@ -41,6 +44,7 @@ public sealed class BrowserPaneControl : UserControl
     private bool _updatingConnectionChoices;
     private bool _updatingTreeSelection;
     private long _uiNavigationSequence;
+    private Guid? _lastReportedConnectionId;
 
     public BrowserPaneControl(
         string title,
@@ -74,7 +78,7 @@ public sealed class BrowserPaneControl : UserControl
             Padding = new Padding(8, 5, 8, 5),
             BackColor = StorageHubTheme.Surface
         };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 94));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -88,6 +92,9 @@ public sealed class BrowserPaneControl : UserControl
             TextAlign = ContentAlignment.MiddleLeft,
             Font = new Font(sectionFont, sectionFont.Style),
             ForeColor = StorageHubTheme.Text,
+            AutoEllipsis = true,
+            UseMnemonic = false,
+            Margin = new Padding(4, 0, 8, 0),
             AccessibleName = $"{title} pane"
         };
 
@@ -97,6 +104,7 @@ public sealed class BrowserPaneControl : UserControl
             DropDownStyle = ComboBoxStyle.DropDownList,
             DrawMode = DrawMode.OwnerDrawFixed,
             ItemHeight = 24,
+            Margin = new Padding(0, 2, 0, 2),
             AccessibleName = $"{title} connection",
             AccessibleDescription = "Select the local or remote connection displayed in this pane."
         };
@@ -127,6 +135,7 @@ public sealed class BrowserPaneControl : UserControl
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = showLocalDefault ? StorageHubTheme.Success : StorageHubTheme.TextMuted,
+            Margin = new Padding(3, 0, 0, 0),
             AccessibleName = $"{title} connection state"
         };
 
@@ -255,38 +264,69 @@ public sealed class BrowserPaneControl : UserControl
         _fileList.ColumnClick += FileListColumnClick;
         _fileList.DoubleClick += FileListDoubleClick;
         _fileList.KeyDown += FileListKeyDown;
+        _fileList.ItemDrag += FileListItemDrag;
+        ConfigureDropTarget(_fileList);
+        ConfigureDropTarget(_directoryTree);
         _fileContextMenu = new ContextMenuStrip
         {
             AccessibleName = $"{title} transfer commands",
             Renderer = StorageHubTheme.CreateToolStripRenderer()
         };
-        var copyToOtherPane = new ToolStripMenuItem("Copy to other pane")
-        {
-            AccessibleName = "Copy selected files to other pane"
-        };
-        var moveToOtherPane = new ToolStripMenuItem("Move to other pane")
-        {
-            AccessibleName = "Move selected files to other pane"
-        };
-        var inspectObject = new ToolStripMenuItem("Object properties...")
-        {
-            AccessibleName = "Inspect selected object properties"
-        };
+        var open = CreateContextMenuItem("Open", UiGlyph.Folder);
+        var edit = CreateContextMenuItem("Edit in external editor...", UiGlyph.File);
+        var copy = CreateContextMenuItem("Copy", UiGlyph.File, "Ctrl+C");
+        var cut = CreateContextMenuItem("Cut", UiGlyph.Forward, "Ctrl+X");
+        var paste = CreateContextMenuItem("Paste", UiGlyph.Save, "Ctrl+V");
+        var copyToOtherPane = CreateContextMenuItem("Copy to other pane", UiGlyph.Forward);
+        var moveToOtherPane = CreateContextMenuItem("Move to other pane", UiGlyph.Run);
+        var refresh = CreateContextMenuItem("Refresh", UiGlyph.Refresh, "F5");
+        var selectAll = CreateContextMenuItem("Select all", UiGlyph.Test, "Ctrl+A");
+        var inspectObject = CreateContextMenuItem("Properties...", UiGlyph.Info);
+        open.Font = new Font(open.Font, FontStyle.Bold);
+        open.Click += (_, _) => OpenOrEditSelected();
+        edit.Click += (_, _) => RaiseEditRequested();
+        copy.Click += (_, _) => StageSelection(TransferQueueOperation.Copy);
+        cut.Click += (_, _) => StageSelection(TransferQueueOperation.Move);
+        paste.Click += (_, _) => PasteRequested?.Invoke(this, EventArgs.Empty);
         copyToOtherPane.Click += (_, _) => RaiseTransferRequested(TransferQueueOperation.Copy);
         moveToOtherPane.Click += (_, _) => RaiseTransferRequested(TransferQueueOperation.Move);
+        refresh.Click += (_, _) => Reload();
+        selectAll.Click += (_, _) => SelectAllVisibleItems();
         inspectObject.Click += (_, _) => ObjectInspectionRequested?.Invoke(this, EventArgs.Empty);
+        _fileContextMenu.Items.Add(open);
+        _fileContextMenu.Items.Add(edit);
+        _fileContextMenu.Items.Add(new ToolStripSeparator());
+        _fileContextMenu.Items.Add(copy);
+        _fileContextMenu.Items.Add(cut);
+        _fileContextMenu.Items.Add(paste);
+        _fileContextMenu.Items.Add(new ToolStripSeparator());
         _fileContextMenu.Items.Add(copyToOtherPane);
         _fileContextMenu.Items.Add(moveToOtherPane);
+        _fileContextMenu.Items.Add(new ToolStripSeparator());
+        _fileContextMenu.Items.Add(refresh);
+        _fileContextMenu.Items.Add(selectAll);
         _fileContextMenu.Items.Add(new ToolStripSeparator());
         _fileContextMenu.Items.Add(inspectObject);
         _fileContextMenu.Opening += (_, _) =>
         {
             var hasSelection = _fileList.SelectedIndices.Count > 0;
+            var singleSelection = _fileList.SelectedIndices.Count == 1;
+            var selectedContainer = singleSelection &&
+                (uint)_fileList.SelectedIndices[0] < (uint)_items.Count &&
+                _items[_fileList.SelectedIndices[0]].IsContainer;
+            open.Enabled = singleSelection;
+            open.Text = selectedContainer ? "Open" : "Open in external editor...";
+            edit.Enabled = singleSelection && !selectedContainer;
+            copy.Enabled = hasSelection;
+            cut.Enabled = hasSelection;
+            paste.Enabled = CanPaste?.Invoke() == true;
             copyToOtherPane.Enabled = hasSelection;
             moveToOtherPane.Enabled = hasSelection;
-            inspectObject.Enabled = _fileList.SelectedIndices.Count == 1;
+            selectAll.Enabled = _fileList.VirtualListSize > 0;
+            inspectObject.Enabled = singleSelection;
         };
         _fileList.ContextMenuStrip = _fileContextMenu;
+        _fileList.MouseDown += FileListMouseDown;
 
         _loadingOverlay = CreateLoadingOverlay();
 
@@ -361,8 +401,22 @@ public sealed class BrowserPaneControl : UserControl
     /// <summary>Raised by pane copy/move hooks; the workspace owns resolving the opposite pane.</summary>
     public event EventHandler<PaneTransferRequestedEventArgs>? TransferRequested;
 
+    public event EventHandler<PaneSelectionStagedEventArgs>? SelectionStaged;
+
+    public event EventHandler? PasteRequested;
+
+    public event EventHandler? EditRequested;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<bool>? CanPaste { get; set; }
+
+    /// <summary>Raised when an immutable selection from another pane is dropped onto this pane.</summary>
+    public event EventHandler<PaneTransferDropRequestedEventArgs>? TransferDropRequested;
+
     /// <summary>Raised when one selected saved-connection object should be inspected read-only.</summary>
     public event EventHandler? ObjectInspectionRequested;
+
+    public event EventHandler<ConnectionOpenedEventArgs>? ConnectionOpened;
 
     public StorageResult<PaneSelectionSnapshot> CaptureSelectionSnapshot()
     {
@@ -487,6 +541,10 @@ public sealed class BrowserPaneControl : UserControl
             _fileList.ColumnClick -= FileListColumnClick;
             _fileList.DoubleClick -= FileListDoubleClick;
             _fileList.KeyDown -= FileListKeyDown;
+            _fileList.ItemDrag -= FileListItemDrag;
+            _fileList.MouseDown -= FileListMouseDown;
+            UnconfigureDropTarget(_fileList);
+            UnconfigureDropTarget(_directoryTree);
             _fileContextMenu.Dispose();
             if (_localBrowser is not null)
             {
@@ -877,6 +935,11 @@ public sealed class BrowserPaneControl : UserControl
         _connectionState.AccessibleDescription = $"Showing {snapshot.Connection.DisplayName} {snapshot.DisplayPath}";
         UpdateRemoteDirectoryTree(snapshot);
         UpdateSummaryText();
+        if (_lastReportedConnectionId != snapshot.Connection.ConnectionId)
+        {
+            _lastReportedConnectionId = snapshot.Connection.ConnectionId;
+            ConnectionOpened?.Invoke(this, new ConnectionOpenedEventArgs(snapshot.Connection));
+        }
     }
 
     private void ReplaceRemoteConnectionChoices(IReadOnlyList<ConnectionSummary> connections)
@@ -1486,7 +1549,124 @@ public sealed class BrowserPaneControl : UserControl
 
     private void FilterTextChanged(object? sender, EventArgs e) => ApplyFilter();
 
-    private void FileListDoubleClick(object? sender, EventArgs e) => OpenSelectedContainer();
+    private void FileListDoubleClick(object? sender, EventArgs e) => OpenOrEditSelected();
+
+    private void FileListMouseDown(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Right)
+        {
+            return;
+        }
+
+        var item = _fileList.GetItemAt(e.X, e.Y);
+        if (item is null)
+        {
+            _fileList.SelectedIndices.Clear();
+        }
+        else if (!item.Selected)
+        {
+            _fileList.SelectedIndices.Clear();
+            item.Selected = true;
+            item.Focused = true;
+        }
+    }
+
+    private void FileListItemDrag(object? sender, ItemDragEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        var selection = CaptureSelectionSnapshot();
+        if (selection.IsFailure)
+        {
+            return;
+        }
+
+        var data = new DataObject();
+        data.SetData(PaneDragDataFormat, autoConvert: false, new PaneDragPayload(this, selection.Value));
+        _ = _fileList.DoDragDrop(data, DragDropEffects.Copy | DragDropEffects.Move);
+    }
+
+    private void ConfigureDropTarget(Control control)
+    {
+        control.AllowDrop = true;
+        control.DragEnter += DropTargetDragEnter;
+        control.DragOver += DropTargetDragOver;
+        control.DragLeave += DropTargetDragLeave;
+        control.DragDrop += DropTargetDragDrop;
+    }
+
+    private void UnconfigureDropTarget(Control control)
+    {
+        control.DragEnter -= DropTargetDragEnter;
+        control.DragOver -= DropTargetDragOver;
+        control.DragLeave -= DropTargetDragLeave;
+        control.DragDrop -= DropTargetDragDrop;
+    }
+
+    private void DropTargetDragEnter(object? sender, DragEventArgs e)
+    {
+        e.Effect = GetDropEffect(e);
+        if (e.Effect != DragDropEffects.None && sender is Control control)
+        {
+            control.BackColor = Color.FromArgb(235, 242, 253);
+        }
+    }
+
+    private void DropTargetDragOver(object? sender, DragEventArgs e) => e.Effect = GetDropEffect(e);
+
+    private void DropTargetDragLeave(object? sender, EventArgs e)
+    {
+        if (sender is Control control)
+        {
+            control.BackColor = StorageHubTheme.Surface;
+        }
+    }
+
+    private void DropTargetDragDrop(object? sender, DragEventArgs e)
+    {
+        DropTargetDragLeave(sender, EventArgs.Empty);
+        var effect = GetDropEffect(e);
+        if (effect == DragDropEffects.None || TryGetPaneDragPayload(e.Data) is not { } payload)
+        {
+            return;
+        }
+
+        var operation = effect == DragDropEffects.Move
+            ? TransferQueueOperation.Move
+            : TransferQueueOperation.Copy;
+        TransferDropRequested?.Invoke(
+            this,
+            new PaneTransferDropRequestedEventArgs(payload.SourcePane, payload.Selection, operation));
+    }
+
+    private DragDropEffects GetDropEffect(DragEventArgs e)
+    {
+        var payload = TryGetPaneDragPayload(e.Data);
+        if (payload is null || ReferenceEquals(payload.SourcePane, this))
+        {
+            return DragDropEffects.None;
+        }
+
+        var shiftPressed = (e.KeyState & DragShiftKeyState) != 0;
+        return shiftPressed && e.AllowedEffect.HasFlag(DragDropEffects.Move)
+            ? DragDropEffects.Move
+            : e.AllowedEffect.HasFlag(DragDropEffects.Copy)
+                ? DragDropEffects.Copy
+                : DragDropEffects.None;
+    }
+
+    private static PaneDragPayload? TryGetPaneDragPayload(IDataObject? data)
+    {
+        if (data?.GetDataPresent(PaneDragDataFormat, autoConvert: false) != true)
+        {
+            return null;
+        }
+
+        return data.GetData(PaneDragDataFormat, autoConvert: false) as PaneDragPayload;
+    }
 
     private void FileListKeyDown(object? sender, KeyEventArgs e)
     {
@@ -1494,9 +1674,17 @@ public sealed class BrowserPaneControl : UserControl
         {
             e.Handled = true;
             e.SuppressKeyPress = true;
-            RaiseTransferRequested(e.KeyCode == Keys.C
+            StageSelection(e.KeyCode == Keys.C
                 ? TransferQueueOperation.Copy
                 : TransferQueueOperation.Move);
+            return;
+        }
+
+        if (e.Control && e.KeyCode == Keys.V)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            PasteRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
@@ -1507,7 +1695,54 @@ public sealed class BrowserPaneControl : UserControl
 
         e.Handled = true;
         e.SuppressKeyPress = true;
-        OpenSelectedContainer();
+        OpenOrEditSelected();
+    }
+
+    private void OpenOrEditSelected()
+    {
+        if (_fileList.SelectedIndices.Count != 1)
+        {
+            return;
+        }
+
+        var index = _fileList.SelectedIndices[0];
+        if ((uint)index < (uint)_items.Count && _items[index].IsContainer)
+        {
+            OpenSelectedContainer();
+        }
+        else
+        {
+            RaiseEditRequested();
+        }
+    }
+
+    private void RaiseEditRequested()
+    {
+        if (_fileList.SelectedIndices.Count == 1)
+        {
+            EditRequested?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private void StageSelection(TransferQueueOperation operation)
+    {
+        var selection = CaptureSelectionSnapshot();
+        if (selection.IsSuccess)
+        {
+            SelectionStaged?.Invoke(this, new PaneSelectionStagedEventArgs(selection.Value, operation));
+        }
+    }
+
+    private ToolStripMenuItem CreateContextMenuItem(string text, UiGlyph glyph, string? shortcut = null)
+    {
+        var image = UiIconFactory.Create(glyph, StorageHubTheme.Text, 18, DeviceDpi / 96F);
+        _ownedImages.Add(image);
+        return new ToolStripMenuItem(text)
+        {
+            Image = image,
+            ShortcutKeyDisplayString = shortcut,
+            AccessibleName = text
+        };
     }
 
     private void RaiseTransferRequested(TransferQueueOperation operation)
@@ -1912,6 +2147,34 @@ public sealed class BrowserPaneControl : UserControl
         }
     }
 }
+
+public sealed class ConnectionOpenedEventArgs(ConnectionSummary connection) : EventArgs
+{
+    public ConnectionSummary Connection { get; } = connection;
+}
+
+public sealed class PaneTransferDropRequestedEventArgs(
+    BrowserPaneControl sourcePane,
+    PaneSelectionSnapshot selection,
+    TransferQueueOperation operation) : EventArgs
+{
+    public BrowserPaneControl SourcePane { get; } = sourcePane;
+
+    public PaneSelectionSnapshot Selection { get; } = selection;
+
+    public TransferQueueOperation Operation { get; } = operation;
+}
+
+public sealed class PaneSelectionStagedEventArgs(
+    PaneSelectionSnapshot selection,
+    TransferQueueOperation operation) : EventArgs
+{
+    public PaneSelectionSnapshot Selection { get; } = selection;
+
+    public TransferQueueOperation Operation { get; } = operation;
+}
+
+internal sealed record PaneDragPayload(BrowserPaneControl SourcePane, PaneSelectionSnapshot Selection);
 
 public sealed record BrowserListItem(
     string Name,

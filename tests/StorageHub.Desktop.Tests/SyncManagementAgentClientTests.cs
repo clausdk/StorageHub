@@ -1,3 +1,4 @@
+using StorageHub.Agent.Ipc;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop.Tests;
@@ -20,6 +21,44 @@ public sealed class SyncManagementAgentClientTests
         await Assert.ThrowsAsync<InvalidDataException>(() => client.ListProfilesAsync(new SyncProfileListRequest()));
 
         Assert.Equal(1, transport.DisconnectCount);
+    }
+
+    [Fact]
+    public async Task Client_surfaces_the_agents_safe_error_message()
+    {
+        var transport = new FakeTransport(request => IpcEnvelope.Create(
+            IpcProtocol.ErrorResponseMessageType,
+            request.RequestId,
+            1,
+            new IpcErrorResponse(
+                "ipc.message.unsupported",
+                "The requested operation is not supported by this agent version.")));
+        await using var client = CreateClient(transport);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.ListProfilesAsync(new SyncProfileListRequest()));
+
+        Assert.Equal("The requested operation is not supported by this agent version.", error.Message);
+        Assert.Equal(1, transport.DisconnectCount);
+    }
+
+    [Fact]
+    public async Task Client_accepts_a_bounded_run_history_request()
+    {
+        var transport = new FakeTransport(request => IpcEnvelope.Create(
+            SyncManagementIpcMessageTypes.RunListResponse,
+            request.RequestId,
+            1,
+            new SyncRunListResponse(
+                SyncManagementIpcContract.CurrentVersion,
+                [],
+                ContinuationToken: null)));
+        await using var client = CreateClient(transport);
+
+        var response = await client.ListRunsAsync(new SyncRunListRequest(PageSize: 50));
+
+        Assert.Empty(response.Runs);
+        Assert.Null(response.ContinuationToken);
     }
 
     [Fact]

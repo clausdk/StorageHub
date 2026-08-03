@@ -10,6 +10,20 @@ namespace StorageHub.Sync;
 public enum SyncConflictPolicy
 {
     Block = 0,
+    KeepBoth = 1,
+}
+
+public enum SyncBehavior
+{
+    CopyNewFilesAToB = 0,
+    UpdateAToB = 1,
+    MirrorAToB = 2,
+    CopyNewFilesBToA = 3,
+    UpdateBToA = 4,
+    MirrorBToA = 5,
+    TwoWaySync = 6,
+    TwoWayWithDeletionPropagation = 7,
+    CompareOnly = 8,
 }
 
 /// <summary>
@@ -34,7 +48,9 @@ public sealed class SyncProfile
         bool enabled,
         long revision,
         DateTimeOffset createdAtUtc,
-        DateTimeOffset updatedAtUtc)
+        DateTimeOffset updatedAtUtc,
+        SyncPathFilterPolicy? filterPolicy = null,
+        SyncBehavior? behavior = null)
     {
         if (profileId.IsEmpty)
         {
@@ -50,12 +66,6 @@ public sealed class SyncProfile
         if (leftConnectionProfileId.IsEmpty || rightConnectionProfileId.IsEmpty)
         {
             throw new ArgumentException("Both connection profile IDs are required.");
-        }
-
-        if (leftConnectionProfileId == rightConnectionProfileId)
-        {
-            throw new ArgumentException(
-                "The current execution contract requires distinct left and right connection profiles.");
         }
 
         if (!Enum.IsDefined(direction))
@@ -102,11 +112,19 @@ public sealed class SyncProfile
         LeftRoot = ValidateCanonicalRoot(leftRoot, nameof(leftRoot));
         RightConnectionProfileId = rightConnectionProfileId;
         RightRoot = ValidateCanonicalRoot(rightRoot, nameof(rightRoot));
+        if (leftConnectionProfileId == rightConnectionProfileId &&
+            RootsOverlap(LeftRoot, RightRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "Locations on the same connection must use distinct, non-overlapping roots.");
+        }
         Direction = direction;
         DeletionMode = deletionMode;
         ConflictPolicy = conflictPolicy;
         DeletionSafetyPolicy = deletionSafetyPolicy;
         TransferOptions = transferOptions;
+        FilterPolicy = filterPolicy ?? new SyncPathFilterPolicy();
+        Behavior = behavior ?? InferBehavior(direction, deletionMode, transferOptions.Overwrite);
         Enabled = enabled;
         Revision = revision;
         CreatedAtUtc = createdAtUtc;
@@ -120,11 +138,17 @@ public sealed class SyncProfile
     public string LeftRoot { get; }
     public ConnectionProfileId RightConnectionProfileId { get; }
     public string RightRoot { get; }
+    public ConnectionProfileId LocationAConnectionProfileId => LeftConnectionProfileId;
+    public string LocationARoot => LeftRoot;
+    public ConnectionProfileId LocationBConnectionProfileId => RightConnectionProfileId;
+    public string LocationBRoot => RightRoot;
     public SyncDirection Direction { get; }
     public SyncDeletionMode DeletionMode { get; }
     public SyncConflictPolicy ConflictPolicy { get; }
     public DeletionSafetyPolicy DeletionSafetyPolicy { get; }
     public TransferExecutionOptions TransferOptions { get; }
+    public SyncPathFilterPolicy FilterPolicy { get; }
+    public SyncBehavior Behavior { get; }
     public bool Enabled { get; }
     public long Revision { get; }
     public DateTimeOffset CreatedAtUtc { get; }
@@ -146,7 +170,9 @@ public sealed class SyncProfile
         Enabled,
         revision,
         CreatedAtUtc,
-        updatedAtUtc);
+        updatedAtUtc,
+        FilterPolicy,
+        Behavior);
 
     private static string ValidateCanonicalRoot(string? root, string parameterName)
     {
@@ -171,7 +197,7 @@ public sealed class SyncProfile
     private static string ComputePolicySha256(SyncProfile profile)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AppendInt32(hash, 1);
+        AppendInt32(hash, 2);
         AppendGuid(hash, profile.LeftConnectionProfileId.Value);
         AppendString(hash, profile.LeftRoot);
         AppendGuid(hash, profile.RightConnectionProfileId.Value);
@@ -187,8 +213,40 @@ public sealed class SyncProfile
 
         AppendInt32(hash, profile.TransferOptions.Overwrite ? 1 : 0);
         AppendInt32(hash, profile.TransferOptions.BufferSize);
+        AppendInt32(hash, (int)profile.Behavior);
+        AppendInt32(hash, profile.FilterPolicy.IncludeHiddenFiles ? 1 : 0);
+        AppendInt32(hash, profile.FilterPolicy.IncludeGlobs.Count);
+        foreach (var glob in profile.FilterPolicy.IncludeGlobs)
+        {
+            AppendString(hash, glob);
+        }
+
+        AppendInt32(hash, profile.FilterPolicy.ExcludeGlobs.Count);
+        foreach (var glob in profile.FilterPolicy.ExcludeGlobs)
+        {
+            AppendString(hash, glob);
+        }
         return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
+
+    private static SyncBehavior InferBehavior(
+        SyncDirection direction,
+        SyncDeletionMode deletionMode,
+        bool overwrite) => (direction, deletionMode, overwrite) switch
+        {
+            (SyncDirection.LeftToRight, SyncDeletionMode.Mirror, _) => SyncBehavior.MirrorAToB,
+            (SyncDirection.LeftToRight, _, true) => SyncBehavior.UpdateAToB,
+            (SyncDirection.LeftToRight, _, false) => SyncBehavior.CopyNewFilesAToB,
+            (SyncDirection.RightToLeft, SyncDeletionMode.Mirror, _) => SyncBehavior.MirrorBToA,
+            (SyncDirection.RightToLeft, _, true) => SyncBehavior.UpdateBToA,
+            (SyncDirection.RightToLeft, _, false) => SyncBehavior.CopyNewFilesBToA,
+            (SyncDirection.TwoWay, SyncDeletionMode.Propagate, _) => SyncBehavior.TwoWayWithDeletionPropagation,
+            _ => SyncBehavior.TwoWaySync,
+        };
+
+    private static bool RootsOverlap(string a, string b, StringComparison comparison) =>
+        string.Equals(a, b, comparison) || a.Length == 0 || b.Length == 0 ||
+        a.StartsWith(b + "/", comparison) || b.StartsWith(a + "/", comparison);
 
     private static void AppendInt32(IncrementalHash hash, int value)
     {

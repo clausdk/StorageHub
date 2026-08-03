@@ -1,4 +1,5 @@
 using System.Text.Json;
+using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
@@ -14,9 +15,16 @@ internal sealed record DesktopUpdatePreferences(
     bool DownloadAutomatically = true,
     bool RestartAutomatically = false,
     bool IncludePrereleases = true,
-    SshHostKeyDiscoveryMode SshHostKeyDiscovery = SshHostKeyDiscoveryMode.AskBeforeFetching)
+    SshHostKeyDiscoveryMode SshHostKeyDiscovery = SshHostKeyDiscoveryMode.AskBeforeFetching,
+    string? ExternalEditorPath = null,
+    int MaximumEditableFileBytes = EditableFileIpcContract.MaximumContentBytes,
+    bool AdaptiveConcurrency = true,
+    int MinimumConcurrency = 1,
+    int MaximumTransferConcurrency = 4,
+    int PerConnectionConcurrency = 2,
+    int MaximumSyncConcurrency = 2)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 4;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
@@ -71,7 +79,7 @@ internal sealed class DesktopUpdatePreferencesStore
                 bufferSize: 4096,
                 FileOptions.SequentialScan);
             var document = JsonSerializer.Deserialize<DesktopUpdatePreferencesDocument>(stream, JsonOptions);
-            if (document is null || document.SchemaVersion is not (1 or DesktopUpdatePreferences.CurrentSchemaVersion))
+            if (document is null || document.SchemaVersion is < 1 or > DesktopUpdatePreferences.CurrentSchemaVersion)
             {
                 return DesktopUpdatePreferences.Defaults;
             }
@@ -79,13 +87,34 @@ internal sealed class DesktopUpdatePreferencesStore
             var discoveryMode = document.SchemaVersion == 1
                 ? SshHostKeyDiscoveryMode.AskBeforeFetching
                 : document.SshHostKeyDiscovery;
+            var editorPath = document.SchemaVersion >= 3 && IsValidEditorPath(document.ExternalEditorPath)
+                ? document.ExternalEditorPath
+                : null;
+            var maximumEditableBytes = document.SchemaVersion >= 3 &&
+                document.MaximumEditableFileBytes is >= 1 and <= EditableFileIpcContract.MaximumContentBytes
+                    ? document.MaximumEditableFileBytes
+                    : EditableFileIpcContract.MaximumContentBytes;
+            var concurrencyIsValid = document.SchemaVersion >= 4 &&
+                document.MinimumConcurrency is >= 1 and <= 8 &&
+                document.MaximumTransferConcurrency is >= 1 and <= 32 &&
+                document.MinimumConcurrency <= document.MaximumTransferConcurrency &&
+                document.PerConnectionConcurrency is >= 1 and <= 16 &&
+                document.MaximumSyncConcurrency is >= 1 and <= 8 &&
+                document.MinimumConcurrency <= document.MaximumSyncConcurrency;
             return Enum.IsDefined(discoveryMode)
                 ? new DesktopUpdatePreferences(
                     document.CheckAutomatically,
                     document.DownloadAutomatically,
                     document.RestartAutomatically,
                     document.IncludePrereleases,
-                    discoveryMode)
+                    discoveryMode,
+                    editorPath,
+                    maximumEditableBytes,
+                    concurrencyIsValid ? document.AdaptiveConcurrency : DesktopUpdatePreferences.Defaults.AdaptiveConcurrency,
+                    concurrencyIsValid ? document.MinimumConcurrency : DesktopUpdatePreferences.Defaults.MinimumConcurrency,
+                    concurrencyIsValid ? document.MaximumTransferConcurrency : DesktopUpdatePreferences.Defaults.MaximumTransferConcurrency,
+                    concurrencyIsValid ? document.PerConnectionConcurrency : DesktopUpdatePreferences.Defaults.PerConnectionConcurrency,
+                    concurrencyIsValid ? document.MaximumSyncConcurrency : DesktopUpdatePreferences.Defaults.MaximumSyncConcurrency)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -101,6 +130,18 @@ internal sealed class DesktopUpdatePreferencesStore
     internal void Save(DesktopUpdatePreferences preferences)
     {
         ArgumentNullException.ThrowIfNull(preferences);
+        if (!IsValidEditorPath(preferences.ExternalEditorPath) ||
+            preferences.MaximumEditableFileBytes is < 1 or > EditableFileIpcContract.MaximumContentBytes ||
+            preferences.MinimumConcurrency is < 1 or > 8 ||
+            preferences.MaximumTransferConcurrency is < 1 or > 32 ||
+            preferences.MinimumConcurrency > preferences.MaximumTransferConcurrency ||
+            preferences.PerConnectionConcurrency is < 1 or > 16 ||
+            preferences.MaximumSyncConcurrency is < 1 or > 8 ||
+            preferences.MinimumConcurrency > preferences.MaximumSyncConcurrency)
+        {
+            throw new ArgumentException("External editor preferences exceed the permitted bounds.", nameof(preferences));
+        }
+
         var parent = Path.GetDirectoryName(_filePath)
             ?? throw new InvalidOperationException("The desktop settings directory is unavailable.");
         Directory.CreateDirectory(parent);
@@ -117,7 +158,14 @@ internal sealed class DesktopUpdatePreferencesStore
                 preferences.DownloadAutomatically,
                 preferences.RestartAutomatically,
                 preferences.IncludePrereleases,
-                preferences.SshHostKeyDiscovery);
+                preferences.SshHostKeyDiscovery,
+                preferences.ExternalEditorPath,
+                preferences.MaximumEditableFileBytes,
+                preferences.AdaptiveConcurrency,
+                preferences.MinimumConcurrency,
+                preferences.MaximumTransferConcurrency,
+                preferences.PerConnectionConcurrency,
+                preferences.MaximumSyncConcurrency);
             using (var stream = new FileStream(
                 temporaryPath,
                 FileMode.CreateNew,
@@ -165,11 +213,24 @@ internal sealed class DesktopUpdatePreferencesStore
         }
     }
 
+    private static bool IsValidEditorPath(string? value) => value is null ||
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= 2_048 &&
+        !value.Any(char.IsControl) &&
+        Path.IsPathFullyQualified(value);
+
     private sealed record DesktopUpdatePreferencesDocument(
         int SchemaVersion,
         bool CheckAutomatically,
         bool DownloadAutomatically,
         bool RestartAutomatically,
         bool IncludePrereleases,
-        SshHostKeyDiscoveryMode SshHostKeyDiscovery = default);
+        SshHostKeyDiscoveryMode SshHostKeyDiscovery = default,
+        string? ExternalEditorPath = null,
+        int MaximumEditableFileBytes = EditableFileIpcContract.MaximumContentBytes,
+        bool AdaptiveConcurrency = true,
+        int MinimumConcurrency = 1,
+        int MaximumTransferConcurrency = 4,
+        int PerConnectionConcurrency = 2,
+        int MaximumSyncConcurrency = 2);
 }

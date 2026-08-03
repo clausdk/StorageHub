@@ -8,6 +8,46 @@ namespace StorageHub.Sync.Tests;
 public sealed class SyncPlanBuilderTests
 {
     [Fact]
+    public void Copy_new_and_compare_only_never_plan_updates()
+    {
+        var fixture = Fixture.Create(
+            left: [File("shared.txt", 11, "AA")],
+            right: [File("shared.txt", 10, "BB")]);
+
+        var copyNew = SyncPlanBuilder.Build(fixture.Request(
+            SyncDirection.LeftToRight,
+            SyncDeletionMode.Disabled,
+            SyncBehavior.CopyNewFilesAToB));
+        var compare = SyncPlanBuilder.Build(fixture.Request(
+            SyncDirection.LeftToRight,
+            SyncDeletionMode.Disabled,
+            SyncBehavior.CompareOnly));
+
+        Assert.Empty(copyNew.Value.Plan.Operations);
+        Assert.Empty(compare.Value.Plan.Operations);
+        Assert.Single(compare.Value.Conflicts);
+    }
+
+    [Fact]
+    public void Filters_remove_paths_from_operations_and_baseline_scope()
+    {
+        var fixture = Fixture.Create(
+            left: [File("include.txt", 1, "AA"), File("private/secret.txt", 2, "BB")],
+            right: []);
+        var filter = new SyncPathFilterPolicy(["**/*.txt", "*.txt"], ["private/**"]);
+
+        var result = SyncPlanBuilder.Build(fixture.Request(
+            SyncDirection.LeftToRight,
+            SyncDeletionMode.Disabled,
+            SyncBehavior.UpdateAToB,
+            filter));
+
+        Assert.Equal(
+            "include.txt",
+            Assert.Single(result.Value.Plan.Operations).SourceOrTarget.CanonicalRelativePath);
+    }
+
+    [Fact]
     public void Left_to_right_update_copies_source_changes_without_deleting_destination_only_items()
     {
         var fixture = Fixture.Create(
@@ -68,6 +108,35 @@ public sealed class SyncPlanBuilderTests
         var conflict = Assert.Single(result.Value.Conflicts);
         Assert.Equal("shared.txt", conflict.RelativePath);
         Assert.Equal(SyncChangeKind.ConflictBothModified, conflict.Kind);
+    }
+
+    [Fact]
+    public void Keep_both_creates_deterministic_location_copies_and_converges_original()
+    {
+        var baseline = new Dictionary<string, SyncBaselineObservation>
+        {
+            ["shared.txt"] = SyncBaselineObservation.Present(10, Digest("00"), "left-v1", "right-v1")
+        };
+        var fixture = Fixture.Create(
+            left: [File("shared.txt", 11, "AA", "left-v2")],
+            right: [File("shared.txt", 12, "BB", "right-v2")],
+            baseline: baseline);
+
+        var result = SyncPlanBuilder.Build(fixture.Request(
+            SyncDirection.TwoWay,
+            SyncDeletionMode.Disabled,
+            SyncBehavior.TwoWaySync,
+            conflictPolicy: SyncConflictPolicy.KeepBoth));
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(result.Value.Conflicts);
+        Assert.Equal(5, result.Value.Plan.Operations.Length);
+        Assert.Contains(result.Value.Plan.Operations,
+            operation => operation.Destination?.CanonicalRelativePath ==
+                "shared.storagehub-conflict-location-a.txt");
+        Assert.Contains(result.Value.Plan.Operations,
+            operation => operation.Destination?.CanonicalRelativePath ==
+                "shared.storagehub-conflict-location-b.txt");
     }
 
     [Fact]
@@ -326,7 +395,10 @@ public sealed class SyncPlanBuilderTests
 
         public SyncPlanBuildRequest Request(
             SyncDirection direction,
-            SyncDeletionMode deletionMode) => new(
+            SyncDeletionMode deletionMode,
+            SyncBehavior? behavior = null,
+            SyncPathFilterPolicy? filterPolicy = null,
+            SyncConflictPolicy conflictPolicy = SyncConflictPolicy.Block) => new(
             OperationPlanId.New(),
             SyncProfileId.New(),
             baselineGeneration: 1,
@@ -337,7 +409,10 @@ public sealed class SyncPlanBuilderTests
             Baseline,
             direction,
             deletionMode,
-            DateTimeOffset.UnixEpoch);
+            DateTimeOffset.UnixEpoch,
+            behavior,
+            filterPolicy,
+            conflictPolicy);
 
         private static SyncEndpointSnapshot Snapshot(
             ConnectionProfileId profileId,

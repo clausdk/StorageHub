@@ -594,11 +594,19 @@ public sealed class ManualTransferController : IAsyncDisposable
             return new ManualTransferEnqueueResult([], [], plan.Error);
         }
 
-        var accepted = new List<TransferEnqueueResponse>(plan.Value.Requests.Count);
+        return await EnqueuePlanAsync(plan.Value, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<ManualTransferEnqueueResult> EnqueuePlanAsync(
+        ManualTransferPlan plan,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var accepted = new List<TransferEnqueueResponse>(plan.Requests.Count);
         TransferEnqueueRequest? attemptedRequest = null;
         try
         {
-            foreach (var request in plan.Value.Requests)
+            foreach (var request in plan.Requests)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 attemptedRequest = request;
