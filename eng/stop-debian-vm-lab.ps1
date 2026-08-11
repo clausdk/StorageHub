@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string] $LabRoot = (Join-Path $env:LOCALAPPDATA 'StorageHub\VmLab\Debian13')
+    [string] $LabRoot = (Join-Path $env:LOCALAPPDATA 'StorageHub.VmLab\Debian13')
 )
 
 Set-StrictMode -Version Latest
