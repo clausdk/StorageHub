@@ -214,7 +214,8 @@ public sealed class NamedPipeRemoteStorageAgentClient : IRemoteStorageAgentClien
             throw new UnauthorizedAccessException(
                 "StorageHub could not authenticate to the local background agent.");
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or InvalidOperationException or JsonException)
+        catch (Exception error) when (error is IOException or TimeoutException or UnauthorizedAccessException or
+            InvalidDataException or InvalidOperationException or JsonException)
         {
             await DisconnectAfterFailureAsync().ConfigureAwait(false);
             throw;
@@ -268,6 +269,7 @@ public sealed class NamedPipeRemoteStorageAgentClient : IRemoteStorageAgentClien
                 connection.ConnectionId == Guid.Empty ||
                 !IsSafeText(connection.DisplayName, 512, required: true) ||
                 !Enum.IsDefined(connection.Provider) ||
+                !Enum.IsDefined(connection.Type) ||
                 !IsSafeText(connection.FolderPath, StorageIpcLimits.MaximumRelativePathLength) ||
                 connection.Tags is null ||
                 connection.Tags.Length > 100 ||
@@ -456,9 +458,9 @@ public sealed class NamedPipeRemoteStorageAgentClient : IRemoteStorageAgentClien
             ClientName = "StorageHub.Desktop.StorageBrowser",
             ClientVersion = version,
             ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 1,
-            InitialReconnectDelay = TimeSpan.Zero,
-            MaximumReconnectDelay = TimeSpan.Zero
+            MaxConnectAttempts = 3,
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
+            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
         }));
     }
 

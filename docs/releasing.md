@@ -38,13 +38,9 @@ explicit user action.
 
 ## Build a bundle locally
 
-Check out the pinned `CodeLogic.Libs` revision described in the root README,
-then run:
+Run:
 
 ```powershell
-$env:CLStorageProjectPath = 'C:\src\CodeLogic.Libs\CL.Storage\CL.Storage.csproj'
-$env:CodeLogicLibsRoot = 'C:\src\CodeLogic.Libs'
-
 & .\eng\package-windows.ps1 `
   -Version '0.1.0-local.1' `
   -OutputRoot artifacts\local-release

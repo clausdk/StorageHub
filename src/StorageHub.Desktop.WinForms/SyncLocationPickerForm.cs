@@ -1,10 +1,9 @@
-using Krypton.Toolkit;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
 /// <summary>Selects a canonical connection-relative folder without exposing provider credentials.</summary>
-internal sealed class SyncLocationPickerForm : KryptonForm
+internal sealed class SyncLocationPickerForm : Form
 {
     private const int MaximumVisibleEntries = 2_000;
     private readonly IRemoteStorageAgentClient _client;
@@ -45,6 +44,7 @@ internal sealed class SyncLocationPickerForm : KryptonForm
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        StorageHubTheme.Register(this);
 
         var header = new TableLayoutPanel
         {
@@ -101,6 +101,7 @@ internal sealed class SyncLocationPickerForm : KryptonForm
             MultiSelect = false,
             AccessibleName = "Folders in the current connection path"
         };
+        StorageHubTheme.ConfigureList(_folders);
         _folders.Columns.Add("Folder", 430);
         _folders.Columns.Add("Path", 280);
         _folders.DoubleClick += FolderDoubleClicked;

@@ -27,36 +27,12 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
       NUGET_XMLDOC_MODE: skip
-      CL_STORAGE_REVISION: c70fefe4420279af8bec45e55a37f4acd5204ee3
 
     steps:
       - name: Check out StorageHub
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      # StorageHub references the all-in-one library as source until its package
-      # release is the canonical dependency. Keep the exact reviewed revision
-      # outside GITHUB_WORKSPACE so StorageHub's central package policy cannot
-      # leak into the independently versioned CodeLogic.Libs project tree.
-      - name: Check out CodeLogic.Libs
-        shell: pwsh
-        run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          git init "$clRoot"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C "$clRoot" remote add origin `
-            https://github.com/Media2A/CodeLogic.Libs.git
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C "$clRoot" fetch --depth=1 origin `
-            "$env:CL_STORAGE_REVISION"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C "$clRoot" checkout --detach FETCH_HEAD
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $actualRevision = git -C "$clRoot" rev-parse HEAD
-          if ($actualRevision -ne $env:CL_STORAGE_REVISION) {
-            throw "CodeLogic.Libs resolved to '$actualRevision', not the pinned revision."
-          }
 
       - name: Install .NET SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -78,76 +54,44 @@ jobs:
       - name: Restore locked dependencies and audit advisories
         shell: pwsh
         run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
           dotnet restore StorageHub.slnx --locked-mode `
             -p:NuGetAudit=true `
             -p:NuGetAuditMode=all `
-            '-p:WarningsAsErrors=NU1901%3BNU1902%3BNU1903%3BNU1904' `
-            -p:CLStorageProjectPath="$clProject" `
-            -p:CodeLogicLibsRoot="$clRoot"
+            '-p:WarningsAsErrors=NU1901%3BNU1902%3BNU1903%3BNU1904'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Release
         shell: pwsh
         run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
-          dotnet build StorageHub.slnx --configuration Release --no-restore `
-            -p:CLStorageProjectPath="$clProject" `
-            -p:CodeLogicLibsRoot="$clRoot"
+          dotnet build StorageHub.slnx --configuration Release --no-restore
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $clRelease = Join-Path $clRoot 'CL.Storage\bin\Release\net10.0\CL.Storage.dll'
-          $clDebug = Join-Path $clRoot 'CL.Storage\bin\Debug\net10.0\CL.Storage.dll'
-          if (-not (Test-Path -LiteralPath $clRelease)) {
-            throw 'The Release build did not produce a Release CL.Storage assembly.'
-          }
-          if (Test-Path -LiteralPath $clDebug) {
-            throw 'The Release build unexpectedly produced or consumed a Debug CL.Storage build.'
-          }
 
       - name: Test Release
         shell: pwsh
         run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
           dotnet test StorageHub.slnx --configuration Release --no-build --no-restore `
-            --logger trx `
-            -p:CLStorageProjectPath="$clProject" `
-            -p:CodeLogicLibsRoot="$clRoot"
+            --logger trx
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test S3 conformance against disposable MinIO
         shell: pwsh
         run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
           & .\eng\run-minio-integration.ps1 `
-            -FixtureRoot (Join-Path $env:RUNNER_TEMP 'StorageHub-MinIO') `
-            -CLStorageProjectPath $clProject `
-            -CodeLogicLibsRoot $clRoot
+            -FixtureRoot (Join-Path $env:RUNNER_TEMP 'StorageHub-MinIO')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test FTP and FTPS conformance on disposable servers
         shell: pwsh
         run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
           & .\eng\run-ftp-integration.ps1 `
-            -FixtureRoot (Join-Path $env:RUNNER_TEMP 'StorageHub-FTP') `
-            -CLStorageProjectPath $clProject `
-            -CodeLogicLibsRoot $clRoot
+            -FixtureRoot (Join-Path $env:RUNNER_TEMP 'StorageHub-FTP')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test SFTP conformance on disposable servers
         shell: pwsh
         run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
           & .\eng\run-sftp-integration.ps1 `
-            -FixtureRoot (Join-Path $env:RUNNER_TEMP 'StorageHub-SFTP') `
-            -CLStorageProjectPath $clProject `
-            -CodeLogicLibsRoot $clRoot
+            -FixtureRoot (Join-Path $env:RUNNER_TEMP 'StorageHub-SFTP')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Audit FTP fixture dependencies
@@ -165,10 +109,6 @@ jobs:
       - name: Report vulnerable packages
         shell: pwsh
         run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
-          $env:CLStorageProjectPath = $clProject
-          $env:CodeLogicLibsRoot = $clRoot
           dotnet list StorageHub.slnx package --vulnerable --include-transitive --no-restore
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -196,34 +136,12 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
       NUGET_XMLDOC_MODE: skip
-      CL_STORAGE_REVISION: c70fefe4420279af8bec45e55a37f4acd5204ee3
 
     steps:
       - name: Check out StorageHub
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      # Keep the source dependency outside GITHUB_WORKSPACE and verify the
-      # reviewed revision exactly, matching the build/test job above.
-      - name: Check out CodeLogic.Libs
-        shell: pwsh
-        run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          git init "$clRoot"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C "$clRoot" remote add origin `
-            https://github.com/Media2A/CodeLogic.Libs.git
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C "$clRoot" fetch --depth=1 origin `
-            "$env:CL_STORAGE_REVISION"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C "$clRoot" checkout --detach FETCH_HEAD
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $actualRevision = git -C "$clRoot" rev-parse HEAD
-          if ($actualRevision -ne $env:CL_STORAGE_REVISION) {
-            throw "CodeLogic.Libs resolved to '$actualRevision', not the pinned revision."
-          }
 
       - name: Install .NET SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -258,11 +176,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release-version.outputs.version }}
         run: |
-          $clRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-CodeLogic.Libs'
-          $clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
           $bundleRoot = Join-Path $env:RUNNER_TEMP 'StorageHub-Windows-Release'
-          $env:CLStorageProjectPath = $clProject
-          $env:CodeLogicLibsRoot = $clRoot
 
           & .\eng\package-windows.ps1 `
             -Version $env:RELEASE_VERSION `

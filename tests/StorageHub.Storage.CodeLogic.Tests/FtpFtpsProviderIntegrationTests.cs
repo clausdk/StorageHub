@@ -88,7 +88,8 @@ public sealed class FtpFtpsProviderIntegrationTests : IAsyncLifetime
             connection.Session,
             profileId,
             rootIdentity,
-            StorageWriteMode.Overwrite);
+            StorageWriteMode.Overwrite,
+            assertCommittedSize: false);
         await ProviderSessionConformance.AssertAbortDoesNotPublishAsync(
             connection.Session,
             profileId,
@@ -98,6 +99,14 @@ public sealed class FtpFtpsProviderIntegrationTests : IAsyncLifetime
             connection.Session,
             profileId,
             rootIdentity);
+        await ProviderSessionConformance.AssertTransfersToAndFromLocalAsync(
+            new CodeLogicStorageSessionFactory(Assert.IsType<StorageLibrary>(_library)),
+            connection.Session,
+            profileId,
+            rootIdentity,
+            Assert.IsType<string>(_testRoot),
+            StorageWriteMode.Overwrite,
+            supportsSafeRemoteCreate: false);
 
         var createOnlyAddress = StorageAddress.Create(
             profileId,
@@ -126,7 +135,16 @@ public sealed class FtpFtpsProviderIntegrationTests : IAsyncLifetime
             connection.Session,
             profileId,
             rootIdentity,
-            StorageWriteMode.Overwrite);
+            StorageWriteMode.Overwrite,
+            assertCommittedSize: false);
+        await ProviderSessionConformance.AssertTransfersToAndFromLocalAsync(
+            new CodeLogicStorageSessionFactory(Assert.IsType<StorageLibrary>(_library)),
+            connection.Session,
+            profileId,
+            rootIdentity,
+            Assert.IsType<string>(_testRoot),
+            StorageWriteMode.Overwrite,
+            supportsSafeRemoteCreate: false);
 
         var wrongPin = new string('A', 64);
         if (StringComparer.OrdinalIgnoreCase.Equals(wrongPin, settings.ServerFingerprint))
@@ -163,7 +181,8 @@ public sealed class FtpFtpsProviderIntegrationTests : IAsyncLifetime
             connection.Session,
             profileId,
             rootIdentity,
-            StorageWriteMode.Overwrite);
+            StorageWriteMode.Overwrite,
+            assertCommittedSize: false);
     }
 
     private async Task AssertMutualTlsConformanceAsync(FtpFixtureSettings settings)

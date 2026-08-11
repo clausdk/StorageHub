@@ -82,6 +82,27 @@ public sealed class SyncSnapshotScannerTests
     }
 
     [Fact]
+    public async Task Scan_coalesces_equivalent_directory_marker_and_prefix_aliases()
+    {
+        var profileId = ConnectionProfileId.New();
+        const string rootIdentity = "fake-root";
+        var root = SyncTestEntries.Address(profileId, rootIdentity, string.Empty);
+        await using var session = new FakeEndpointSession(
+            profileId,
+            rootIdentity,
+            [
+                SyncTestEntries.Directory(profileId, rootIdentity, "folder"),
+                SyncTestEntries.Directory(profileId, rootIdentity, "folder"),
+                SyncTestEntries.File(profileId, rootIdentity, "folder/item.txt", 3)
+            ]);
+
+        var result = await SyncSnapshotScanner.ScanAsync(session, root);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(["folder", "folder/item.txt"], result.Value.Entries.Keys);
+    }
+
+    [Fact]
     public async Task Scan_rejects_entries_outside_the_verified_root()
     {
         var profileId = ConnectionProfileId.New();

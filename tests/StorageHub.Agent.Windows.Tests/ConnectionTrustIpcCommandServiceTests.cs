@@ -110,6 +110,34 @@ public sealed class ConnectionTrustIpcCommandServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SshClientProfileCanEnrollPinnedHostKeyThroughAuthoritativeStore()
+    {
+        var profile = ConnectionProfile.Create(
+            ConnectionProfileId.New(),
+            new ConnectionProfileMetadata("Pinned SSH terminal"),
+            new SshClientEndpoint("ssh.example.test", 2222, SshHostKeyPolicy.Pinned),
+            new UsernamePasswordAuthentication("operator", SecretReference.Create()),
+            Options(),
+            Now);
+        Assert.Equal(DomainProfileWriteStatus.Succeeded, (await _profiles.CreateAsync(profile)).Status);
+
+        var response = await DecideAsync(
+            profile,
+            new string('A', 64),
+            ConnectionTrustDecision.Trusted);
+
+        Assert.Equal(ConnectionTrustMutationStatus.Succeeded, response.Status);
+        Assert.Equal(ConnectionTrustArtifactKind.SshHostKey, response.Snapshot!.Target.ArtifactKind);
+        Assert.Equal("ssh.example.test", response.Snapshot.Target.CanonicalHost);
+        Assert.Equal(2222, response.Snapshot.Target.Port);
+        var stored = Assert.Single(await _trust.FindAsync(
+            TrustArtifactKind.SshHostKey,
+            "ssh.example.test",
+            2222));
+        Assert.Equal(TrustDecision.Trusted, stored.Decision);
+    }
+
+    [Fact]
     public async Task SystemTrustProfileCannotBeUsedToWriteArbitraryEndpointPins()
     {
         var profile = ConnectionProfile.Create(

@@ -398,7 +398,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
         {
             var source = await OpenEndpointAsync(
                 context,
-                context.Job.Intent.Source.ProfileId,
+                context.Job.Intent.Source,
                 hostCancellationToken).ConfigureAwait(false);
             if (source is null)
             {
@@ -408,7 +408,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
             sourceConnection = source;
             var destination = await OpenEndpointAsync(
                 context,
-                context.Job.Intent.Destination.ProfileId,
+                context.Job.Intent.Destination,
                 hostCancellationToken).ConfigureAwait(false);
             if (destination is null)
             {
@@ -557,13 +557,13 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
 
     private async ValueTask<ITransferEndpointConnection?> OpenEndpointAsync(
         ClaimContext context,
-        Domain.Identifiers.ConnectionProfileId profileId,
+        StorageAddress address,
         CancellationToken cancellationToken)
     {
         StorageResult<ITransferEndpointConnection> opened;
         try
         {
-            opened = await _connector.OpenAsync(profileId, cancellationToken).ConfigureAwait(false);
+            opened = await _connector.OpenAsync(address, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

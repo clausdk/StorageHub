@@ -1,9 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $FixtureRoot,
-    [string] $DotNetArtifactsPath,
-    [string] $CLStorageProjectPath,
-    [string] $CodeLogicLibsRoot
+    [string] $DotNetArtifactsPath
 )
 
 Set-StrictMode -Version Latest
@@ -170,13 +168,6 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($DotNetArtifactsPath)) {
         $arguments += @('--artifacts-path', [IO.Path]::GetFullPath($DotNetArtifactsPath))
     }
-    if (-not [string]::IsNullOrWhiteSpace($CLStorageProjectPath)) {
-        $arguments += "-p:CLStorageProjectPath=$([IO.Path]::GetFullPath($CLStorageProjectPath))"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($CodeLogicLibsRoot)) {
-        $arguments += "-p:CodeLogicLibsRoot=$([IO.Path]::GetFullPath($CodeLogicLibsRoot))"
-    }
-
     Write-Host "Running the S3 conformance suite against disposable MinIO $minioRelease on loopback."
     & dotnet @arguments
     if ($LASTEXITCODE -ne 0) {

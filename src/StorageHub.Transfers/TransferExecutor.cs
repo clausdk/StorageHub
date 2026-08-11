@@ -9,7 +9,8 @@ namespace StorageHub.Transfers;
 
 public sealed record TransferExecutionOptions(
     bool Overwrite = false,
-    int BufferSize = BoundedStreamCopier.DefaultBufferSize);
+    int BufferSize = BoundedStreamCopier.DefaultBufferSize,
+    bool AllowNonAtomicDestinationWrites = false);
 
 public sealed record TransferExecutionReport(
     StorageEntry Destination,
@@ -63,6 +64,7 @@ public static class TransferExecutor
         var directConditionalOverwrite = UsesDirectConditionalOverwrite(
             destinationSession,
             options);
+        var nonAtomicDestinationWrite = UsesNonAtomicDestinationWrite(destinationSession, options);
 
         if (options.Overwrite)
         {
@@ -152,7 +154,7 @@ public static class TransferExecutor
         }
 
         await using var source = read.Value;
-        var writeAddressResult = options.Overwrite && !directConditionalOverwrite
+        var writeAddressResult = options.Overwrite && !directConditionalOverwrite && !nonAtomicDestinationWrite
             ? CreateStagingAddress(intent)
             : StorageResult<StorageAddress>.Success(intent.Destination);
         if (writeAddressResult.IsFailure)
@@ -164,7 +166,7 @@ public static class TransferExecutor
         var write = await destinationSession.OpenWriteAsync(
             new StorageWriteRequest(
                 writeAddress,
-                directConditionalOverwrite
+                directConditionalOverwrite || nonAtomicDestinationWrite
                     ? StorageWriteMode.Overwrite
                     : StorageWriteMode.CreateNew,
                 expectedLength,
@@ -277,7 +279,7 @@ public static class TransferExecutor
             cancellationToken).ConfigureAwait(false);
         if (verification is not null)
         {
-            if (options.Overwrite && !directConditionalOverwrite)
+            if (options.Overwrite && !directConditionalOverwrite && !nonAtomicDestinationWrite)
             {
                 await BestEffortDeleteStagingAsync(destinationSession, commit.Value).ConfigureAwait(false);
             }
@@ -295,7 +297,7 @@ public static class TransferExecutor
         }
 
         var committedDestination = commit.Value;
-        if (options.Overwrite && !directConditionalOverwrite)
+        if (options.Overwrite && !directConditionalOverwrite && !nonAtomicDestinationWrite)
         {
             if (!IsSameLogicalAddress(commit.Value.Address, writeAddress))
             {
@@ -389,7 +391,7 @@ public static class TransferExecutor
             return write;
         }
 
-        if (!options.Overwrite)
+        if (!options.Overwrite && !UsesNonAtomicDestinationWrite(destinationSession, options))
         {
             var conditionalCreate = RequireNative(
                 destinationSession,
@@ -421,14 +423,21 @@ public static class TransferExecutor
         if (options.Overwrite)
         {
             if (string.IsNullOrWhiteSpace(intent.ExpectedDestinationVersionId) &&
-                string.IsNullOrWhiteSpace(intent.ExpectedDestinationEntityTag))
+                string.IsNullOrWhiteSpace(intent.ExpectedDestinationEntityTag) &&
+                (!options.AllowNonAtomicDestinationWrites || intent.ExpectedDestinationDigest is null))
             {
                 return UnsafeMutation(
                     "transfer.overwrite.identity_required",
                     "An overwrite requires the exact destination version or entity tag captured during planning.");
             }
 
-            if (UsesDirectConditionalOverwrite(destinationSession, options))
+            if (UsesNonAtomicDestinationWrite(destinationSession, options))
+            {
+                // Compatibility mode still verifies the reviewed destination digest immediately
+                // before writing when one is available, but the server cannot enforce an atomic
+                // compare-and-swap during publication.
+            }
+            else if (UsesDirectConditionalOverwrite(destinationSession, options))
             {
                 foreach (var feature in new[]
                          {
@@ -532,6 +541,35 @@ public static class TransferExecutor
         options.Overwrite &&
         destinationSession.Capabilities[StorageFeature.ConditionalUpdate].Level == FeatureSupportLevel.Native &&
         destinationSession.Capabilities[StorageFeature.AtomicReplace].Level == FeatureSupportLevel.Native;
+
+    private static bool UsesNonAtomicDestinationWrite(
+        IStorageEndpointSession destinationSession,
+        TransferExecutionOptions options)
+    {
+        if (!options.AllowNonAtomicDestinationWrites)
+        {
+            return false;
+        }
+
+        if (!options.Overwrite)
+        {
+            return destinationSession.Capabilities[StorageFeature.ConditionalCreate].Level !=
+                   FeatureSupportLevel.Native;
+        }
+
+        return !UsesDirectConditionalOverwrite(destinationSession, options) &&
+               !SupportsSafeStagedOverwrite(destinationSession);
+    }
+
+    private static bool SupportsSafeStagedOverwrite(IStorageEndpointSession destinationSession) =>
+        new[]
+        {
+            StorageFeature.ConditionalCreate,
+            StorageFeature.ObjectVersioning,
+            StorageFeature.TemporaryFiles,
+            StorageFeature.FileMove,
+            StorageFeature.AtomicRename,
+        }.All(feature => destinationSession.Capabilities[feature].Level == FeatureSupportLevel.Native);
 
     private static bool IdentityMatches(
         StorageEntry current,

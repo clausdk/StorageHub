@@ -1,17 +1,18 @@
 using System.Security.Cryptography;
 using System.Text;
-using Krypton.Toolkit;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
-public sealed class ConnectionManagerForm : KryptonForm
+public sealed class ConnectionManagerForm : Form
 {
     private readonly List<Image> _ownedImages = [];
     private readonly TreeView _profileTree;
+    private readonly ConnectionSidebarControl _profileSidebar;
     private readonly Font _profileSectionFont;
     private readonly Font _profileTagFont;
     private readonly TextBox _searchBox;
+    private readonly ComboBox _typeSelector;
     private readonly ComboBox _providerSelector;
     private readonly Label _providerSummary;
     private readonly Panel _providerAccent;
@@ -33,6 +34,7 @@ public sealed class ConnectionManagerForm : KryptonForm
     private readonly bool _quickConnectMode;
     private readonly string _initialEndpoint;
     private readonly SshHostKeyDiscoveryMode _sshHostKeyDiscoveryMode;
+    private readonly IReadOnlyDictionary<string, string> _connectionDefaults;
     private ConnectionProfileDocument? _selectedProfile;
     private CancellationTokenSource? _profileLoadCancellation;
     private bool _loadingEditor;
@@ -47,7 +49,8 @@ public sealed class ConnectionManagerForm : KryptonForm
         IRemoteStorageAgentClient? storageClient = null,
         IRemoteConnectionProfileClient? profileClient = null,
         IRemoteSecretVaultClient? secretClient = null,
-        SshHostKeyDiscoveryMode? sshHostKeyDiscoveryMode = null)
+        SshHostKeyDiscoveryMode? sshHostKeyDiscoveryMode = null,
+        IReadOnlyDictionary<string, string>? connectionDefaults = null)
     {
         _quickConnectMode = quickConnectMode;
         _initialEndpoint = initialEndpoint;
@@ -57,10 +60,10 @@ public sealed class ConnectionManagerForm : KryptonForm
         _storageClient = storageClient ?? new NamedPipeRemoteStorageAgentClient();
         _profileClient = profileClient ?? new NamedPipeRemoteConnectionProfileClient();
         _secretClient = secretClient ?? new NamedPipeRemoteSecretVaultClient();
-        _sshHostKeyDiscoveryMode = sshHostKeyDiscoveryMode ?? DesktopUpdatePreferencesStore
-            .CreateDefault()
-            .Load()
-            .SshHostKeyDiscovery;
+        var preferences = DesktopUpdatePreferencesStore.CreateDefault().Load();
+        _sshHostKeyDiscoveryMode = sshHostKeyDiscoveryMode ?? preferences.SshHostKeyDiscovery;
+        _connectionDefaults = ConnectionDefaultSettings.Normalize(
+            connectionDefaults ?? preferences.ConnectionDefaults);
         _controller = new ConnectionManagerController(_profileClient, _secretClient);
         Text = quickConnectMode ? "Quick Connect — StorageHub" : "Connection Manager — StorageHub";
         AccessibleName = quickConnectMode ? "Quick Connect" : "Connection Manager";
@@ -71,6 +74,7 @@ public sealed class ConnectionManagerForm : KryptonForm
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        StorageHubTheme.Register(this);
         _profileSectionFont = StorageHubTheme.CreateSectionFont();
         _profileTagFont = new Font("Segoe UI Semibold", 7.5F, FontStyle.Regular, GraphicsUnit.Point);
 
@@ -95,7 +99,11 @@ public sealed class ConnectionManagerForm : KryptonForm
         };
         _profileTree.DrawNode += DrawProfileTreeNode;
         _profileTree.AfterSelect += ProfileTreeSelected;
+        _profileTree.BeforeSelect += ProfileTreeBeforeSelect;
         _profileTree.NodeMouseClick += ProfileTreeNodeMouseClick;
+        _profileTree.BeforeCollapse += ProfileTreeBeforeCollapse;
+        _profileSidebar = new ConnectionSidebarControl();
+        _profileSidebar.ConnectionSelected += ProfileSidebarSelected;
 
         _searchBox = new TextBox
         {
@@ -124,10 +132,20 @@ public sealed class ConnectionManagerForm : KryptonForm
             Padding = new Padding(12),
             BackColor = StorageHubTheme.Surface
         };
-        left.Controls.Add(_profileTree);
+        left.Controls.Add(_profileSidebar);
         left.Controls.Add(leftHeader);
 
         _providerAccent = new Panel { Dock = DockStyle.Top, Height = 4, BackColor = StorageHubTheme.Primary };
+        _typeSelector = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 260,
+            AccessibleName = "Connection type",
+            AccessibleDescription = "Choose Storage for browsable providers or Client for interactive remote clients."
+        };
+        _typeSelector.Items.AddRange(new object[] { ConnectionProfileType.Storage, ConnectionProfileType.Client });
+        _typeSelector.SelectedItem = ConnectionProviderCatalog.Get(initialProvider).Type;
+        _typeSelector.SelectedIndexChanged += TypeSelectionChanged;
         _providerSelector = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
@@ -135,8 +153,7 @@ public sealed class ConnectionManagerForm : KryptonForm
             AccessibleName = "Connection provider",
             AccessibleDescription = "Changes the provider-specific endpoint, authentication, and trust fields."
         };
-        _providerSelector.Items.AddRange(ConnectionProviderCatalog.All.Cast<object>().ToArray());
-        _providerSelector.SelectedItem = ConnectionProviderCatalog.Get(initialProvider);
+        PopulateProviderSelector(ConnectionProviderCatalog.Get(initialProvider).Type, initialProvider);
         _providerSelector.SelectedIndexChanged += ProviderSelectionChanged;
 
         _providerSummary = new Label
@@ -152,9 +169,8 @@ public sealed class ConnectionManagerForm : KryptonForm
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Connection settings",
-            Padding = new Point(14, 5),
-            HotTrack = true
         };
+        StorageHubTheme.ConfigureTabs(_settingsTabs);
         _generalPage = NewPage("General");
         _authenticationPage = NewPage("Authentication");
         _securityPage = NewPage("TLS / SSH Trust");
@@ -208,8 +224,12 @@ public sealed class ConnectionManagerForm : KryptonForm
         {
             _profileTree.DrawNode -= DrawProfileTreeNode;
             _profileTree.AfterSelect -= ProfileTreeSelected;
+            _profileTree.BeforeSelect -= ProfileTreeBeforeSelect;
             _profileTree.NodeMouseClick -= ProfileTreeNodeMouseClick;
+            _profileTree.BeforeCollapse -= ProfileTreeBeforeCollapse;
+            _profileSidebar.ConnectionSelected -= ProfileSidebarSelected;
             _searchBox.TextChanged -= SearchTextChanged;
+            _typeSelector.SelectedIndexChanged -= TypeSelectionChanged;
             _providerSelector.SelectedIndexChanged -= ProviderSelectionChanged;
             _settingsTabs.SelectedIndexChanged -= SettingsTabSelected;
             _formLifetime.Cancel();
@@ -254,13 +274,13 @@ public sealed class ConnectionManagerForm : KryptonForm
             ImageScalingSize = new Size(18, 18),
             Padding = new Padding(6, 4, 6, 4),
             BackColor = StorageHubTheme.Surface,
-            Renderer = StorageHubTheme.CreateToolStripRenderer(),
             AccessibleName = "Connection Manager commands"
         };
         toolbar.Items.Add(CreateToolbarButton(UiGlyph.Add, "New connection", (_, _) => StartNewProfile()));
         toolbar.Items.Add(new ToolStripSeparator());
         toolbar.Items.Add(CreateToolbarButton(UiGlyph.Test, "Test connection", async (_, _) =>
             await TestSelectedConnectionAsync(_formLifetime.Token)));
+        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Terminal, "Open client", (_, _) => OpenSelectedClient()));
         if (!_quickConnectMode)
         {
             toolbar.Items.Add(CreateToolbarButton(UiGlyph.Save, "Save profile", async (_, _) =>
@@ -272,31 +292,77 @@ public sealed class ConnectionManagerForm : KryptonForm
         return toolbar;
     }
 
+    private void OpenSelectedClient()
+    {
+        if (_selectedProfile is not
+            {
+                ConnectionId: var connectionId,
+                Draft.Type: ConnectionProfileType.Client,
+                Draft.Endpoint.Provider: StorageConnectionProvider.Ssh
+            })
+        {
+            ShowStatus("Select a saved SSH client profile before opening a terminal.", StorageHubTheme.Warning);
+            return;
+        }
+
+        var terminal = new SshTerminalForm(
+            connectionId,
+            _selectedProfile.Draft.Metadata.DisplayName);
+        terminal.Show(this);
+    }
+
     private TableLayoutPanel BuildEditorHeader()
     {
         var header = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 94,
+            Height = 130,
             ColumnCount = 2,
-            RowCount = 2,
+            RowCount = 3,
             Padding = new Padding(18, 12, 18, 10),
             BackColor = StorageHubTheme.Surface
         };
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         header.Controls.Add(new Label
         {
-            Text = "Provider",
+            Text = "Type",
             AutoSize = true,
             Anchor = AnchorStyles.Left,
             ForeColor = StorageHubTheme.Text
         }, 0, 0);
-        header.Controls.Add(_providerSelector, 1, 0);
-        header.Controls.Add(_providerSummary, 1, 1);
+        header.Controls.Add(_typeSelector, 1, 0);
+        header.Controls.Add(new Label
+        {
+            Text = "Provider / protocol",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            ForeColor = StorageHubTheme.Text
+        }, 0, 1);
+        header.Controls.Add(_providerSelector, 1, 1);
+        header.Controls.Add(_providerSummary, 1, 2);
         return header;
+    }
+
+    private void TypeSelectionChanged(object? sender, EventArgs e)
+    {
+        if (!_loadingEditor && _typeSelector.SelectedItem is ConnectionProfileType type)
+        {
+            PopulateProviderSelector(type);
+        }
+    }
+
+    private void PopulateProviderSelector(ConnectionProfileType type, StorageProviderKind? preferred = null)
+    {
+        var providers = ConnectionProviderCatalog.All.Where(provider => provider.Type == type).ToArray();
+        _providerSelector.Items.Clear();
+        _providerSelector.Items.AddRange(providers.Cast<object>().ToArray());
+        _providerSelector.SelectedItem = preferred is { } kind
+            ? providers.FirstOrDefault(provider => provider.Kind == kind) ?? providers.FirstOrDefault()
+            : providers.FirstOrDefault();
     }
 
     private TableLayoutPanel BuildFooter()
@@ -348,7 +414,6 @@ public sealed class ConnectionManagerForm : KryptonForm
 
     private static TabPage NewPage(string name) => new(name)
     {
-        BackColor = StorageHubTheme.Surface,
         Padding = new Padding(8)
     };
 
@@ -364,7 +429,8 @@ public sealed class ConnectionManagerForm : KryptonForm
     {
         if (e.Node?.Tag is ConnectionCardModel card)
         {
-            _providerSelector.SelectedItem = ConnectionProviderCatalog.Get(card.Provider);
+            _typeSelector.SelectedItem = card.Type;
+            PopulateProviderSelector(card.Type, card.Provider);
             if (!_loadingEditor && card.ConnectionId is { } connectionId)
             {
                 _profileLoadCancellation?.Cancel();
@@ -393,11 +459,23 @@ public sealed class ConnectionManagerForm : KryptonForm
         }
     }
 
+    private void ProfileSidebarSelected(object? sender, ConnectionCardModel card)
+    {
+        if (card.ConnectionId is not { } connectionId)
+        {
+            return;
+        }
+
+        _profileTree.SelectedNode = _profileTree.Nodes
+            .Cast<TreeNode>()
+            .SelectMany(FlattenTree)
+            .FirstOrDefault(node => node.Tag is ConnectionCardModel candidate &&
+                candidate.ConnectionId == connectionId);
+    }
+
     private void SearchTextChanged(object? sender, EventArgs e)
     {
-        var selectedId = _profileTree.SelectedNode?.Tag is ConnectionCardModel card
-            ? card.ConnectionId
-            : _selectedProfile?.ConnectionId;
+        var selectedId = _profileSidebar.SelectedConnectionId ?? _selectedProfile?.ConnectionId;
         RefreshProfileTree(selectedId);
     }
 
@@ -417,6 +495,7 @@ public sealed class ConnectionManagerForm : KryptonForm
         {
             ConfigureS3Editor();
         }
+        ApplyConnectionDefaults(provider);
 
         _testState.Text = "Not tested";
         _testState.ForeColor = StorageHubTheme.TextMuted;
@@ -490,6 +569,20 @@ public sealed class ConnectionManagerForm : KryptonForm
         ApplyServicePreset();
     }
 
+    private void ApplyConnectionDefaults(ConnectionProviderDescriptor provider)
+    {
+        var defaults = ConnectionDefaultSettings.Get(provider.Kind, _connectionDefaults);
+        foreach (var field in ConnectionDefaultSettings.EditableFields(provider))
+        {
+            if (_editorFields.TryGetValue(field.Key, out var control) &&
+                defaults.FieldValues.TryGetValue(field.Key, out var value) &&
+                !(field.Key == "endpoint" && !string.IsNullOrWhiteSpace(_initialEndpoint)))
+            {
+                SetControlValue(control, value);
+            }
+        }
+    }
+
     private Panel BuildProviderPage(
         string title,
         string description,
@@ -511,13 +604,20 @@ public sealed class ConnectionManagerForm : KryptonForm
                 _quickConnectMode
                     ? "Used only to identify this session; the temporary profile is not saved."
                     : "The display name shown in connection cards and pane selectors.");
-            var folderTags = new TextBox { PlaceholderText = "Team / Project · archive, production" };
-            _editorFields["folderTags"] = folderTags;
+            var folder = new TextBox { PlaceholderText = "Team / Project" };
+            _editorFields["folder"] = folder;
             UiControlFactory.AddLabeledRow(
                 table,
-                "Folder and tags",
-                folderTags,
-                "Organizational metadata only; never enter credentials or recovery codes.");
+                "Folder",
+                folder,
+                "Optional organizational path used in the Connection Manager tree.");
+            var labels = new TextBox { PlaceholderText = "production, customer-a, critical" };
+            _editorFields["labels"] = labels;
+            UiControlFactory.AddLabeledRow(
+                table,
+                "Labels",
+                labels,
+                "Comma-separated searchable labels; never enter credentials or recovery codes.");
             var badge = new Label
             {
                 Text = $"  {provider.ShortName}  · provider color {provider.AccentHex}",
@@ -930,7 +1030,8 @@ public sealed class ConnectionManagerForm : KryptonForm
         host = string.Empty;
         port = 0;
         fingerprint = null!;
-        if (_providerSelector.SelectedItem is not ConnectionProviderDescriptor { Kind: StorageProviderKind.Sftp } ||
+        if (_providerSelector.SelectedItem is not ConnectionProviderDescriptor
+            { Kind: StorageProviderKind.Sftp or StorageProviderKind.Ssh } ||
             !_editorFields.TryGetValue("host", out var hostControl) ||
             !_editorFields.TryGetValue("port", out var portControl) ||
             !_editorFields.TryGetValue("hostKeyFingerprint", out var fingerprintControl))
@@ -987,19 +1088,19 @@ public sealed class ConnectionManagerForm : KryptonForm
 
         var rowBounds = new Rectangle(0, e.Bounds.Top, _profileTree.ClientSize.Width, e.Bounds.Height);
         var selected = (e.State & TreeNodeStates.Selected) != 0;
-        var background = selected ? SystemColors.Highlight : StorageHubTheme.Surface;
-        var foreground = selected ? SystemColors.HighlightText : StorageHubTheme.Text;
-        var muted = selected ? SystemColors.HighlightText : StorageHubTheme.TextMuted;
-        using var backgroundBrush = new SolidBrush(background);
+        var background = StorageHubTheme.Surface;
+        var foreground = StorageHubTheme.Text;
+        var muted = StorageHubTheme.TextMuted;
+        using var backgroundBrush = new SolidBrush(StorageHubTheme.Surface);
         e.Graphics.FillRectangle(backgroundBrush, rowBounds);
 
         switch (node.Tag)
         {
             case ConnectionCardModel card:
-                DrawConnectionTreeNode(e.Graphics, e.Bounds, card, foreground, muted);
+                DrawConnectionTreeNode(e.Graphics, e.Bounds, node, card, foreground, muted, selected);
                 break;
             case ProfileTreeGroupNode group:
-                DrawProfileGroupNode(e.Graphics, e.Bounds, node, group, foreground, muted);
+                DrawProfileGroupNode(e.Graphics, e.Bounds, node, group, foreground, muted, selected);
                 break;
             case ProfileTreeEmptyNode empty:
                 TextRenderer.DrawText(
@@ -1012,7 +1113,9 @@ public sealed class ConnectionManagerForm : KryptonForm
                 break;
         }
 
-        if ((e.State & TreeNodeStates.Focused) != 0)
+        var categoryNode = node.Tag is ProfileTreeGroupNode focusGroup &&
+            focusGroup.Key.StartsWith("category:", StringComparison.Ordinal);
+        if ((e.State & TreeNodeStates.Focused) != 0 && !categoryNode)
         {
             ControlPaint.DrawFocusRectangle(e.Graphics, rowBounds, foreground, background);
         }
@@ -1021,12 +1124,33 @@ public sealed class ConnectionManagerForm : KryptonForm
     private void DrawConnectionTreeNode(
         Graphics graphics,
         Rectangle bounds,
+        TreeNode node,
         ConnectionCardModel card,
         Color foreground,
-        Color muted)
+        Color muted,
+        bool selected)
     {
-        var left = bounds.Left + 5;
-        var badgeBounds = new Rectangle(left, bounds.Top + 10, 36, 36);
+        DrawProfileGroupContainer(graphics, node.Parent, bounds, selected: false);
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        var groupLeft = node.Parent?.Bounds.Left + 10 ?? bounds.Left + 2;
+        var cardBounds = new Rectangle(
+            groupLeft,
+            bounds.Top + 4,
+            Math.Max(24, _profileTree.ClientSize.Width - groupLeft - 18),
+            Math.Max(24, bounds.Height - 8));
+        using var cardPath = CreateProfileTreeRoundedRectangle(cardBounds, 9);
+        using var cardFill = new SolidBrush(selected
+            ? StorageHubTheme.CurrentPalette.Selection
+            : StorageHubTheme.Surface);
+        using var cardBorder = new Pen(selected
+            ? StorageHubTheme.ParseAccent(card.AccentHex)
+            : StorageHubTheme.Border,
+            selected ? 1.7F : 1F);
+        graphics.FillPath(cardFill, cardPath);
+        graphics.DrawPath(cardBorder, cardPath);
+
+        var left = cardBounds.Left + 8;
+        var badgeBounds = new Rectangle(left, cardBounds.Top + 7, 34, 34);
         using var accentBrush = new SolidBrush(StorageHubTheme.ParseAccent(card.AccentHex));
         graphics.FillRectangle(accentBrush, badgeBounds);
         TextRenderer.DrawText(
@@ -1038,7 +1162,7 @@ public sealed class ConnectionManagerForm : KryptonForm
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
         var textLeft = badgeBounds.Right + 9;
-        var right = _profileTree.ClientSize.Width - 8;
+        var right = cardBounds.Right - 8;
         var tagRight = right;
         foreach (var tag in card.DisplayTags
                      .Where(static value => !string.IsNullOrWhiteSpace(value))
@@ -1058,7 +1182,7 @@ public sealed class ConnectionManagerForm : KryptonForm
                 break;
             }
 
-            var pill = new Rectangle(tagRight - width, bounds.Top + 18, width, 20);
+            var pill = new Rectangle(tagRight - width, cardBounds.Top + 14, width, 20);
             using var pillBrush = new SolidBrush(Color.FromArgb(36, muted));
             graphics.FillRectangle(pillBrush, pill);
             TextRenderer.DrawText(
@@ -1078,7 +1202,7 @@ public sealed class ConnectionManagerForm : KryptonForm
                 graphics,
                 "★",
                 _profileSectionFont,
-                new Rectangle(textLeft, bounds.Top + 7, favoriteWidth, 22),
+                new Rectangle(textLeft, cardBounds.Top + 4, favoriteWidth, 22),
                 Color.FromArgb(245, 158, 11),
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
@@ -1088,7 +1212,7 @@ public sealed class ConnectionManagerForm : KryptonForm
             graphics,
             card.Name,
             Font,
-            new Rectangle(textLeft + favoriteWidth, bounds.Top + 7, availableWidth, 22),
+            new Rectangle(textLeft + favoriteWidth, cardBounds.Top + 4, availableWidth, 22),
             foreground,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         var detail = card.IsEnabled ? card.Endpoint : $"{card.Endpoint} · Disabled";
@@ -1096,7 +1220,7 @@ public sealed class ConnectionManagerForm : KryptonForm
             graphics,
             detail,
             Font,
-            new Rectangle(textLeft, bounds.Top + 30, Math.Max(20, right - textLeft), 20),
+            new Rectangle(textLeft, cardBounds.Top + 25, Math.Max(20, right - textLeft), 20),
             muted,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
@@ -1107,9 +1231,45 @@ public sealed class ConnectionManagerForm : KryptonForm
         TreeNode node,
         ProfileTreeGroupNode group,
         Color foreground,
-        Color muted)
+        Color muted,
+        bool selected)
     {
-        var arrowLeft = bounds.Left + 5;
+        var category = group.Key.StartsWith("category:", StringComparison.Ordinal);
+        if (category)
+        {
+            var titleBounds = new Rectangle(
+                bounds.Left + 4,
+                bounds.Top,
+                Math.Max(20, _profileTree.ClientSize.Width - bounds.Left - 52),
+                bounds.Height);
+            TextRenderer.DrawText(
+                graphics,
+                group.Label,
+                _profileSectionFont,
+                titleBounds,
+                StorageHubTheme.Text,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            var labelWidth = TextRenderer.MeasureText(
+                graphics,
+                group.Label,
+                _profileSectionFont,
+                Size.Empty,
+                TextFormatFlags.NoPadding).Width;
+            var categoryCenterY = bounds.Top + (bounds.Height / 2);
+            var lineLeft = Math.Min(_profileTree.ClientSize.Width - 14, titleBounds.Left + labelWidth + 14);
+            using var divider = new Pen(StorageHubTheme.Border);
+            graphics.DrawLine(divider, lineLeft, categoryCenterY, _profileTree.ClientSize.Width - 12, categoryCenterY);
+            return;
+        }
+
+        DrawProfileGroupContainer(graphics, node, bounds, selected);
+        var contentBounds = new Rectangle(
+            bounds.Left + 10,
+            bounds.Top + 4,
+            Math.Max(20, _profileTree.ClientSize.Width - bounds.Left - 10),
+            Math.Max(20, bounds.Height - 8));
+
+        var arrowLeft = contentBounds.Left + 10;
         var centerY = bounds.Top + (bounds.Height / 2);
         Point[] arrow = node.IsExpanded
             ? [new(arrowLeft, centerY - 3), new(arrowLeft + 8, centerY - 3), new(arrowLeft + 4, centerY + 3)]
@@ -1122,30 +1282,110 @@ public sealed class ConnectionManagerForm : KryptonForm
             graphics,
             group.Label,
             _profileSectionFont,
-            new Rectangle(textLeft, bounds.Top, Math.Max(20, _profileTree.ClientSize.Width - textLeft - 45), bounds.Height),
+            new Rectangle(textLeft, contentBounds.Top, Math.Max(20, contentBounds.Right - textLeft - 40), contentBounds.Height),
             foreground,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         TextRenderer.DrawText(
             graphics,
             group.Count.ToString(System.Globalization.CultureInfo.CurrentCulture),
             Font,
-            new Rectangle(_profileTree.ClientSize.Width - 40, bounds.Top, 30, bounds.Height),
+            new Rectangle(contentBounds.Right - 36, contentBounds.Top, 28, contentBounds.Height),
             muted,
             TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+
+    }
+
+    private void DrawProfileGroupContainer(
+        Graphics graphics,
+        TreeNode? groupNode,
+        Rectangle currentRowBounds,
+        bool selected)
+    {
+        if (groupNode?.Tag is not ProfileTreeGroupNode group ||
+            group.Key.StartsWith("category:", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var lastNode = groupNode.IsExpanded && groupNode.Nodes.Count > 0
+            ? groupNode.Nodes[^1]
+            : groupNode;
+        var groupBounds = new Rectangle(
+            groupNode.Bounds.Left + 2,
+            groupNode.Bounds.Top + 3,
+            Math.Max(24, _profileTree.ClientSize.Width - groupNode.Bounds.Left - 10),
+            Math.Max(24, lastNode.Bounds.Bottom - groupNode.Bounds.Top - 6));
+        var state = graphics.Save();
+        try
+        {
+            graphics.SetClip(new Rectangle(
+                0,
+                currentRowBounds.Top,
+                _profileTree.ClientSize.Width,
+                currentRowBounds.Height));
+            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var path = CreateProfileTreeRoundedRectangle(groupBounds, 12);
+            using var fill = new SolidBrush(StorageHubTheme.SurfaceMuted);
+            using var outline = new Pen(selected ? StorageHubTheme.Primary : StorageHubTheme.Border, selected ? 1.7F : 1F);
+            graphics.FillPath(fill, path);
+            graphics.DrawPath(outline, path);
+        }
+        finally
+        {
+            graphics.Restore(state);
+        }
+    }
+
+    private static System.Drawing.Drawing2D.GraphicsPath CreateProfileTreeRoundedRectangle(
+        Rectangle bounds,
+        int radius)
+    {
+        var path = new System.Drawing.Drawing2D.GraphicsPath();
+        var diameter = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
+        var arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
+        path.AddArc(arc, 180, 90);
+        arc.X = bounds.Right - diameter;
+        path.AddArc(arc, 270, 90);
+        arc.Y = bounds.Bottom - diameter;
+        path.AddArc(arc, 0, 90);
+        arc.X = bounds.Left;
+        path.AddArc(arc, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     private void ProfileTreeNodeMouseClick(object? sender, TreeNodeMouseClickEventArgs e)
     {
-        if (e.Button == MouseButtons.Left && e.Node?.Tag is ProfileTreeGroupNode)
+        if (e.Button == MouseButtons.Left &&
+            e.Node?.Tag is ProfileTreeGroupNode group &&
+            !group.Key.StartsWith("category:", StringComparison.Ordinal))
         {
             e.Node.Toggle();
         }
     }
 
+    private static void ProfileTreeBeforeCollapse(object? sender, TreeViewCancelEventArgs e)
+    {
+        if (e.Node?.Tag is ProfileTreeGroupNode group &&
+            group.Key.StartsWith("category:", StringComparison.Ordinal))
+        {
+            e.Cancel = true;
+        }
+    }
+
+    private static void ProfileTreeBeforeSelect(object? sender, TreeViewCancelEventArgs e)
+    {
+        if (e.Node?.Tag is ProfileTreeGroupNode group &&
+            group.Key.StartsWith("category:", StringComparison.Ordinal))
+        {
+            e.Cancel = true;
+        }
+    }
+
     private void MarkConnectionTested()
     {
-        _testState.Text = "Ready to test when the background agent is connected";
-        _testState.ForeColor = StorageHubTheme.Warning;
+        _testState.Text = "Changes not tested";
+        _testState.ForeColor = StorageHubTheme.TextMuted;
     }
 
     private async Task ReloadProfilesAsync(CancellationToken cancellationToken)
@@ -1196,7 +1436,8 @@ public sealed class ConnectionManagerForm : KryptonForm
             {
                 _selectedProfile = response.Profile;
                 var provider = MapProvider(response.Profile.Draft.Endpoint.Provider);
-                _providerSelector.SelectedItem = ConnectionProviderCatalog.Get(provider);
+                _typeSelector.SelectedItem = response.Profile.Draft.Type;
+                PopulateProviderSelector(response.Profile.Draft.Type, provider);
                 var values = ConnectionEditorDraftFactory.ToEditorValues(response.Profile);
                 foreach (var pair in values)
                 {
@@ -1240,7 +1481,10 @@ public sealed class ConnectionManagerForm : KryptonForm
 
         try
         {
-            var draft = ConnectionEditorDraftFactory.Build(provider.Kind, ReadEditorValues());
+            var draft = ConnectionEditorDraftFactory.Build(
+                provider.Kind,
+                ReadEditorValues(),
+                ConnectionDefaultSettings.Get(provider.Kind, _connectionDefaults));
             ShowStatus("Saving profile…", StorageHubTheme.TextMuted);
             var response = await _controller.SaveAsync(draft, _selectedProfile, cancellationToken);
             if (response.Status != ConnectionProfileWriteStatus.Succeeded || response.Profile is null)
@@ -1280,7 +1524,9 @@ public sealed class ConnectionManagerForm : KryptonForm
         }
         catch (Exception)
         {
-            ShowStatus("The profile could not be saved through the background agent.", StorageHubTheme.Warning);
+            ShowStatus(
+                "The background agent is unavailable or incompatible with this desktop build. Restart StorageHub and try again.",
+                StorageHubTheme.Warning);
         }
     }
 
@@ -1343,6 +1589,31 @@ public sealed class ConnectionManagerForm : KryptonForm
         try
         {
             ShowStatus("Testing connection…", StorageHubTheme.TextMuted);
+            if (_selectedProfile.Draft is
+                {
+                    Type: ConnectionProfileType.Client,
+                    Endpoint.Provider: StorageConnectionProvider.Ssh
+                })
+            {
+                await using var ssh = new NamedPipeSshTerminalAgentClient();
+                var opened = await ssh.OpenAsync(new SshTerminalOpenRequest(
+                    SshTerminalIpcContract.CurrentVersion,
+                    _selectedProfile.ConnectionId,
+                    80,
+                    24), cancellationToken);
+                if (opened.Failure is not null)
+                {
+                    ShowStatus(opened.Failure.Message, StorageHubTheme.Warning);
+                    return;
+                }
+
+                _ = await ssh.CloseAsync(new SshTerminalCloseRequest(
+                    SshTerminalIpcContract.CurrentVersion,
+                    opened.SessionId), cancellationToken);
+                ShowStatus("SSH connection succeeded.", StorageHubTheme.Success);
+                return;
+            }
+
             var response = await _storageClient.TestConnectionAsync(
                 new ConnectionTestRequest(StorageIpcContract.CurrentVersion, _selectedProfile.ConnectionId),
                 cancellationToken);
@@ -1640,7 +1911,7 @@ public sealed class ConnectionManagerForm : KryptonForm
         {
             { Provider: StorageConnectionProvider.Ftps, TlsPolicy: ConnectionTlsCertificatePolicy.Pinned } =>
                 "certificatePin",
-            { Provider: StorageConnectionProvider.Sftp, SshHostKeyPolicy: ConnectionSshHostKeyPolicy.Pinned } =>
+            { Provider: StorageConnectionProvider.Sftp or StorageConnectionProvider.Ssh, SshHostKeyPolicy: ConnectionSshHostKeyPolicy.Pinned } =>
                 "hostKeyFingerprint",
             _ => null
         };
@@ -1648,6 +1919,7 @@ public sealed class ConnectionManagerForm : KryptonForm
     private void StartNewProfile()
     {
         _profileTree.SelectedNode = null;
+        _profileSidebar.ClearSelection();
         _selectedProfile = null;
         if (_providerSelector.SelectedItem is ConnectionProviderDescriptor provider)
         {
@@ -1675,19 +1947,15 @@ public sealed class ConnectionManagerForm : KryptonForm
             _profileTree.Nodes.Clear();
             AddProfileTreeCategory(
                 sections,
-                ConnectionProfileSectionKind.Favorites,
-                "category:favorites",
-                "Favorites",
-                nestSections: false);
-            AddProfileTreeSections(
-                sections,
-                ConnectionProfileSectionKind.Folder,
-                "folder");
+                ConnectionProfileSectionKind.Storage,
+                "category:storage",
+                "Storage",
+                nestSections: true);
             AddProfileTreeCategory(
                 sections,
-                ConnectionProfileSectionKind.Provider,
-                "category:providers",
-                "Providers",
+                ConnectionProfileSectionKind.Client,
+                "category:clients",
+                "Remote clients",
                 nestSections: true);
             AddProfileTreeCategory(
                 sections,
@@ -1711,7 +1979,9 @@ public sealed class ConnectionManagerForm : KryptonForm
             foreach (var node in _profileTree.Nodes.Cast<TreeNode>().SelectMany(FlattenTree))
             {
                 if (node.Tag is ProfileTreeGroupNode group &&
-                    (expandAll || expandedGroups.Contains(group.Key)))
+                    (group.Key.StartsWith("category:", StringComparison.Ordinal) ||
+                        expandAll ||
+                        expandedGroups.Contains(group.Key)))
                 {
                     node.Expand();
                 }
@@ -1729,6 +1999,8 @@ public sealed class ConnectionManagerForm : KryptonForm
             _profileTree.EndUpdate();
             _loadingEditor = false;
         }
+
+        _profileSidebar.SetConnections(_allCards, _searchBox.Text, selectedId);
     }
 
     private void AddProfileTreeCategory(
@@ -1910,6 +2182,7 @@ public sealed class ConnectionManagerForm : KryptonForm
         StorageConnectionProvider.Ftp => StorageProviderKind.Ftp,
         StorageConnectionProvider.Ftps => StorageProviderKind.Ftps,
         StorageConnectionProvider.Sftp => StorageProviderKind.Sftp,
+        StorageConnectionProvider.Ssh => StorageProviderKind.Ssh,
         _ => throw new ArgumentOutOfRangeException(nameof(provider))
     };
 

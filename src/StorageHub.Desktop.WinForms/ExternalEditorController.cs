@@ -10,14 +10,19 @@ namespace StorageHub.Desktop;
 internal sealed class ExternalEditorController : IAsyncDisposable
 {
     private readonly DesktopUpdatePreferencesStore _preferencesStore;
-    private readonly NamedPipeObjectInspectorAgentClient _client;
+    private readonly IObjectInspectorAgentClient _client;
+    private readonly Func<IWin32Window, string, UnsafeExternalEditDecision> _unsafeEditWarning;
     private readonly List<ExternalEditSession> _sessions = [];
     private bool _disposed;
 
-    internal ExternalEditorController(DesktopUpdatePreferencesStore preferencesStore)
+    internal ExternalEditorController(
+        DesktopUpdatePreferencesStore preferencesStore,
+        IObjectInspectorAgentClient? client = null,
+        Func<IWin32Window, string, UnsafeExternalEditDecision>? unsafeEditWarning = null)
     {
-        _preferencesStore = preferencesStore;
-        _client = new NamedPipeObjectInspectorAgentClient();
+        _preferencesStore = preferencesStore ?? throw new ArgumentNullException(nameof(preferencesStore));
+        _client = client ?? new NamedPipeObjectInspectorAgentClient();
+        _unsafeEditWarning = unsafeEditWarning ?? UnsafeExternalEditWarningForm.Ask;
         ScavengeStaleSessions();
     }
 
@@ -42,13 +47,15 @@ internal sealed class ExternalEditorController : IAsyncDisposable
             return;
         }
 
-        var response = await _client.DownloadEditableFileAsync(new EditableFileDownloadRequest(
-            EditableFileIpcContract.CurrentVersion,
+        var response = await DownloadForEditingAsync(
+            owner,
             address,
-            maximumBytes), cancellationToken).ConfigureAwait(true);
-        if (response.Failure is not null)
+            fileName,
+            maximumBytes,
+            preferences,
+            cancellationToken).ConfigureAwait(true);
+        if (response is null)
         {
-            Show(owner, response.Failure.Message, MessageBoxIcon.Warning);
             return;
         }
 
@@ -94,6 +101,67 @@ internal sealed class ExternalEditorController : IAsyncDisposable
             throw;
         }
     }
+
+    internal async Task<EditableFileDownloadResponse?> DownloadForEditingAsync(
+        IWin32Window owner,
+        ObjectInspectorAddress address,
+        string fileName,
+        int maximumBytes,
+        DesktopUpdatePreferences preferences,
+        CancellationToken cancellationToken)
+    {
+        var response = await DownloadAsync(address, maximumBytes, cancellationToken).ConfigureAwait(true);
+        if (response.Failure is not { Category: StorageIpcFailureCategory.Unsupported } ||
+            (address.VersionId is null && address.EntityTag is null))
+        {
+            if (response.Failure is not null)
+            {
+                Show(owner, response.Failure.Message, MessageBoxIcon.Warning);
+                return null;
+            }
+
+            return response;
+        }
+
+        var decision = preferences.WarnBeforeUnsafeExternalEdit
+            ? _unsafeEditWarning(owner, fileName)
+            : new UnsafeExternalEditDecision(Continue: true, DontShowAgain: false);
+        if (!decision.Continue)
+        {
+            return null;
+        }
+
+        if (decision.DontShowAgain)
+        {
+            try
+            {
+                _preferencesStore.Save(preferences with { WarnBeforeUnsafeExternalEdit = false });
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                Show(owner, "StorageHub could not save that preference, so this warning will appear again next time.", MessageBoxIcon.Information);
+            }
+        }
+
+        var unprotectedAddress = address with { VersionId = null, EntityTag = null };
+        response = await DownloadAsync(unprotectedAddress, maximumBytes, cancellationToken).ConfigureAwait(true);
+        if (response.Failure is not null)
+        {
+            Show(owner, response.Failure.Message, MessageBoxIcon.Warning);
+            return null;
+        }
+
+        return response;
+    }
+
+    private Task<EditableFileDownloadResponse> DownloadAsync(
+        ObjectInspectorAddress address,
+        int maximumBytes,
+        CancellationToken cancellationToken) =>
+        _client.DownloadEditableFileAsync(new EditableFileDownloadRequest(
+            EditableFileIpcContract.CurrentVersion,
+            address,
+            maximumBytes), cancellationToken);
 
     public async ValueTask DisposeAsync()
     {
@@ -384,7 +452,8 @@ internal sealed class ExternalEditorController : IAsyncDisposable
                 _observedHash = hash;
                 _uploaded();
             }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or TimeoutException)
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
+                InvalidOperationException or TimeoutException or System.Text.Json.JsonException)
             {
                 _ = MessageBox.Show(
                     _owner,

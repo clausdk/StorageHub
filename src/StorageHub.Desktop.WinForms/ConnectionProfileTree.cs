@@ -1,10 +1,11 @@
+using StorageHub.Contracts.Ipc;
+
 namespace StorageHub.Desktop;
 
 internal enum ConnectionProfileSectionKind
 {
-    Favorites,
-    Folder,
-    Provider,
+    Storage,
+    Client,
     Disabled
 }
 
@@ -65,27 +66,28 @@ internal static class ConnectionProfileTree
                 "Disabled");
         }
 
+        var type = connection.Type == ConnectionProfileType.Client
+            ? ConnectionProfileSectionKind.Client
+            : ConnectionProfileSectionKind.Storage;
+
         if (connection.IsFavorite)
         {
-            return new SectionIdentity(
-                ConnectionProfileSectionKind.Favorites,
-                "favorites",
-                "Favorites");
+            return new SectionIdentity(type, "favorites", "Favorites");
         }
 
         var folder = connection.FolderPath?.Trim();
         if (!string.IsNullOrEmpty(folder))
         {
             return new SectionIdentity(
-                ConnectionProfileSectionKind.Folder,
-                folder,
+                type,
+                $"folder:{folder}",
                 folder);
         }
 
         return new SectionIdentity(
-            ConnectionProfileSectionKind.Provider,
-            connection.Provider.ToString(),
-            connection.Descriptor.DisplayName);
+            type,
+            "unsorted",
+            "Unsorted");
     }
 
     private sealed record SectionIdentity(

@@ -606,7 +606,10 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
             new DeletionSafetyPolicy(
                 draft.MaximumDeletionCount,
                 draft.MaximumDeletionPercentage),
-            new TransferExecutionOptions(draft.Overwrite, draft.TransferBufferSize),
+            new TransferExecutionOptions(
+                draft.Overwrite,
+                draft.TransferBufferSize,
+                draft.AllowNonAtomicDestinationWrites),
             draft.Enabled,
             revision,
             createdUtc,
@@ -644,7 +647,10 @@ public sealed class SyncManagementIpcCommandService : IAgentIpcCommandHandler
             profile.DeletionSafetyPolicy.MaximumDeletionCount,
             profile.DeletionSafetyPolicy.MaximumDeletionPercentage,
             profile.TransferOptions.BufferSize,
-            profile.Enabled),
+            profile.Enabled)
+        {
+            AllowNonAtomicDestinationWrites = profile.TransferOptions.AllowNonAtomicDestinationWrites
+        },
         profile.Revision,
         profile.CreatedAtUtc,
         profile.UpdatedAtUtc);

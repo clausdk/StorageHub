@@ -7,7 +7,7 @@ application's safety rules.
 ## Runtime shape
 
 ```text
-StorageHub.Desktop (WinForms/Krypton)
+StorageHub.Desktop (stock WinForms)
             |
             | versioned current-user named pipe
             v
@@ -53,7 +53,7 @@ remain outside that contract.
 | `StorageHub.Infrastructure.Windows` | Windows DPAPI and restricted runtime-secret files |
 | `StorageHub.Agent` | Runtime coordination, named-pipe IPC, schedules, and scheduler contracts |
 | `StorageHub.Agent.Windows` | CodeLogic console host and database/vault/worker composition, storage browsing, profile/transfer/sync/schedule IPC, and dedicated secret IPC |
-| `StorageHub.Desktop.WinForms` | High-DPI dual-pane shell, asynchronous local/remote browsers, saved-pane transfers, queue/sync/schedule management, Connection Manager, and agent-status monitor |
+| `StorageHub.Desktop.WinForms` | Stock high-DPI WinForms dual-pane shell with owned Light/Dark/System themes, asynchronous local/remote browsers, saved-pane transfers, queue/sync/schedule management, Connection Manager, and agent-status monitor |
 | `StorageHub.Diagnostics` | Allow-list policy for safe diagnostic artifacts |
 
 Core projects target `net10.0`. Windows hosts target Windows-specific TFMs; only
@@ -190,10 +190,8 @@ Provider SDKs stay behind `StorageHub.Storage`. StorageHub does not shell out to
 PuTTY, WinSCP, FileZilla, rsync, or other transfer executables. `CL.Storage` uses
 managed/open-source provider packages such as SSH.NET and FluentFTP.
 
-The source-integrated `CL.Storage` dependency is pinned to CodeLogic.Libs commit
-`c70fefe4420279af8bec45e55a37f4acd5204ee3`. An MSBuild pre-build target resolves
-the checkout's Git `HEAD` and rejects source-dependent builds at any other
-revision.
+The `CL.Storage` dependency is consumed through the centrally pinned
+`CodeLogic.Storage` NuGet package and committed package lock files.
 
 Provider integration fixtures run outside the application process lifecycle.
 The first fixture downloads an exact MinIO release only from the official

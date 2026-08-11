@@ -31,7 +31,8 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
         ObjectInspectorIpcMessageTypes.TagsGetRequest or
         EditableFileIpcMessageTypes.DownloadRequest or
         EditableFileIpcMessageTypes.UploadRequest or
-        EditableFileIpcMessageTypes.DirectoryEnsureRequest;
+        EditableFileIpcMessageTypes.DirectoryEnsureRequest or
+        EditableFileIpcMessageTypes.DeleteRequest;
 
     public ValueTask<AgentIpcCommandResponse> HandleAsync(
         IpcEnvelope request,
@@ -52,6 +53,8 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
                 UploadEditedFileAsync(request, cancellationToken),
             EditableFileIpcMessageTypes.DirectoryEnsureRequest =>
                 EnsureDirectoryAsync(request, cancellationToken),
+            EditableFileIpcMessageTypes.DeleteRequest =>
+                DeleteItemAsync(request, cancellationToken),
             _ => ValueTask.FromResult(AgentIpcCommandResponse.Error(
                 "ipc.message.unsupported",
                 "The requested IPC operation is not supported by this agent version."))
@@ -602,6 +605,73 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
         return new AddressValidation(address.Value, null);
     }
 
+    private async ValueTask<AgentIpcCommandResponse> DeleteItemAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        StorageItemDeleteRequest request;
+        try
+        {
+            request = envelope.DeserializePayload<StorageItemDeleteRequest>();
+        }
+        catch (JsonException)
+        {
+            return InvalidPayload();
+        }
+
+        if (!request.HasValidBounds)
+        {
+            return InvalidRequest(request.ContractVersion);
+        }
+
+        try
+        {
+            var opened = await _connector.OpenAsync(
+                new ConnectionProfileId(request.Address.ConnectionId),
+                cancellationToken).ConfigureAwait(false);
+            if (opened.IsFailure)
+            {
+                return DeleteFailure(request, SanitizeFailure(opened.Error));
+            }
+
+            await using var connection = opened.Value;
+            var validated = ValidateAndCreateAddress(connection.Session, request.Address);
+            if (validated.Failure is not null)
+            {
+                return DeleteFailure(request, validated.Failure);
+            }
+
+            if (!connection.Session.Capabilities.Supports(StorageFeature.Delete))
+            {
+                return DeleteFailure(request, new StorageIpcFailure(
+                    "storage.delete.unsupported",
+                    StorageIpcFailureCategory.Unsupported,
+                    "This provider does not support deleting storage items.",
+                    IsTransient: false));
+            }
+
+            var deleted = await connection.Session.DeleteAsync(
+                new StorageDeleteRequest(
+                    validated.Address!,
+                    Recursive: request.Recursive,
+                    IgnoreMissing: false,
+                    ExpectedVersionId: request.Address.VersionId,
+                    ExpectedEntityTag: request.Address.EntityTag),
+                cancellationToken).ConfigureAwait(false);
+            return deleted.IsSuccess
+                ? DeleteSuccess(request)
+                : DeleteFailure(request, SanitizeFailure(deleted.Error));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return DeleteFailure(request, InspectorUnavailable());
+        }
+    }
+
     private static StorageIpcFailure? ValidateVersionPage(
         StorageObjectVersionPage page,
         StorageAddress requested,
@@ -799,6 +869,24 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
             request.ContractVersion,
             request.Address,
             Created: false,
+            failure));
+
+    private static AgentIpcCommandResponse DeleteSuccess(StorageItemDeleteRequest request) =>
+        AgentIpcCommandResponse.Create(
+            EditableFileIpcMessageTypes.DeleteResponse,
+            new StorageItemDeleteResponse(
+                request.ContractVersion,
+                request.Address,
+                Deleted: true));
+
+    private static AgentIpcCommandResponse DeleteFailure(
+        StorageItemDeleteRequest request,
+        StorageIpcFailure failure) => AgentIpcCommandResponse.Create(
+        EditableFileIpcMessageTypes.DeleteResponse,
+        new StorageItemDeleteResponse(
+            request.ContractVersion,
+            request.Address,
+            Deleted: false,
             failure));
 
     private sealed record AddressValidation(StorageAddress? Address, StorageIpcFailure? Failure);

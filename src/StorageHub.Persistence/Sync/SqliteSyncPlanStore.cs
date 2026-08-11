@@ -157,7 +157,8 @@ public sealed class SqliteSyncPlanStore(SingleWriterSqliteDatabase database) : I
                        destination_native_item_id, destination_version_id, destination_entity_tag,
                        expected_length,
                        source_digest_algorithm, source_digest_value,
-                       destination_digest_algorithm, destination_digest_value
+                       destination_digest_algorithm, destination_digest_value,
+                       destination_existed
                 FROM sync_plan_operations
                 WHERE plan_id = $planId
                 ORDER BY operation_order;
@@ -180,7 +181,8 @@ public sealed class SqliteSyncPlanStore(SingleWriterSqliteDatabase database) : I
                         RestoreAddress(reader, 8),
                         expectedLength,
                         RestoreDigest(reader, 15),
-                        RestoreDigest(reader, 17)),
+                        RestoreDigest(reader, 17),
+                        destinationExisted: reader.GetInt64(19) == 1),
                     SyncPlanOperationKind.Delete when expectedLength is null =>
                         SyncPlanOperation.Delete(sequence, source),
                     SyncPlanOperationKind.CreateDirectory when expectedLength is null =>
@@ -273,7 +275,8 @@ public sealed class SqliteSyncPlanStore(SingleWriterSqliteDatabase database) : I
                 destination_native_item_id, destination_version_id, destination_entity_tag,
                 expected_length,
                 source_digest_algorithm, source_digest_value,
-                destination_digest_algorithm, destination_digest_value
+                destination_digest_algorithm, destination_digest_value,
+                destination_existed
             )
             VALUES
             (
@@ -282,7 +285,8 @@ public sealed class SqliteSyncPlanStore(SingleWriterSqliteDatabase database) : I
                 $destinationProfile, $destinationRoot, $destinationPath,
                 $destinationNative, $destinationVersion, $destinationEntityTag, $expectedLength,
                 $sourceDigestAlgorithm, $sourceDigestValue,
-                $destinationDigestAlgorithm, $destinationDigestValue
+                $destinationDigestAlgorithm, $destinationDigestValue,
+                $destinationExisted
             );
             """;
         command.Parameters.AddWithValue("$planId", planId.ToString());
@@ -293,6 +297,7 @@ public sealed class SqliteSyncPlanStore(SingleWriterSqliteDatabase database) : I
         command.Parameters.AddWithValue("$expectedLength", (object?)operation.ExpectedLength ?? DBNull.Value);
         AddDigestParameters(command, "source", operation.SourceDigest);
         AddDigestParameters(command, "destination", operation.DestinationDigest);
+        command.Parameters.AddWithValue("$destinationExisted", operation.DestinationExisted ? 1 : 0);
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 

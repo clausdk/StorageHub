@@ -7,10 +7,10 @@
 
   <ItemGroup>
     <PackageVersion Include="CodeLogic" Version="4.1.0" />
+    <PackageVersion Include="CodeLogic.Storage" Version="4.6.83" />
     <PackageVersion Include="CodeLogic.Common" Version="4.6.72" />
     <PackageVersion Include="CodeLogic.SQLite" Version="4.6.72" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
-    <PackageVersion Include="Krypton.Toolkit" Version="105.26.7.201" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="9.0.18" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
     <PackageVersion Include="SSH.NET" Version="2025.1.0" />

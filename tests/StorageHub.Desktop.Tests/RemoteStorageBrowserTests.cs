@@ -77,7 +77,7 @@ public sealed class RemoteStorageBrowserTests
     }
 
     [Fact]
-    public async Task LoadMoreAppendsOneBoundedPageAndRejectsRepeatingContinuation()
+    public async Task LoadMoreReturnsOneBoundedPageTracksIndexedCountAndRejectsRepeatingContinuation()
     {
         var connection = CreateConnection("Paged");
         var page = 0;
@@ -100,10 +100,13 @@ public sealed class RemoteStorageBrowserTests
 
         Assert.Equal(RemoteBrowserOperationStatus.Succeeded, selected.Status);
         Assert.Equal(RemoteBrowserOperationStatus.Succeeded, more.Status);
-        Assert.Equal(2, more.Snapshot?.Entries.Count);
+        Assert.Single(more.Snapshot!.Entries);
+        Assert.Equal(2, more.Snapshot.IndexedEntryCount);
+        Assert.True(more.AppendedPage);
         Assert.Equal(RemoteBrowserOperationStatus.Failed, inconsistent.Status);
         Assert.Contains("inconsistent", inconsistent.ErrorMessage, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(2, controller.CurrentSnapshot!.Entries.Count);
+        Assert.Single(controller.CurrentSnapshot!.Entries);
+        Assert.Equal(2, controller.CurrentSnapshot.IndexedEntryCount);
     }
 
     [Fact]
@@ -133,6 +136,40 @@ public sealed class RemoteStorageBrowserTests
         Assert.Equal(RemoteBrowserOperationStatus.Succeeded, fast.Status);
         Assert.Equal("fast", controller.CurrentSnapshot?.RelativePath);
         Assert.Equal(RemoteBrowserOperationStatus.Superseded, superseded.Status);
+    }
+
+    [Fact]
+    public async Task ContinuationPipelinePassesOldTenThousandItemLimitWithoutAccumulatingPages()
+    {
+        const int pageCount = 300;
+        const int entriesPerPage = 40;
+        var connection = CreateConnection("Huge");
+        var page = 0;
+        var client = CreateSelectableClient(connection, (request, _) =>
+        {
+            var currentPage = page++;
+            var entries = Enumerable.Range(0, entriesPerPage)
+                .Select(index => Item(
+                    $"file-{currentPage:D3}-{index:D2}.bin",
+                    $"file-{currentPage:D3}-{index:D2}.bin"))
+                .ToArray();
+            var token = currentPage + 1 < pageCount ? $"page-{currentPage + 1}" : null;
+            return Task.FromResult(Response(request, entries, token));
+        });
+        await using var controller = new RemoteBrowserController(client);
+        _ = await controller.LoadConnectionsAsync();
+        _ = await controller.SelectConnectionAsync(connection.ConnectionId);
+
+        for (var index = 1; index < pageCount; index++)
+        {
+            var result = await controller.LoadMoreAsync();
+            Assert.Equal(RemoteBrowserOperationStatus.Succeeded, result.Status);
+            Assert.Equal(entriesPerPage, result.Snapshot!.Entries.Count);
+        }
+
+        Assert.Equal(pageCount * entriesPerPage, controller.CurrentSnapshot!.IndexedEntryCount);
+        Assert.Equal(entriesPerPage, controller.CurrentSnapshot.Entries.Count);
+        Assert.False(controller.CurrentSnapshot.HasMore);
     }
 
     [Fact]

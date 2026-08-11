@@ -3,32 +3,31 @@ namespace StorageHub.Desktop.Tests;
 public sealed class ConnectionProfileTreeTests
 {
     [Fact]
-    public void BuildAssignsEveryConnectionToExactlyOneHighestPrioritySection()
+    public void BuildAssignsEveryConnectionToItsStorageOrClientType()
     {
         var favoriteId = Guid.NewGuid();
         var folderId = Guid.NewGuid();
         var providerId = Guid.NewGuid();
         var disabledId = Guid.NewGuid();
+        var clientId = Guid.NewGuid();
         ConnectionCardModel[] connections =
         [
             Card(favoriteId, "Favorite", StorageProviderKind.S3, favorite: true, folder: "Operations"),
             Card(folderId, "Folder", StorageProviderKind.Sftp, folder: "Operations"),
             Card(providerId, "Provider", StorageProviderKind.Ftp),
-            Card(disabledId, "Disabled favorite", StorageProviderKind.Ftps, favorite: true, enabled: false, folder: "Operations")
+            Card(disabledId, "Disabled favorite", StorageProviderKind.Ftps, favorite: true, enabled: false, folder: "Operations"),
+            Card(clientId, "Shell", StorageProviderKind.Ssh, folder: "Operations")
         ];
 
         var sections = ConnectionProfileTree.Build(connections);
 
         Assert.Equal(
-            [
-                ConnectionProfileSectionKind.Favorites,
-                ConnectionProfileSectionKind.Folder,
-                ConnectionProfileSectionKind.Provider,
-                ConnectionProfileSectionKind.Disabled
-            ],
-            sections.Select(static section => section.Kind));
-        Assert.Equal("Operations", sections[1].Label);
-        Assert.Equal("FTP", sections[2].Label);
+            3,
+            sections.Count(static section => section.Kind == ConnectionProfileSectionKind.Storage));
+        Assert.Single(sections, static section => section.Kind == ConnectionProfileSectionKind.Client);
+        Assert.Single(sections, static section => section.Kind == ConnectionProfileSectionKind.Disabled);
+        Assert.Contains(sections, static section => section.Kind == ConnectionProfileSectionKind.Storage && section.Label == "Operations");
+        Assert.Contains(sections, static section => section.Kind == ConnectionProfileSectionKind.Client && section.Label == "Operations");
         Assert.Equal(
             connections.Select(static connection => connection.ConnectionId).Order(),
             sections.SelectMany(static section => section.Connections)
@@ -48,7 +47,7 @@ public sealed class ConnectionProfileTreeTests
 
         var section = Assert.Single(ConnectionProfileTree.Build(connections));
 
-        Assert.Equal(ConnectionProfileSectionKind.Folder, section.Kind);
+        Assert.Equal(ConnectionProfileSectionKind.Storage, section.Kind);
         Assert.Equal(["alpha", "Bravo", "Zulu"], section.Connections.Select(static connection => connection.Name));
     }
 

@@ -12,11 +12,14 @@ public static class ConnectionEditorDraftFactory
 
     public static ConnectionProfileDraft Build(
         StorageProviderKind provider,
-        IReadOnlyDictionary<string, string> values)
+        IReadOnlyDictionary<string, string> values,
+        ConnectionProviderDefaults? defaults = null)
     {
         ArgumentNullException.ThrowIfNull(values);
         var descriptor = ConnectionProviderCatalog.Get(provider);
-        var (folder, tags) = ParseFolderAndTags(Get(values, "folderTags"));
+        var (folder, tags) = values.ContainsKey("folder") || values.ContainsKey("labels")
+            ? (NormalizeFolder(Get(values, "folder")), ParseLabels(Get(values, "labels")))
+            : ParseFolderAndTags(Get(values, "folderTags"));
         var metadata = new ConnectionProfileMetadataDocument(
             Require(values, "profileName", "A profile name is required."),
             folder,
@@ -29,7 +32,8 @@ public static class ConnectionEditorDraftFactory
             metadata,
             endpoint,
             authentication,
-            BuildOperationalOptions(provider));
+            BuildOperationalOptions(provider, defaults),
+            Type: descriptor.Type);
         if (!draft.HasValidBounds)
         {
             throw new ArgumentException(
@@ -40,17 +44,16 @@ public static class ConnectionEditorDraftFactory
         return draft;
     }
 
-    private static ConnectionOperationalOptionsDocument BuildOperationalOptions(StorageProviderKind provider) =>
-        provider switch
-        {
-            StorageProviderKind.Local => new ConnectionOperationalOptionsDocument(),
-            StorageProviderKind.S3 => new ConnectionOperationalOptionsDocument(OperationTimeoutSeconds: 30),
-            StorageProviderKind.Ftp or StorageProviderKind.Ftps or StorageProviderKind.Sftp =>
-                new ConnectionOperationalOptionsDocument(
-                    OperationTimeoutSeconds: 30,
-                    MaximumRetryAttempts: 0),
-            _ => throw new ArgumentOutOfRangeException(nameof(provider))
-        };
+    private static ConnectionOperationalOptionsDocument BuildOperationalOptions(
+        StorageProviderKind provider,
+        ConnectionProviderDefaults? defaults)
+    {
+        defaults ??= ConnectionDefaultSettings.Get(provider, stored: null);
+        return new ConnectionOperationalOptionsDocument(
+            ConnectTimeoutSeconds: defaults.ConnectTimeoutSeconds,
+            OperationTimeoutSeconds: defaults.OperationTimeoutSeconds,
+            MaximumRetryAttempts: defaults.MaximumRetryAttempts);
+    }
 
     public static IReadOnlyDictionary<string, string> ToEditorValues(ConnectionProfileDocument profile)
     {
@@ -58,6 +61,10 @@ public static class ConnectionEditorDraftFactory
         var values = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["profileName"] = profile.Draft.Metadata.DisplayName,
+            ["folder"] = profile.Draft.Metadata.FolderPath ?? string.Empty,
+            ["labels"] = profile.Draft.Metadata.Tags is { Length: > 0 }
+                ? string.Join(", ", profile.Draft.Metadata.Tags)
+                : string.Empty,
             ["folderTags"] = FormatFolderAndTags(profile.Draft.Metadata)
         };
         AddEndpoint(values, profile.Draft.Endpoint);
@@ -76,6 +83,7 @@ public static class ConnectionEditorDraftFactory
             StorageProviderKind.Ftp => BuildFtpEndpoint(values),
             StorageProviderKind.Ftps => BuildFtpsEndpoint(values),
             StorageProviderKind.Sftp => BuildSftpEndpoint(values),
+            StorageProviderKind.Ssh => BuildSshEndpoint(values),
             _ => throw new ArgumentOutOfRangeException(nameof(provider))
         };
 
@@ -89,6 +97,19 @@ public static class ConnectionEditorDraftFactory
             StorageConnectionProvider.Sftp,
             RootPath: NormalizeProviderRoot(Get(values, "initialPath")),
             Host: Require(values, "host", "An SFTP host is required."),
+            Port: ParsePort(values, 22),
+            SshHostKeyPolicy: ConnectionSshHostKeyPolicy.Pinned);
+    }
+
+    private static ConnectionEndpointDocument BuildSshEndpoint(IReadOnlyDictionary<string, string> values)
+    {
+        ValidateFingerprint(Require(
+            values,
+            "hostKeyFingerprint",
+            "A verified SSH host-key SHA-256 fingerprint is required."));
+        return new ConnectionEndpointDocument(
+            StorageConnectionProvider.Ssh,
+            Host: Require(values, "host", "An SSH host is required."),
             Port: ParsePort(values, 22),
             SshHostKeyPolicy: ConnectionSshHostKeyPolicy.Pinned);
     }
@@ -236,7 +257,7 @@ public static class ConnectionEditorDraftFactory
                     ConnectionAuthenticationKind.UsernamePassword,
                     Username: Require(values, "username", "A username is required."),
                     PasswordReference: Require(values, "passwordReference", "A vault password reference is required.")),
-            StorageProviderKind.Sftp => BuildSftpAuthentication(values),
+            StorageProviderKind.Sftp or StorageProviderKind.Ssh => BuildSftpAuthentication(values),
             _ => throw new ArgumentOutOfRangeException(nameof(provider))
         };
 
@@ -397,6 +418,18 @@ public static class ConnectionEditorDraftFactory
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         return (folder.Length == 0 ? null : folder, tags);
     }
+
+    private static string? NormalizeFolder(string? value)
+    {
+        var folder = value?.Trim();
+        return string.IsNullOrEmpty(folder) ? null : folder;
+    }
+
+    private static string[] ParseLabels(string? value) => string.IsNullOrWhiteSpace(value)
+        ? []
+        : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private static string? NormalizeProviderRoot(string? value)
     {

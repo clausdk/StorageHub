@@ -161,6 +161,29 @@ public sealed class ObjectInspectorAgentClientTests
         Assert.Equal(1, transport.DisconnectCount);
     }
 
+    [Fact]
+    public async Task DeleteRequiresMatchingAddressAndUnambiguousOutcome()
+    {
+        var address = CreateAddress();
+        var transport = new FakeTransport(request => IpcEnvelope.Create(
+            EditableFileIpcMessageTypes.DeleteResponse,
+            request.RequestId,
+            1,
+            new StorageItemDeleteResponse(
+                EditableFileIpcContract.CurrentVersion,
+                address,
+                Deleted: true)));
+        await using var client = CreateClient(transport);
+
+        var response = await client.DeleteItemAsync(new StorageItemDeleteRequest(
+            EditableFileIpcContract.CurrentVersion,
+            address,
+            Recursive: false));
+
+        Assert.True(response.Deleted);
+        Assert.Null(response.Failure);
+    }
+
     private static ObjectInspectorAddress CreateAddress() => new(
         Guid.NewGuid(),
         "s3:root",

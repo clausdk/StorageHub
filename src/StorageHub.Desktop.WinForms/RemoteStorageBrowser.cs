@@ -27,7 +27,8 @@ public sealed record RemoteBrowserSnapshot(
     string RelativePath,
     IReadOnlyList<StorageListItem> Entries,
     string? ContinuationToken,
-    string? RootIdentity = null)
+    string? RootIdentity = null,
+    long IndexedEntryCount = 0)
 {
     public bool HasMore => !string.IsNullOrEmpty(ContinuationToken);
 
@@ -43,7 +44,8 @@ public sealed record RemoteBrowserNavigationResult(
     RemoteBrowserOperationStatus Status,
     RemoteBrowserSnapshot? Snapshot = null,
     string? ErrorMessage = null,
-    string? UnavailablePath = null);
+    string? UnavailablePath = null,
+    bool AppendedPage = false);
 
 public static class RemoteBrowserPath
 {
@@ -152,7 +154,6 @@ public static class RemoteBrowserPath
 public sealed class RemoteBrowserController : IAsyncDisposable
 {
     public const int DefaultPageSize = StorageIpcLimits.MaximumStableIdentityPageSize;
-    public const int MaximumAccumulatedEntries = 10_000;
 
     private readonly IRemoteStorageAgentClient _client;
     private readonly object _operationLock = new();
@@ -428,22 +429,14 @@ public sealed class RemoteBrowserController : IAsyncDisposable
             return new(RemoteBrowserOperationStatus.NoTarget);
         }
 
-        if (current.Entries.Count >= MaximumAccumulatedEntries)
-        {
-            return new(
-                RemoteBrowserOperationStatus.Failed,
-                ErrorMessage: "This folder reached the safe display limit. Narrow the path or use a filter at the provider.");
-        }
-
         var operation = BeginOperation(cancellationToken);
         try
         {
-            var pageSize = Math.Min(DefaultPageSize, MaximumAccumulatedEntries - current.Entries.Count);
             var listed = await ListPageAsync(
                 SelectedConnection,
                 current.RelativePath,
                 current.ContinuationToken,
-                pageSize,
+                DefaultPageSize,
                 operation.Cancellation.Token).ConfigureAwait(false);
             if (!IsCurrent(operation.Sequence) ||
                 CurrentSnapshot != current ||
@@ -471,10 +464,11 @@ public sealed class RemoteBrowserController : IAsyncDisposable
 
             CurrentSnapshot = current with
             {
-                Entries = current.Entries.Concat(listed.Entries).ToArray(),
-                ContinuationToken = listed.ContinuationToken
+                Entries = listed.Entries,
+                ContinuationToken = listed.ContinuationToken,
+                IndexedEntryCount = checked(current.IndexedEntryCount + listed.Entries.Length)
             };
-            return new(RemoteBrowserOperationStatus.Succeeded, CurrentSnapshot);
+            return new(RemoteBrowserOperationStatus.Succeeded, CurrentSnapshot, AppendedPage: true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -553,7 +547,8 @@ public sealed class RemoteBrowserController : IAsyncDisposable
         response.RelativePath,
         response.Entries,
         response.ContinuationToken,
-        response.RootIdentity);
+        response.RootIdentity,
+        response.Entries.Length);
 
     private RemoteBrowserOperation BeginOperation(CancellationToken cancellationToken)
     {

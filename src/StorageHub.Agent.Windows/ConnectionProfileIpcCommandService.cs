@@ -389,7 +389,10 @@ internal static class ConnectionProfileIpcMapper
             ToEndpointDocument(profile.Endpoint),
             ToAuthenticationDocument(profile.Authentication),
             ToOperationalOptionsDocument(profile.OperationalOptions),
-            profile.IsEnabled),
+            profile.IsEnabled,
+            profile.Type == StorageHub.Application.Connections.ConnectionProfileType.Client
+                ? StorageHub.Contracts.Ipc.ConnectionProfileType.Client
+                : StorageHub.Contracts.Ipc.ConnectionProfileType.Storage),
         profile.CreatedUtc,
         profile.UpdatedUtc);
 
@@ -444,6 +447,8 @@ internal static class ConnectionProfileIpcMapper
                 value.RootPath),
             StorageConnectionProvider.Sftp => new SftpEndpoint(
                 value.Host!, value.Port!.Value, MapSshPolicy(value.SshHostKeyPolicy), value.RootPath),
+            StorageConnectionProvider.Ssh => new SshClientEndpoint(
+                value.Host!, value.Port!.Value, MapSshPolicy(value.SshHostKeyPolicy)),
             _ => throw new ArgumentOutOfRangeException(nameof(value), "The provider is invalid.")
         };
     }
@@ -480,6 +485,11 @@ internal static class ConnectionProfileIpcMapper
         SftpEndpoint endpoint => new(
             StorageConnectionProvider.Sftp,
             RootPath: endpoint.RootPath,
+            Host: endpoint.Host,
+            Port: endpoint.Port,
+            SshHostKeyPolicy: MapSshPolicy(endpoint.HostKeyPolicy)),
+        SshClientEndpoint endpoint => new(
+            StorageConnectionProvider.Ssh,
             Host: endpoint.Host,
             Port: endpoint.Port,
             SshHostKeyPolicy: MapSshPolicy(endpoint.HostKeyPolicy)),
@@ -609,6 +619,12 @@ internal static class ConnectionProfileIpcMapper
                 Empty(value.ClientCertificatePfxReference) && Empty(value.ClientCertificatePasswordReference) &&
                 value.TlsPolicy == ConnectionTlsCertificatePolicy.SystemTrust &&
                 value.FtpsTlsMode == ConnectionFtpsTlsMode.Explicit,
+            StorageConnectionProvider.Ssh =>
+                Present(value.Host) && value.Port is not null && Empty(value.RootPath) && Empty(value.Bucket) && Empty(value.Region) &&
+                Empty(value.ServiceEndpoint) && !value.ForcePathStyle && !value.AllowInsecureTransport &&
+                Empty(value.ClientCertificatePfxReference) && Empty(value.ClientCertificatePasswordReference) &&
+                value.TlsPolicy == ConnectionTlsCertificatePolicy.SystemTrust &&
+                value.FtpsTlsMode == ConnectionFtpsTlsMode.Explicit,
             _ => false
         };
         if (!valid)
@@ -673,6 +689,7 @@ internal static class ConnectionProfileIpcMapper
         StorageConnectionProvider.Ftp => ConnectionProviderKind.Ftp,
         StorageConnectionProvider.Ftps => ConnectionProviderKind.Ftps,
         StorageConnectionProvider.Sftp => ConnectionProviderKind.Sftp,
+        StorageConnectionProvider.Ssh => ConnectionProviderKind.Ssh,
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, "The provider is invalid.")
     };
 

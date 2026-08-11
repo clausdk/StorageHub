@@ -16,6 +16,8 @@ public static class EditableFileIpcMessageTypes
     public const string UploadResponse = "editable-file.upload.response";
     public const string DirectoryEnsureRequest = "storage-directory.ensure.request";
     public const string DirectoryEnsureResponse = "storage-directory.ensure.response";
+    public const string DeleteRequest = "storage-item.delete.request";
+    public const string DeleteResponse = "storage-item.delete.response";
 }
 
 public sealed record EditableFileDownloadRequest(
@@ -75,4 +77,20 @@ public sealed record StorageDirectoryEnsureResponse(
     int ContractVersion,
     ObjectInspectorAddress Address,
     bool Created,
+    StorageIpcFailure? Failure = null);
+
+public sealed record StorageItemDeleteRequest(
+    int ContractVersion,
+    ObjectInspectorAddress Address,
+    bool Recursive)
+{
+    public bool HasValidBounds =>
+        EditableFileIpcContract.IsSupported(ContractVersion) &&
+        Address?.HasValidBounds == true;
+}
+
+public sealed record StorageItemDeleteResponse(
+    int ContractVersion,
+    ObjectInspectorAddress Address,
+    bool Deleted,
     StorageIpcFailure? Failure = null);

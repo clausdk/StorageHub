@@ -185,7 +185,8 @@ public sealed record SyncProfileDraftDocument(
         Direction == other.Direction && DeletionMode == other.DeletionMode &&
         ConflictPolicy == other.ConflictPolicy && MaximumDeletionCount == other.MaximumDeletionCount &&
         MaximumDeletionPercentage == other.MaximumDeletionPercentage && Overwrite == other.Overwrite &&
-        TransferBufferSize == other.TransferBufferSize && Enabled == other.Enabled && Behavior == other.Behavior &&
+        TransferBufferSize == other.TransferBufferSize && Enabled == other.Enabled &&
+        AllowNonAtomicDestinationWrites == other.AllowNonAtomicDestinationWrites && Behavior == other.Behavior &&
         IncludeHiddenFiles == other.IncludeHiddenFiles && IncludeGlobs.SequenceEqual(other.IncludeGlobs, StringComparer.Ordinal) &&
         ExcludeGlobs.SequenceEqual(other.ExcludeGlobs, StringComparer.Ordinal);
 
@@ -205,6 +206,7 @@ public sealed record SyncProfileDraftDocument(
         hash.Add(Overwrite);
         hash.Add(TransferBufferSize);
         hash.Add(Enabled);
+        hash.Add(AllowNonAtomicDestinationWrites);
         hash.Add(Behavior);
         hash.Add(IncludeHiddenFiles);
         foreach (var glob in IncludeGlobs)
@@ -228,6 +230,7 @@ public sealed record SyncProfileDraftDocument(
     public string[] IncludeGlobs { get; init; } = [];
     public string[] ExcludeGlobs { get; init; } = [".storagehub", ".storagehub/**", "**/.storagehub/**"];
     public bool IncludeHiddenFiles { get; init; } = true;
+    public bool AllowNonAtomicDestinationWrites { get; init; }
 
     public SyncProfileDraftDocument(
         string displayName,
@@ -414,7 +417,11 @@ internal sealed class SyncProfileDraftDocumentJsonConverter : JsonConverter<Sync
                 Int(root, "MaximumDeletionCount"),
                 Decimal(root, "MaximumDeletionPercentage"),
                 Int(root, "TransferBufferSize"),
-                Bool(root, "Enabled"));
+                Bool(root, "Enabled"))
+            {
+                AllowNonAtomicDestinationWrites = TryGet(root, "AllowNonAtomicDestinationWrites", out _) &&
+                                                  Bool(root, "AllowNonAtomicDestinationWrites")
+            };
         }
 
         var legacy = new SyncProfileDraftDocument(
@@ -437,6 +444,8 @@ internal sealed class SyncProfileDraftDocumentJsonConverter : JsonConverter<Sync
             IncludeGlobs = TryGet(root, "IncludeGlobs", out _) ? Strings(root, "IncludeGlobs") : legacy.IncludeGlobs,
             ExcludeGlobs = TryGet(root, "ExcludeGlobs", out _) ? Strings(root, "ExcludeGlobs") : legacy.ExcludeGlobs,
             IncludeHiddenFiles = !TryGet(root, "IncludeHiddenFiles", out _) || Bool(root, "IncludeHiddenFiles"),
+            AllowNonAtomicDestinationWrites = TryGet(root, "AllowNonAtomicDestinationWrites", out _) &&
+                                              Bool(root, "AllowNonAtomicDestinationWrites"),
         };
     }
 
@@ -459,6 +468,7 @@ internal sealed class SyncProfileDraftDocumentJsonConverter : JsonConverter<Sync
         Write(writer, options, "MaximumDeletionCount", value.MaximumDeletionCount);
         Write(writer, options, "MaximumDeletionPercentage", value.MaximumDeletionPercentage);
         Write(writer, options, "TransferBufferSize", value.TransferBufferSize);
+        Write(writer, options, "AllowNonAtomicDestinationWrites", value.AllowNonAtomicDestinationWrites);
         Write(writer, options, "Enabled", value.Enabled);
         writer.WriteEndObject();
     }

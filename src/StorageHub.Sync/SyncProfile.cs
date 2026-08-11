@@ -197,7 +197,7 @@ public sealed class SyncProfile
     private static string ComputePolicySha256(SyncProfile profile)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AppendInt32(hash, 2);
+        AppendInt32(hash, 3);
         AppendGuid(hash, profile.LeftConnectionProfileId.Value);
         AppendString(hash, profile.LeftRoot);
         AppendGuid(hash, profile.RightConnectionProfileId.Value);
@@ -213,6 +213,7 @@ public sealed class SyncProfile
 
         AppendInt32(hash, profile.TransferOptions.Overwrite ? 1 : 0);
         AppendInt32(hash, profile.TransferOptions.BufferSize);
+        AppendInt32(hash, profile.TransferOptions.AllowNonAtomicDestinationWrites ? 1 : 0);
         AppendInt32(hash, (int)profile.Behavior);
         AppendInt32(hash, profile.FilterPolicy.IncludeHiddenFiles ? 1 : 0);
         AppendInt32(hash, profile.FilterPolicy.IncludeGlobs.Count);

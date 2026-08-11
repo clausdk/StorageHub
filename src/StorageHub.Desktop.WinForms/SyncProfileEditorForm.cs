@@ -1,10 +1,9 @@
-using Krypton.Toolkit;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
 /// <summary>Edits persisted V6 sync profiles and drives the real preview/review/dispatch workflow.</summary>
-public sealed class SyncProfileEditorForm : KryptonForm
+public sealed class SyncProfileEditorForm : Form
 {
     private readonly ISyncManagementAgentClient _syncClient;
     private readonly IRemoteStorageAgentClient _storageClient;
@@ -27,6 +26,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
     private readonly NumericUpDown _maximumDeletionCount;
     private readonly NumericUpDown _maximumDeletionPercentage;
     private readonly NumericUpDown _bufferSize;
+    private readonly CheckBox _allowNonAtomicDestinationWrites;
     private readonly Label _status;
     private readonly Button _save;
     private readonly Button _preview;
@@ -63,6 +63,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        StorageHubTheme.Register(this);
 
         var header = new TableLayoutPanel
         {
@@ -151,19 +152,25 @@ public sealed class SyncProfileEditorForm : KryptonForm
             decimalPlaces: 2,
             increment: 0.25m);
         _bufferSize = CreateNumeric(64 * 1024, 1, SyncManagementIpcLimits.MaximumTransferBufferSize);
+        _allowNonAtomicDestinationWrites = new CheckBox
+        {
+            Name = "AllowNonAtomicDestinationWrites",
+            Text = "Allow for FTP / SFTP compatibility",
+            AutoSize = true,
+            AccessibleName = "Allow non-atomic destination writes",
+            ForeColor = StorageHubTheme.Warning
+        };
 
         _tabs = new TabControl
         {
             Dock = DockStyle.Fill,
-            Padding = new Point(14, 5),
-            HotTrack = true,
             AccessibleName = "Synchronization profile workflow"
         };
+        StorageHubTheme.ConfigureTabs(_tabs);
         _tabs.TabPages.Add(BuildProfilePage());
         _review = new SyncRunReviewControl(_syncClient);
         var previewPage = new TabPage("Plan & run")
         {
-            BackColor = StorageHubTheme.Surface,
             Padding = new Padding(5)
         };
         previewPage.Controls.Add(_review);
@@ -334,8 +341,12 @@ public sealed class SyncProfileEditorForm : KryptonForm
         var saved = response.Profile ?? throw new InvalidDataException("The agent did not return the saved profile revision.");
         ApplyProfile(saved);
         UpsertProfileChoice(saved);
-        _status.Text = $"Profile saved at revision {saved.Revision}. No provider changes were requested.";
-        _status.ForeColor = StorageHubTheme.Success;
+        _status.Text = saved.Draft.AllowNonAtomicDestinationWrites
+            ? $"Profile saved at revision {saved.Revision}. WARNING: non-atomic destination writes are enabled."
+            : $"Profile saved at revision {saved.Revision}. No provider changes were requested.";
+        _status.ForeColor = saved.Draft.AllowNonAtomicDestinationWrites
+            ? StorageHubTheme.Warning
+            : StorageHubTheme.Success;
         return saved;
     }
 
@@ -361,8 +372,12 @@ public sealed class SyncProfileEditorForm : KryptonForm
 
         await _review.ShowPreviewAsync(run, cancellationToken).ConfigureAwait(true);
         _tabs.SelectedIndex = 1;
-        _status.Text = "Sync plan ready. Review any approval-gated operations, then run it.";
-        _status.ForeColor = StorageHubTheme.Success;
+        _status.Text = profile.Draft.AllowNonAtomicDestinationWrites
+            ? "Sync plan ready. WARNING: this approved plan permits non-atomic destination writes."
+            : "Sync plan ready. Review any approval-gated operations, then run it.";
+        _status.ForeColor = profile.Draft.AllowNonAtomicDestinationWrites
+            ? StorageHubTheme.Warning
+            : StorageHubTheme.Success;
         return run;
     }
 
@@ -405,7 +420,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
 
     private TabPage BuildProfilePage()
     {
-        var page = new TabPage("Profile") { BackColor = StorageHubTheme.Canvas, Padding = new Padding(0) };
+        var page = new TabPage("Profile") { Padding = new Padding(0) };
         var panel = new Panel
         {
             Dock = DockStyle.Fill,
@@ -465,6 +480,11 @@ public sealed class SyncProfileEditorForm : KryptonForm
         UiControlFactory.AddLabeledRow(policy, "Maximum deletes", _maximumDeletionCount, "Stop when this item limit is exceeded.");
         UiControlFactory.AddLabeledRow(policy, "Maximum baseline %", _maximumDeletionPercentage, "Stop when this percentage limit is exceeded.");
         UiControlFactory.AddLabeledRow(policy, "Transfer buffer", _bufferSize, "Bounded from 1 byte through 1 MiB.");
+        UiControlFactory.AddLabeledRow(
+            policy,
+            "Non-atomic writes",
+            _allowNonAtomicDestinationWrites,
+            "WARNING: permits direct create/replace when a server cannot publish atomically. A concurrent destination change may be overwritten.");
         var scope = CreateFormTable();
         UiControlFactory.AddLabeledRow(scope, "Include globs", _includeGlobs, "Optional; one forward-slash glob per line.");
         UiControlFactory.AddLabeledRow(scope, "Exclude globs", _excludeGlobs, "StorageHub staging paths are excluded by default.");
@@ -584,7 +604,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
             AutoSize = true,
             Font = new Font("Segoe UI Semibold", 7.5F),
             ForeColor = StorageHubTheme.Primary,
-            BackColor = Color.FromArgb(232, 240, 253),
+            BackColor = StorageHubTheme.SurfaceMuted,
             Padding = new Padding(7, 3, 7, 3),
             Margin = Padding.Empty
         }, 1, 0);
@@ -659,7 +679,10 @@ public sealed class SyncProfileEditorForm : KryptonForm
             decimal.ToInt32(_maximumDeletionCount.Value),
             _maximumDeletionPercentage.Value,
             decimal.ToInt32(_bufferSize.Value),
-            _enabled.Checked);
+            _enabled.Checked)
+        {
+            AllowNonAtomicDestinationWrites = _allowNonAtomicDestinationWrites.Checked
+        };
     }
 
     private void ApplyProfile(SyncProfileDocument profile)
@@ -679,6 +702,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
         _maximumDeletionCount.Value = profile.Draft.MaximumDeletionCount;
         _maximumDeletionPercentage.Value = profile.Draft.MaximumDeletionPercentage;
         _bufferSize.Value = profile.Draft.TransferBufferSize;
+        _allowNonAtomicDestinationWrites.Checked = profile.Draft.AllowNonAtomicDestinationWrites;
         SelectProfileChoice(profile.ProfileId);
         _status.Text = $"Loaded profile revision {profile.Revision}.";
         _status.ForeColor = StorageHubTheme.TextMuted;
@@ -709,6 +733,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
         _maximumDeletionCount.Value = SyncPresentationCatalog.DefaultMassDeleteItemLimit;
         _maximumDeletionPercentage.Value = SyncPresentationCatalog.DefaultMassDeletePercentageLimit;
         _bufferSize.Value = 64 * 1024;
+        _allowNonAtomicDestinationWrites.Checked = false;
         if (_leftConnection.Items.Count > 0)
         {
             _leftConnection.SelectedIndex = 0;
@@ -756,6 +781,7 @@ public sealed class SyncProfileEditorForm : KryptonForm
     private void PopulateConnections(IEnumerable<ConnectionSummary> connections)
     {
         var choices = connections
+            .Where(static connection => connection.Type == ConnectionProfileType.Storage)
             .OrderByDescending(static connection => connection.IsFavorite)
             .ThenBy(static connection => connection.DisplayName, StringComparer.CurrentCultureIgnoreCase)
             .Select(static connection => new ConnectionChoice(connection))

@@ -2,7 +2,6 @@
   <PropertyGroup>
     <AssemblyName>StorageHub.Storage.CodeLogic</AssemblyName>
     <RootNamespace>StorageHub.Storage.CodeLogic</RootNamespace>
-    <RequiresCLStorageSource>true</RequiresCLStorageSource>
     <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
   </PropertyGroup>
 
@@ -12,9 +11,8 @@
     <ProjectReference Include="..\StorageHub.Domain\StorageHub.Domain.csproj" />
     <ProjectReference Include="..\StorageHub.Security\StorageHub.Security.csproj" />
     <ProjectReference Include="..\StorageHub.Storage\StorageHub.Storage.csproj" />
-    <ProjectReference Include="$(CLStorageProjectPath)"
-                      SetConfiguration="Configuration=$(Configuration)" />
     <PackageReference Include="CodeLogic" />
+    <PackageReference Include="CodeLogic.Storage" />
     <PackageReference Include="SSH.NET" />
   </ItemGroup>
 </Project>

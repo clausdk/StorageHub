@@ -304,9 +304,16 @@ public sealed class IpcContractTests
             MaximumDeletionPercentage: 10,
             Overwrite: true,
             TransferBufferSize: 65_536,
-            Enabled: true);
+            Enabled: true)
+        {
+            AllowNonAtomicDestinationWrites = true
+        };
 
         Assert.True(draft.HasValidBounds);
+        var restored = JsonSerializer.Deserialize<SyncProfileDraftDocument>(JsonSerializer.Serialize(draft));
+        Assert.NotNull(restored);
+        Assert.True(restored.AllowNonAtomicDestinationWrites);
+        Assert.Equal(draft, restored);
         Assert.False((draft with
         {
             Direction = SyncIpcDirection.TwoWay,

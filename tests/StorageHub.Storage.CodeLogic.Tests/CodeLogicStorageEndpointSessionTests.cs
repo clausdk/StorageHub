@@ -478,6 +478,41 @@ public sealed class CodeLogicStorageEndpointSessionTests
     }
 
     [Fact]
+    public async Task PortableChecksumUsesStrongEntityTagInsteadOfProviderTimestampPrecision()
+    {
+        var content = new byte[] { 1, 2, 3, 4 };
+        var first = true;
+        var service = new FakeStorageService
+        {
+            GetInfoHandler = (path, _) =>
+            {
+                var modified = first
+                    ? new DateTimeOffset(2026, 8, 10, 8, 0, 0, 123, TimeSpan.Zero)
+                    : new DateTimeOffset(2026, 8, 10, 8, 0, 0, TimeSpan.Zero);
+                first = false;
+                return Task.FromResult(Result<StorageItem>.Success(new StorageItem
+                {
+                    Path = path,
+                    Name = "etag.bin",
+                    ItemType = StorageItemType.File,
+                    Size = content.LongLength,
+                    LastModified = modified,
+                    ETag = "stable-etag"
+                }));
+            },
+            DownloadHandler = (_, _, _) => Task.FromResult(Result<Stream>.Success(
+                new MemoryStream(content, writable: false)))
+        };
+        await using var session = CreateSession(service);
+        var entry = await session.GetEntryAsync(Address(session.ProfileId, RootIdentity, "etag.bin"));
+
+        var result = await ((IStoragePortableChecksumSession)session).ComputePortableChecksumAsync(
+            new PortableChecksumRequest(entry.Value, content.LongLength));
+
+        Assert.True(result.IsSuccess, result.IsFailure ? result.Error.Message : string.Empty);
+    }
+
+    [Fact]
     public async Task RejectsExactVersionReadWhenVersioningCapabilityIsAbsent()
     {
         var service = new FakeStorageService();

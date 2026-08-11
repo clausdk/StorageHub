@@ -1,4 +1,3 @@
-using Krypton.Toolkit;
 
 namespace StorageHub.Desktop;
 
@@ -9,7 +8,7 @@ internal static class Program
     {
         VelopackDesktopBootstrap.Build(args).Run();
 
-        var lifecycle = PackagedDesktopLifecycle.CreateDefault();
+        using var lifecycle = PackagedDesktopLifecycle.CreateDefault();
         var agentOnly = DesktopCommandLine.IsAgentOnly(args);
         if (agentOnly && lifecycle.IsAutostartDisabled)
         {
@@ -24,15 +23,36 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
-        using var kryptonManager = new KryptonManager
+        if (!agent.IsReady)
         {
-            GlobalPaletteMode = PaletteMode.Microsoft365Blue,
-            GlobalApplyToolstrips = false
-        };
+            _ = MessageBox.Show(
+                DesktopStartupPreflight.DescribeFailure(agent.Status),
+                "StorageHub startup check",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return 1;
+        }
+
+        var preferencesStore = DesktopUpdatePreferencesStore.CreateDefault();
+        DesktopAppearanceService.SetAppearance(preferencesStore.Load().Appearance);
         System.Windows.Forms.Application.Run(new MainForm(
-            DesktopUpdatePreferencesStore.CreateDefault(),
+            preferencesStore,
             updateEngineFactory: null,
             lifecycle));
         return 0;
     }
+}
+
+internal static class DesktopStartupPreflight
+{
+    internal static string DescribeFailure(AgentEnsureStatus status) => status switch
+    {
+        AgentEnsureStatus.MissingExecutable =>
+            "The StorageHub background agent is missing. Repair or reinstall StorageHub, then try again.",
+        AgentEnsureStatus.StartupTimedOut =>
+            "The StorageHub background agent did not become ready in time. Close any stuck StorageHub processes and try again.",
+        AgentEnsureStatus.LaunchFailed =>
+            "The StorageHub background agent could not be started. Check Windows security settings and the StorageHub installation, then try again.",
+        _ => "The StorageHub background agent is not ready. Try starting StorageHub again."
+    };
 }

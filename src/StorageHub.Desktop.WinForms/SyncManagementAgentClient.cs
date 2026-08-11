@@ -292,7 +292,8 @@ public sealed class NamedPipeSyncManagementAgentClient : ISyncManagementAgentCli
             throw;
         }
         catch (Exception error) when (
-            error is IOException or InvalidDataException or InvalidOperationException or JsonException)
+            error is IOException or TimeoutException or UnauthorizedAccessException or
+                InvalidDataException or InvalidOperationException or JsonException)
         {
             await DisconnectAfterFailureAsync().ConfigureAwait(false);
             throw;
@@ -708,9 +709,9 @@ public sealed class NamedPipeSyncManagementAgentClient : ISyncManagementAgentCli
             ClientName = "StorageHub.Desktop.SyncManagement",
             ClientVersion = version,
             ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 1,
-            InitialReconnectDelay = TimeSpan.Zero,
-            MaximumReconnectDelay = TimeSpan.Zero
+            MaxConnectAttempts = 3,
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
+            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
         }));
     }
 

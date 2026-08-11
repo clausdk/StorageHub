@@ -1,33 +1,83 @@
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 
 namespace StorageHub.Desktop;
 
 public static class StorageHubTheme
 {
-    public static Color Canvas { get; } = Color.FromArgb(246, 248, 252);
+    public static DesktopAppearance Appearance => DesktopAppearanceService.Appearance;
+    public static DesktopAppearance EffectiveAppearance => DesktopAppearanceService.EffectiveAppearance;
+    internal static StorageHubPalette CurrentPalette => PaletteFor(EffectiveAppearance);
+    public static Color Canvas => CurrentPalette.Canvas;
+    public static Color Surface => CurrentPalette.Surface;
+    public static Color SurfaceMuted => CurrentPalette.SurfaceMuted;
+    public static Color Border => CurrentPalette.Border;
+    public static Color Text => CurrentPalette.Text;
+    public static Color TextMuted => CurrentPalette.TextMuted;
+    public static Color Primary => CurrentPalette.Primary;
+    public static Color Success => CurrentPalette.Success;
+    public static Color Warning => CurrentPalette.Warning;
+    public static Color Danger => CurrentPalette.Danger;
 
-    public static Color Surface { get; } = Color.White;
-
-    public static Color SurfaceMuted { get; } = Color.FromArgb(239, 243, 249);
-
-    public static Color Border { get; } = Color.FromArgb(214, 221, 232);
-
-    public static Color Text { get; } = Color.FromArgb(28, 37, 54);
-
-    public static Color TextMuted { get; } = Color.FromArgb(91, 103, 124);
-
-    public static Color Primary { get; } = Color.FromArgb(42, 104, 214);
-
-    public static Color Success { get; } = Color.FromArgb(17, 135, 86);
-
-    public static Color Warning { get; } = Color.FromArgb(190, 104, 0);
-
-    public static Color Danger { get; } = Color.FromArgb(190, 45, 55);
+    public static void SetAppearance(DesktopAppearance appearance) => DesktopAppearanceService.SetAppearance(appearance);
 
     public static Font CreateSectionFont() => new("Segoe UI Semibold", 10F, FontStyle.Regular, GraphicsUnit.Point);
 
-    public static ToolStripRenderer CreateToolStripRenderer() =>
-        new ToolStripProfessionalRenderer(new StorageHubColorTable());
+    public static void ConfigureList(ListView list)
+    {
+        ArgumentNullException.ThrowIfNull(list);
+        list.BackColor = Surface;
+        list.ForeColor = Text;
+        list.OwnerDraw = true;
+        list.DrawColumnHeader -= DrawListColumnHeader;
+        list.DrawColumnHeader += DrawListColumnHeader;
+        list.DrawItem -= DrawListItem;
+        list.DrawItem += DrawListItem;
+        list.DrawSubItem -= DrawListSubItem;
+        list.DrawSubItem += DrawListSubItem;
+        list.Resize -= ListResized;
+        list.Resize += ListResized;
+        FillListHeader(list);
+    }
+
+    private static void DrawListItem(object? sender, DrawListViewItemEventArgs e) => e.DrawDefault = true;
+
+    private static void DrawListSubItem(object? sender, DrawListViewSubItemEventArgs e) => e.DrawDefault = true;
+
+    private static void ListResized(object? sender, EventArgs e)
+    {
+        if (sender is ListView list)
+        {
+            FillListHeader(list);
+        }
+    }
+
+    private static void DrawListColumnHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
+    {
+        using var background = new SolidBrush(SurfaceMuted);
+        using var border = new Pen(Border);
+        e.Graphics.FillRectangle(background, e.Bounds);
+        e.Graphics.DrawLine(border, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
+        TextRenderer.DrawText(
+            e.Graphics,
+            e.Header?.Text ?? string.Empty,
+            e.Font,
+            Rectangle.Inflate(e.Bounds, -6, 0),
+            Text,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    private static void FillListHeader(ListView list)
+    {
+        if (list.View != View.Details || list.Columns.Count == 0 || list.ClientSize.Width == 0)
+        {
+            return;
+        }
+
+        var trailing = list.Columns[^1];
+        var preceding = list.Columns.Cast<ColumnHeader>().Take(list.Columns.Count - 1).Sum(column => column.Width);
+        trailing.Width = Math.Max(80, list.ClientSize.Width - preceding - SystemInformation.VerticalScrollBarWidth - 4);
+    }
 
     public static void StylePrimaryButton(Button button)
     {
@@ -55,6 +105,215 @@ public static class StorageHubTheme
         button.Cursor = Cursors.Hand;
     }
 
+    public static void ConfigureTabs(TabControl tabs)
+    {
+        ArgumentNullException.ThrowIfNull(tabs);
+        var isWorkspaceTabs = string.Equals(tabs.AccessibleName, "Workspace tabs", StringComparison.Ordinal);
+        tabs.DrawMode = TabDrawMode.OwnerDrawFixed;
+        tabs.DrawItem -= DrawTab;
+        if (!isWorkspaceTabs)
+        {
+            tabs.DrawItem += DrawTab;
+        }
+        // Workspace headers include a 16px icon and, for browser workspaces, a
+        // 16px close target. Native sizing only measures the text, so reserve
+        // enough horizontal padding for those renderer-owned elements.
+        tabs.Padding = isWorkspaceTabs ? new Point(39, 5) : new Point(14, 4);
+    }
+
+    public static void Register(Form form)
+    {
+        ArgumentNullException.ThrowIfNull(form);
+        DesktopAppearanceService.RegisterWindow(form);
+        form.HandleCreated -= FormHandleCreated;
+        form.HandleCreated += FormHandleCreated;
+    }
+
+    public static void Apply(Control root, DesktopAppearance? previousAppearance = null)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        var current = CurrentPalette;
+        var previous = PaletteFor(previousAppearance ?? EffectiveAppearance);
+        ApplyControl(root, previous, current);
+        root.Invalidate(true);
+    }
+
+    private static void ApplyControl(Control control, StorageHubPalette previous, StorageHubPalette current)
+    {
+        control.BackColor = MapColor(control.BackColor, previous, current);
+        control.ForeColor = MapColor(control.ForeColor, previous, current);
+
+        switch (control)
+        {
+            case Form form:
+                form.BackColor = current.Canvas;
+                form.HandleCreated -= FormHandleCreated;
+                form.HandleCreated += FormHandleCreated;
+                ApplyDarkTitleBar(form, EffectiveAppearance == DesktopAppearance.Dark);
+                break;
+            case TextBoxBase or ComboBox or NumericUpDown or DateTimePicker:
+                control.BackColor = current.Input;
+                control.ForeColor = current.Text;
+                break;
+            case TreeView tree:
+                tree.BackColor = current.Surface;
+                tree.ForeColor = current.Text;
+                tree.LineColor = current.Border;
+                break;
+            case ListView list:
+                ConfigureList(list);
+                break;
+            case DataGridView grid:
+                ConfigureGrid(grid, current);
+                break;
+            case TabControl tabs:
+                ConfigureTabs(tabs);
+                break;
+            case TabPage page:
+                page.BackColor = current.Surface;
+                page.ForeColor = current.Text;
+                break;
+            case Button button when button.FlatStyle == FlatStyle.Flat:
+                button.FlatAppearance.BorderColor = current.Border;
+                if (button.BackColor == previous.Primary)
+                {
+                    button.BackColor = current.Primary;
+                    button.ForeColor = Color.White;
+                }
+                break;
+            case ToolStrip strip:
+                strip.BackColor = current.Surface;
+                strip.ForeColor = current.Text;
+                strip.Renderer = DesktopAppearanceService.MenuRenderer;
+                ApplyToolStripItems(strip.Items, current);
+                break;
+        }
+
+        if (control.ContextMenuStrip is { } contextMenu)
+        {
+            contextMenu.BackColor = current.Surface;
+            contextMenu.ForeColor = current.Text;
+            contextMenu.Renderer = DesktopAppearanceService.MenuRenderer;
+            ApplyToolStripItems(contextMenu.Items, current);
+        }
+
+        if (!control.Enabled)
+        {
+            control.ForeColor = current.DisabledText;
+        }
+
+        foreach (Control child in control.Controls)
+        {
+            ApplyControl(child, previous, current);
+        }
+    }
+
+    private static void ConfigureGrid(DataGridView grid, StorageHubPalette palette)
+    {
+        grid.EnableHeadersVisualStyles = false;
+        grid.BackgroundColor = palette.Surface;
+        grid.GridColor = palette.Border;
+        grid.DefaultCellStyle.BackColor = palette.Surface;
+        grid.DefaultCellStyle.ForeColor = palette.Text;
+        grid.DefaultCellStyle.SelectionBackColor = palette.Selection;
+        grid.DefaultCellStyle.SelectionForeColor = palette.Text;
+        grid.AlternatingRowsDefaultCellStyle.BackColor = palette.SurfaceMuted;
+        grid.AlternatingRowsDefaultCellStyle.ForeColor = palette.Text;
+        grid.ColumnHeadersDefaultCellStyle.BackColor = palette.SurfaceMuted;
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = palette.Text;
+        grid.RowHeadersDefaultCellStyle.BackColor = palette.SurfaceMuted;
+        grid.RowHeadersDefaultCellStyle.ForeColor = palette.Text;
+    }
+
+    private static void ApplyToolStripItems(ToolStripItemCollection items, StorageHubPalette palette)
+    {
+        foreach (ToolStripItem item in items)
+        {
+            item.BackColor = palette.Surface;
+            item.ForeColor = item.Enabled ? palette.Text : palette.DisabledText;
+            if (item is ToolStripDropDownItem dropDown)
+            {
+                ApplyToolStripItems(dropDown.DropDownItems, palette);
+            }
+        }
+    }
+
+    private static Color MapColor(Color value, StorageHubPalette previous, StorageHubPalette current)
+    {
+        if (value == previous.Canvas) return current.Canvas;
+        if (value == previous.Surface) return current.Surface;
+        if (value == previous.SurfaceMuted) return current.SurfaceMuted;
+        if (value == previous.Border) return current.Border;
+        if (value == previous.Text) return current.Text;
+        if (value == previous.TextMuted) return current.TextMuted;
+        if (value == previous.Primary) return current.Primary;
+        if (value == previous.Success) return current.Success;
+        if (value == previous.Warning) return current.Warning;
+        if (value == previous.Danger) return current.Danger;
+        return value;
+    }
+
+    private static void DrawTab(object? sender, DrawItemEventArgs e)
+    {
+        if (sender is not TabControl tabs || e.Index < 0 || e.Index >= tabs.TabPages.Count)
+        {
+            return;
+        }
+
+        var selected = e.Index == tabs.SelectedIndex;
+        using var background = new SolidBrush(selected ? Surface : SurfaceMuted);
+        using var border = new Pen(Border);
+        e.Graphics.FillRectangle(background, e.Bounds);
+        e.Graphics.DrawRectangle(border, Rectangle.Inflate(e.Bounds, -1, -1));
+        TextRenderer.DrawText(
+            e.Graphics,
+            tabs.TabPages[e.Index].Text,
+            tabs.Font,
+            Rectangle.Inflate(e.Bounds, -8, 0),
+            Text,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    private static StorageHubPalette PaletteFor(DesktopAppearance appearance) =>
+        appearance == DesktopAppearance.Dark
+            ? new StorageHubPalette(
+                Color.FromArgb(28, 29, 32), Color.FromArgb(37, 39, 43), Color.FromArgb(48, 51, 56),
+                Color.FromArgb(75, 78, 85), Color.FromArgb(238, 239, 242), Color.FromArgb(178, 182, 190),
+                Color.FromArgb(76, 139, 245), Color.FromArgb(54, 102, 166), Color.FromArgb(43, 77, 120),
+                Color.FromArgb(33, 35, 39), Color.FromArgb(111, 115, 122),
+                Color.FromArgb(74, 190, 132), Color.FromArgb(245, 180, 72), Color.FromArgb(244, 105, 112))
+            : new StorageHubPalette(
+                Color.FromArgb(243, 246, 250), Color.White, Color.FromArgb(238, 242, 247),
+                Color.FromArgb(203, 210, 220), Color.FromArgb(32, 37, 45), Color.FromArgb(95, 104, 116),
+                Color.FromArgb(24, 103, 192), Color.FromArgb(218, 232, 250), Color.FromArgb(195, 218, 247),
+                Color.White, Color.FromArgb(145, 151, 160),
+                Color.FromArgb(17, 135, 86), Color.FromArgb(176, 94, 0), Color.FromArgb(190, 45, 55));
+
+    private static void ApplyDarkTitleBar(Form form, bool enabled)
+    {
+        if (!OperatingSystem.IsWindows() || !form.IsHandleCreated)
+        {
+            return;
+        }
+
+        var value = enabled ? 1 : 0;
+        if (DwmSetWindowAttribute(form.Handle, 20, ref value, sizeof(int)) != 0)
+        {
+            _ = DwmSetWindowAttribute(form.Handle, 19, ref value, sizeof(int));
+        }
+    }
+
+    private static void FormHandleCreated(object? sender, EventArgs e)
+    {
+        if (sender is Form form)
+        {
+            Apply(form);
+        }
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int valueSize);
+
     public static Color ParseAccent(string accentHex)
     {
         if (string.IsNullOrWhiteSpace(accentHex))
@@ -65,27 +324,23 @@ public static class StorageHubTheme
         return ColorTranslator.FromHtml(accentHex);
     }
 
-    private sealed class StorageHubColorTable : ProfessionalColorTable
-    {
-        public override Color ToolStripGradientBegin => Surface;
-        public override Color ToolStripGradientMiddle => Surface;
-        public override Color ToolStripGradientEnd => Surface;
-        public override Color MenuStripGradientBegin => Surface;
-        public override Color MenuStripGradientEnd => Surface;
-        public override Color ToolStripBorder => Border;
-        public override Color MenuBorder => Border;
-        public override Color MenuItemBorder => Color.FromArgb(151, 179, 226);
-        public override Color MenuItemSelected => Color.FromArgb(230, 238, 252);
-        public override Color MenuItemSelectedGradientBegin => Color.FromArgb(230, 238, 252);
-        public override Color MenuItemSelectedGradientEnd => Color.FromArgb(230, 238, 252);
-        public override Color ButtonSelectedHighlight => Color.FromArgb(230, 238, 252);
-        public override Color ButtonPressedHighlight => Color.FromArgb(211, 226, 249);
-        public override Color SeparatorDark => Border;
-        public override Color SeparatorLight => Surface;
-        public override Color StatusStripGradientBegin => Surface;
-        public override Color StatusStripGradientEnd => Surface;
-    }
 }
+
+internal readonly record struct StorageHubPalette(
+    Color Canvas,
+    Color Surface,
+    Color SurfaceMuted,
+    Color Border,
+    Color Text,
+    Color TextMuted,
+    Color Primary,
+    Color Selection,
+    Color SelectionPressed,
+    Color Input,
+    Color DisabledText,
+    Color Success,
+    Color Warning,
+    Color Danger);
 
 public enum UiGlyph
 {
@@ -104,6 +359,7 @@ public enum UiGlyph
     Save,
     Delete,
     Test,
+    Terminal,
     Lock,
     Warning,
     More,
@@ -224,6 +480,11 @@ public static class UiIconFactory
             case UiGlyph.Test:
                 graphics.DrawEllipse(pen, 4, 4, 16, 16);
                 graphics.DrawLines(pen, [new PointF(8, 12), new PointF(11, 15), new PointF(17, 8)]);
+                break;
+            case UiGlyph.Terminal:
+                graphics.DrawRectangle(pen, 3, 5, 18, 14);
+                graphics.DrawLines(pen, [new PointF(7, 9), new PointF(10, 12), new PointF(7, 15)]);
+                graphics.DrawLine(pen, 12, 15, 17, 15);
                 break;
             case UiGlyph.Lock:
                 graphics.DrawRectangle(pen, 5, 10, 14, 10);

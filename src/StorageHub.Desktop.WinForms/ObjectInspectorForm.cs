@@ -1,11 +1,10 @@
 using System.Globalization;
-using Krypton.Toolkit;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
 /// <summary>A standalone modern, read-only view over advanced exact-object details.</summary>
-public sealed class ObjectInspectorForm : KryptonForm
+public sealed class ObjectInspectorForm : Form
 {
     private readonly ObjectInspectorController _controller;
     private readonly bool _ownsController;
@@ -61,12 +60,13 @@ public sealed class ObjectInspectorForm : KryptonForm
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        StorageHubTheme.Register(this);
 
         var menu = new MenuStrip
         {
             Dock = DockStyle.Top,
             BackColor = StorageHubTheme.Surface,
-            Renderer = StorageHubTheme.CreateToolStripRenderer(),
+            Renderer = DesktopAppearanceService.MenuRenderer,
             AccessibleName = "Object inspector commands"
         };
         var objectMenu = new ToolStripMenuItem("&Object");
@@ -138,7 +138,6 @@ public sealed class ObjectInspectorForm : KryptonForm
 
         _versionsTab = new TabPage("Versions")
         {
-            BackColor = StorageHubTheme.Surface,
             Padding = new Padding(10)
         };
         var versionFooter = new FlowLayoutPanel
@@ -160,9 +159,9 @@ public sealed class ObjectInspectorForm : KryptonForm
         {
             Name = "ObjectInspectorTabs",
             Dock = DockStyle.Fill,
-            Padding = new Point(18, 6),
             AccessibleName = "Object detail categories"
         };
+        StorageHubTheme.ConfigureTabs(tabs);
         tabs.TabPages.Add(_versionsTab);
         tabs.TabPages.Add(_metadataTab);
         tabs.TabPages.Add(_tagsTab);
@@ -361,7 +360,6 @@ public sealed class ObjectInspectorForm : KryptonForm
     {
         var tab = new TabPage(title)
         {
-            BackColor = StorageHubTheme.Surface,
             Padding = new Padding(10)
         };
         tab.Controls.Add(grid);

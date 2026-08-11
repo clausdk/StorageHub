@@ -13,5 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\StorageHub.Storage.CodeLogic\StorageHub.Storage.CodeLogic.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Sync\StorageHub.Sync.csproj" />
+    <ProjectReference Include="..\..\src\StorageHub.Transfers\StorageHub.Transfers.csproj" />
   </ItemGroup>
 </Project>

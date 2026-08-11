@@ -21,6 +21,10 @@ public sealed class ShellWiringTests
             Assert.Equal(4, tabs.TabPages.Count);
             Assert.Equal("Welcome", tabs.TabPages[0].AccessibleName);
             Assert.Equal("Sync tasks", tabs.TabPages[1].AccessibleName);
+            Assert.Equal("Welcome", tabs.TabPages[0].Text);
+            Assert.Equal("Sync tasks", tabs.TabPages[1].Text);
+            Assert.Equal("Local ↔ Connections", tabs.TabPages[2].Text);
+            Assert.Equal(new Point(39, 5), tabs.Padding);
 
             var workspaceTab = tabs.GetTabRect(2);
             RaiseMouseDown(tabs, new Point(
@@ -34,6 +38,9 @@ public sealed class ShellWiringTests
 
             tabs.SelectedIndex = tabs.TabPages.Count - 1;
 
+            Assert.Equal(3, tabs.TabPages.Count);
+            Assert.NotEqual("+", tabs.SelectedTab!.Text);
+            System.Windows.Forms.Application.DoEvents();
             Assert.Equal(4, tabs.TabPages.Count);
             Assert.NotEqual("+", tabs.SelectedTab!.Text);
         });
@@ -78,6 +85,44 @@ public sealed class ShellWiringTests
     }
 
     [Fact]
+    public void WorkspaceCanSwitchBetweenSideBySideAndTopAndBottom()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            var settingsPath = Path.Combine(
+                Path.GetTempPath(),
+                $"storagehub-layout-test-{Guid.NewGuid():N}.json");
+            using var main = new MainForm(new DesktopUpdatePreferencesStore(settingsPath));
+            main.CreateControl();
+            var tabs = GetField<TabControl>(main, "_workspaceTabs");
+            var workspace = tabs.TabPages[2];
+            var split = Assert.Single(workspace.Controls.OfType<SplitContainer>());
+            var toolbar = Assert.Single(
+                workspace.Controls.OfType<ToolStrip>(),
+                candidate => candidate.AccessibleName!.EndsWith("workspace layout", StringComparison.Ordinal));
+            var layout = Assert.IsType<ToolStripDropDownButton>(toolbar.Items[0]);
+            Assert.Equal("Empty", toolbar.Items["WorkspaceClipboardStatus"]!.Text);
+            var sideBySide = Assert.IsType<ToolStripMenuItem>(layout.DropDownItems[0]);
+            var topAndBottom = Assert.IsType<ToolStripMenuItem>(layout.DropDownItems[1]);
+
+            Assert.Equal(Orientation.Vertical, split.Orientation);
+            topAndBottom.PerformClick();
+
+            Assert.Equal(Orientation.Horizontal, split.Orientation);
+            Assert.True(topAndBottom.Checked);
+            Assert.Equal("Layout: Top and bottom", layout.Text);
+            Assert.IsType<BrowserPaneControl>(Assert.Single(split.Panel1.Controls.Cast<Control>()));
+            Assert.IsType<BrowserPaneControl>(Assert.Single(split.Panel2.Controls.Cast<Control>()));
+
+            sideBySide.PerformClick();
+
+            Assert.Equal(Orientation.Vertical, split.Orientation);
+            Assert.True(sideBySide.Checked);
+            Assert.Equal("Layout: Side by side", layout.Text);
+        });
+    }
+
+    [Fact]
     public void ConnectionManagerStartsWithSavedProfilesOnlyAndNoDeadToolbarActions()
     {
         SyncRunReviewControlTests.RunOnSta(() =>
@@ -95,7 +140,7 @@ public sealed class ShellWiringTests
                 .Select(name => name!)
                 .ToArray();
             Assert.Equal(
-                ["New connection", "Test connection", "Save profile", "Delete profile"],
+                ["New connection", "Test connection", "Open client", "Save profile", "Delete profile"],
                 actions);
         });
     }
@@ -123,7 +168,7 @@ public sealed class ShellWiringTests
             Assert.Equal(["archive", "production"], card.DisplayTags);
             Assert.DoesNotContain("example", card.Endpoint, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(profileNodes, node => ((ConnectionCardModel)node.Tag!).ConnectionId is null);
-            Assert.Equal("Providers", Assert.Single(profiles.Nodes.Cast<TreeNode>()).Text);
+            Assert.Equal("Storage", Assert.Single(profiles.Nodes.Cast<TreeNode>()).Text);
         });
     }
 
@@ -137,6 +182,7 @@ public sealed class ShellWiringTests
                 Summary("Favorite", StorageConnectionProvider.S3, folder: "Team", tags: ["production"], favorite: true),
                 Summary("Foldered", StorageConnectionProvider.Sftp, folder: "Team"),
                 Summary("Provider only", StorageConnectionProvider.Ftp),
+                Summary("Shell", StorageConnectionProvider.Ssh, folder: "Team", type: ConnectionProfileType.Client),
                 Summary("Offline", StorageConnectionProvider.Ftps, folder: "Team", favorite: true, enabled: false)
             };
             using var manager = new ConnectionManagerForm(storageClient: new FakeStorageClient(connections));
@@ -145,9 +191,11 @@ public sealed class ShellWiringTests
 
             var tree = GetField<TreeView>(manager, "_profileTree");
             Assert.Equal(
-                ["Favorites", "Team", "Providers", "Disabled"],
+                ["Storage", "Remote clients", "Disabled"],
                 tree.Nodes.Cast<TreeNode>().Select(static node => node.Text));
-            var folder = tree.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Team");
+            var storage = tree.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Storage");
+            Assert.Single(storage.Nodes.Cast<TreeNode>(), static node => node.Text == "Unsorted");
+            var folder = storage.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Team");
             Assert.Equal(
                 "Foldered",
                 Assert.IsType<ConnectionCardModel>(Assert.Single(folder.Nodes.Cast<TreeNode>()).Tag).Name);
@@ -160,16 +208,18 @@ public sealed class ShellWiringTests
                 .Where(static node => node.Tag is ConnectionCardModel)
                 .Select(static node => (ConnectionCardModel)node.Tag!)
                 .ToArray();
-            Assert.Equal(4, cards.Length);
-            Assert.Equal(4, cards.Select(static card => card.ConnectionId).Distinct().Count());
+            Assert.Equal(5, cards.Length);
+            Assert.Equal(5, cards.Select(static card => card.ConnectionId).Distinct().Count());
 
             GetField<TextBox>(manager, "_searchBox").Text = "production";
 
             var filteredRoot = Assert.Single(tree.Nodes.Cast<TreeNode>());
-            Assert.Equal("Favorites", filteredRoot.Text);
+            Assert.Equal("Storage", filteredRoot.Text);
+            var favorites = Assert.Single(filteredRoot.Nodes.Cast<TreeNode>());
+            Assert.Equal("Favorites", favorites.Text);
             Assert.Equal(
                 "Favorite",
-                Assert.IsType<ConnectionCardModel>(Assert.Single(filteredRoot.Nodes.Cast<TreeNode>()).Tag).Name);
+                Assert.IsType<ConnectionCardModel>(Assert.Single(favorites.Nodes.Cast<TreeNode>()).Tag).Name);
         });
     }
 
@@ -183,14 +233,15 @@ public sealed class ShellWiringTests
             System.Windows.Forms.Application.DoEvents();
             var categories = GetField<TreeView>(settings, "_categories");
             Assert.Equal(
-                ["Transfers & sync", "Editing", "Connections & trust", "Updates"],
+                ["Transfers & sync", "Editing", "Appearance", "Workspace", "Connections", "Updates"],
                 categories.Nodes.Cast<TreeNode>().Select(static node => node.Text));
             var transfers = categories.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Transfers & sync");
             Assert.Equal("Concurrency", Assert.Single(transfers.Nodes.Cast<TreeNode>()).Text);
             var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
-            Assert.Equal(4, pages.Count);
+            Assert.Equal(8 + ConnectionProviderCatalog.All.Count, pages.Count);
             var pageNodes = categories.Nodes.Cast<TreeNode>()
-                .SelectMany(static node => node.Nodes.Count == 0 ? [node] : node.Nodes.Cast<TreeNode>())
+                .SelectMany(FlattenTree)
+                .Where(node => pages.ContainsKey(node.Name))
                 .ToArray();
             foreach (var node in pageNodes)
             {
@@ -236,7 +287,8 @@ public sealed class ShellWiringTests
         string? folder = null,
         string[]? tags = null,
         bool favorite = false,
-        bool enabled = true) => new(
+        bool enabled = true,
+        ConnectionProfileType type = ConnectionProfileType.Storage) => new(
             Guid.NewGuid(),
             name,
             provider,
@@ -246,7 +298,8 @@ public sealed class ShellWiringTests
             enabled,
             provider.ToString(),
             AccentColor: null,
-            Version: 1);
+            Version: 1,
+            Type: type);
 
     private static IEnumerable<TreeNode> FlattenTree(TreeNode node)
     {

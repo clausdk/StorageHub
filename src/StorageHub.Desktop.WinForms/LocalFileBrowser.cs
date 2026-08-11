@@ -95,19 +95,150 @@ public sealed record LocalBrowserEntry(
 
 public sealed record LocalBrowserSnapshot(
     LocalBrowserLocation Location,
-    IReadOnlyList<LocalBrowserEntry> Entries);
+    IReadOnlyList<LocalBrowserEntry> Entries,
+    string? ContinuationToken = null,
+    long IndexedEntryCount = 0)
+{
+    public bool HasMore => !string.IsNullOrWhiteSpace(ContinuationToken);
+}
 
 public interface ILocalFileBrowserDataSource
 {
     Task<LocalBrowserSnapshot> BrowseAsync(LocalBrowserLocation location, CancellationToken cancellationToken);
 }
 
-public sealed class LocalFileBrowserDataSource : ILocalFileBrowserDataSource
+public interface IPagedLocalFileBrowserDataSource : ILocalFileBrowserDataSource
 {
+    Task<LocalBrowserSnapshot> BrowsePageAsync(
+        LocalBrowserLocation location,
+        int pageSize,
+        string? continuationToken,
+        CancellationToken cancellationToken);
+
+    void Release(string? continuationToken);
+}
+
+public sealed class LocalFileBrowserDataSource : IPagedLocalFileBrowserDataSource, IDisposable
+{
+    private readonly object _sessionGate = new();
+    private readonly Dictionary<string, DirectoryEnumerationSession> _sessions = new(StringComparer.Ordinal);
+
     public Task<LocalBrowserSnapshot> BrowseAsync(
         LocalBrowserLocation location,
         CancellationToken cancellationToken) =>
         Task.Run(() => Browse(location, cancellationToken), cancellationToken);
+
+    public Task<LocalBrowserSnapshot> BrowsePageAsync(
+        LocalBrowserLocation location,
+        int pageSize,
+        string? continuationToken,
+        CancellationToken cancellationToken)
+    {
+        if (pageSize is < 1 or > 2_000) throw new ArgumentOutOfRangeException(nameof(pageSize));
+        return Task.Run(
+            () => BrowsePage(location, pageSize, continuationToken, cancellationToken),
+            cancellationToken);
+    }
+
+    public void Release(string? continuationToken)
+    {
+        if (string.IsNullOrWhiteSpace(continuationToken)) return;
+        lock (_sessionGate)
+        {
+            if (_sessions.Remove(continuationToken, out var session))
+            {
+                lock (session.Gate) session.Dispose();
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_sessionGate)
+        {
+            foreach (var session in _sessions.Values) session.Dispose();
+            _sessions.Clear();
+        }
+    }
+
+    private LocalBrowserSnapshot BrowsePage(
+        LocalBrowserLocation location,
+        int pageSize,
+        string? continuationToken,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (location.IsThisPc)
+        {
+            return new LocalBrowserSnapshot(location, EnumerateDrives(cancellationToken), IndexedEntryCount: DriveInfo.GetDrives().Length);
+        }
+
+        DirectoryEnumerationSession session;
+        string token;
+        var createdSession = false;
+        lock (_sessionGate)
+        {
+            if (continuationToken is null)
+            {
+                var directory = new DirectoryInfo(location.DirectoryPath!);
+                if (!directory.Exists) throw new DirectoryNotFoundException();
+                token = Guid.NewGuid().ToString("N");
+                session = new DirectoryEnumerationSession(location, directory.EnumerateFileSystemInfos().GetEnumerator());
+                _sessions.Add(token, session);
+                createdSession = true;
+            }
+            else if (!_sessions.TryGetValue(continuationToken, out session!) ||
+                !session.Location.IsSameLocation(location))
+            {
+                throw new InvalidOperationException("The local listing continuation is no longer available.");
+            }
+            else
+            {
+                token = continuationToken;
+            }
+        }
+
+        try
+        {
+            var entries = new List<LocalBrowserEntry>(pageSize);
+            var exhausted = false;
+            lock (session.Gate)
+            {
+                for (; entries.Count < pageSize;)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!session.Enumerator.MoveNext())
+                    {
+                        exhausted = true;
+                        break;
+                    }
+                    var item = session.Enumerator.Current;
+                    if (!string.Equals(item.Name, ".storagehub-internal", StringComparison.OrdinalIgnoreCase))
+                    {
+                        entries.Add(CreateEntry(item));
+                    }
+                }
+                session.IndexedCount += entries.Count;
+            }
+
+            entries.Sort(static (left, right) =>
+            {
+                var containerOrder = right.IsContainer.CompareTo(left.IsContainer);
+                return containerOrder != 0 ? containerOrder : StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name);
+            });
+            if (exhausted) Release(token);
+            return new LocalBrowserSnapshot(
+                location,
+                entries,
+                exhausted ? null : token,
+                session.IndexedCount);
+        }
+        catch
+        {
+            if (createdSession) Release(token);
+            throw;
+        }
+    }
 
     private static LocalBrowserSnapshot Browse(
         LocalBrowserLocation location,
@@ -239,6 +370,15 @@ public sealed class LocalFileBrowserDataSource : ILocalFileBrowserDataSource
         DriveType.Ram => "RAM",
         _ => "Storage"
     };
+
+    private sealed record DirectoryEnumerationSession(
+        LocalBrowserLocation Location,
+        IEnumerator<FileSystemInfo> Enumerator) : IDisposable
+    {
+        public object Gate { get; } = new();
+        public long IndexedCount { get; set; }
+        public void Dispose() => Enumerator.Dispose();
+    }
 }
 
 public sealed class LocalBrowserHistory
@@ -316,16 +456,19 @@ public enum LocalBrowserNavigationStatus
 public sealed record LocalBrowserNavigationResult(
     LocalBrowserNavigationStatus Status,
     LocalBrowserSnapshot? Snapshot = null,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null,
+    bool AppendedPage = false);
 
 public sealed class LocalBrowserController : IAsyncDisposable
 {
+    public const int DefaultPageSize = 500;
     private readonly object _sync = new();
     private readonly ILocalFileBrowserDataSource _dataSource;
     private readonly LocalBrowserHistory _history = new();
     private CancellationTokenSource? _activeNavigation;
     private long _navigationSequence;
     private bool _disposed;
+    private string? _continuationToken;
 
     public LocalBrowserController(ILocalFileBrowserDataSource? dataSource = null)
     {
@@ -365,6 +508,8 @@ public sealed class LocalBrowserController : IAsyncDisposable
         }
     }
 
+    public LocalBrowserSnapshot? CurrentSnapshot { get; private set; }
+
     public async Task<LocalBrowserNavigationResult> NavigateAsync(
         LocalBrowserNavigationKind kind,
         LocalBrowserLocation? location = null,
@@ -394,17 +539,23 @@ public sealed class LocalBrowserController : IAsyncDisposable
 
         try
         {
-            var snapshot = await _dataSource
-                .BrowseAsync(target, navigationCancellation.Token)
+            ReleaseContinuation();
+            var snapshot = await BrowseFirstPageAsync(target, navigationCancellation.Token)
                 .ConfigureAwait(false);
             lock (_sync)
             {
                 if (sequence != _navigationSequence || _disposed)
                 {
+                    if (_dataSource is IPagedLocalFileBrowserDataSource paged)
+                    {
+                        paged.Release(snapshot.ContinuationToken);
+                    }
                     return new LocalBrowserNavigationResult(LocalBrowserNavigationStatus.Superseded);
                 }
 
                 CommitNavigation(kind, target);
+                _continuationToken = snapshot.ContinuationToken;
+                CurrentSnapshot = snapshot;
                 return new LocalBrowserNavigationResult(LocalBrowserNavigationStatus.Succeeded, snapshot);
             }
         }
@@ -441,10 +592,16 @@ public sealed class LocalBrowserController : IAsyncDisposable
                         {
                             if (sequence != _navigationSequence || _disposed)
                             {
+                                if (_dataSource is IPagedLocalFileBrowserDataSource paged)
+                                {
+                                    paged.Release(fallback.Value.Snapshot.ContinuationToken);
+                                }
                                 return new LocalBrowserNavigationResult(LocalBrowserNavigationStatus.Superseded);
                             }
 
                             _history.Navigate(fallback.Value.Location);
+                            _continuationToken = fallback.Value.Snapshot.ContinuationToken;
+                            CurrentSnapshot = fallback.Value.Snapshot;
                             return new LocalBrowserNavigationResult(
                                 LocalBrowserNavigationStatus.Succeeded,
                                 fallback.Value.Snapshot,
@@ -482,6 +639,52 @@ public sealed class LocalBrowserController : IAsyncDisposable
         }
     }
 
+    public async Task<LocalBrowserNavigationResult> LoadMoreAsync(CancellationToken cancellationToken = default)
+    {
+        string? token;
+        LocalBrowserLocation location;
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            token = _continuationToken;
+            location = _history.Current;
+        }
+        if (token is null || _dataSource is not IPagedLocalFileBrowserDataSource paged)
+        {
+            return new LocalBrowserNavigationResult(LocalBrowserNavigationStatus.NoTarget);
+        }
+
+        try
+        {
+            var page = await paged.BrowsePageAsync(location, DefaultPageSize, token, cancellationToken)
+                .ConfigureAwait(false);
+            lock (_sync)
+            {
+                if (_disposed || !location.IsSameLocation(_history.Current) || token != _continuationToken)
+                {
+                    paged.Release(page.ContinuationToken);
+                    return new LocalBrowserNavigationResult(LocalBrowserNavigationStatus.Superseded);
+                }
+                _continuationToken = page.ContinuationToken;
+                CurrentSnapshot = page;
+            }
+            return new LocalBrowserNavigationResult(
+                LocalBrowserNavigationStatus.Succeeded,
+                page,
+                AppendedPage: true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new LocalBrowserNavigationResult(LocalBrowserNavigationStatus.Canceled);
+        }
+        catch (Exception error)
+        {
+            return new LocalBrowserNavigationResult(
+                LocalBrowserNavigationStatus.Failed,
+                ErrorMessage: LocalBrowserErrors.ToSafeMessage(error));
+        }
+    }
+
     private async Task<(LocalBrowserLocation Location, LocalBrowserSnapshot Snapshot)?>
         BrowseNearestAvailableParentAsync(
             LocalBrowserLocation missingLocation,
@@ -492,7 +695,7 @@ public sealed class LocalBrowserController : IAsyncDisposable
         {
             try
             {
-                var snapshot = await _dataSource.BrowseAsync(candidate, cancellationToken).ConfigureAwait(false);
+                var snapshot = await BrowseFirstPageAsync(candidate, cancellationToken).ConfigureAwait(false);
                 return (candidate, snapshot);
             }
             catch (Exception error) when (error is DirectoryNotFoundException or DriveNotFoundException)
@@ -542,14 +745,38 @@ public sealed class LocalBrowserController : IAsyncDisposable
             }
 
             _disposed = true;
+            CurrentSnapshot = null;
             _navigationSequence++;
             navigation = _activeNavigation;
             _activeNavigation = null;
         }
 
         TryCancel(navigation);
+        ReleaseContinuation();
+
+        if (_dataSource is IDisposable disposable) disposable.Dispose();
 
         return ValueTask.CompletedTask;
+    }
+
+    private async Task<LocalBrowserSnapshot> BrowseFirstPageAsync(
+        LocalBrowserLocation location,
+        CancellationToken cancellationToken)
+    {
+        return _dataSource is IPagedLocalFileBrowserDataSource paged
+            ? await paged.BrowsePageAsync(location, DefaultPageSize, null, cancellationToken).ConfigureAwait(false)
+            : await _dataSource.BrowseAsync(location, cancellationToken).ConfigureAwait(false);
+    }
+
+    private void ReleaseContinuation()
+    {
+        string? token;
+        lock (_sync)
+        {
+            token = _continuationToken;
+            _continuationToken = null;
+        }
+        if (_dataSource is IPagedLocalFileBrowserDataSource paged) paged.Release(token);
     }
 
     private LocalBrowserLocation? ResolveTarget(

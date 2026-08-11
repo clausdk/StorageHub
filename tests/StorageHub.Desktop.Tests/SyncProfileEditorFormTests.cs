@@ -37,6 +37,10 @@ public sealed class SyncProfileEditorFormTests
             Assert.True(folderB.Enabled);
             Assert.Contains("Connection root", folderA.PlaceholderText, StringComparison.Ordinal);
             Assert.Contains("Connection root", folderB.PlaceholderText, StringComparison.Ordinal);
+            var compatibility = Assert.IsType<CheckBox>(
+                form.Controls.Find("AllowNonAtomicDestinationWrites", true).Single());
+            Assert.False(compatibility.Checked);
+            compatibility.Checked = true;
             var saved = form.SaveCurrentProfileAsync().GetAwaiter().GetResult();
             var run = form.GeneratePreviewAsync().GetAwaiter().GetResult();
 
@@ -44,6 +48,7 @@ public sealed class SyncProfileEditorFormTests
             Assert.Equal(1, storage.ListCount);
             Assert.Equal(1, sync.CreateProfileCount);
             Assert.Equal(1, sync.UpdateProfileCount);
+            Assert.True(saved.Draft.AllowNonAtomicDestinationWrites);
             Assert.Equal(saved.ProfileId, run.ProfileId);
             Assert.Equal(1, sync.PreviewCount);
             Assert.Equal(1, form.Review.LoadedOperationCount);

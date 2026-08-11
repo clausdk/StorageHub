@@ -54,7 +54,8 @@ public enum StorageConnectionProvider
     S3 = 2,
     Ftp = 3,
     Ftps = 4,
-    Sftp = 5
+    Sftp = 5,
+    Ssh = 6
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<StorageIpcFailureCategory>))]
@@ -116,7 +117,8 @@ public sealed record ConnectionSummary(
     bool IsEnabled,
     string? IconKey,
     string? AccentColor,
-    long Version);
+    long Version,
+    ConnectionProfileType Type = ConnectionProfileType.Storage);
 
 public sealed record ConnectionListResponse(
     int ContractVersion,

@@ -169,7 +169,9 @@ public static class SyncSnapshotScanner
                             continue;
                         }
 
-                        if (!entries.TryAdd(relative.Value, entry))
+                        if (!entries.TryAdd(relative.Value, entry) &&
+                            (!entries.TryGetValue(relative.Value, out var existing) ||
+                             !IsEquivalentContainerAlias(existing, entry)))
                         {
                             return Failure(new StorageFailure(
                                 "sync.scan.path_collision",
@@ -235,6 +237,15 @@ public static class SyncSnapshotScanner
             session.Capabilities.CaseSensitivity,
             digestResult.Value));
     }
+
+    private static bool IsEquivalentContainerAlias(StorageEntry existing, StorageEntry candidate) =>
+        existing.IsContainer &&
+        candidate.IsContainer &&
+        existing.Address.ProfileId == candidate.Address.ProfileId &&
+        StringComparer.Ordinal.Equals(existing.Address.RootIdentity, candidate.Address.RootIdentity) &&
+        StringComparer.Ordinal.Equals(
+            existing.Address.CanonicalRelativePath,
+            candidate.Address.CanonicalRelativePath);
 
     private static async ValueTask<StorageResult<IReadOnlyDictionary<string, PortableContentDigest>>>
         ComputePortableDigestsAsync(

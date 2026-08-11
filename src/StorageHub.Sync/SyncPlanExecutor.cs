@@ -575,20 +575,22 @@ public static class SyncPlanExecutor
     private static bool RequiresDestructiveApproval(SyncPlanExecutionRequest request) =>
         request.Plan.Operations.Any(operation =>
             operation.Kind == SyncPlanOperationKind.Delete ||
-            request.TransferOptions.Overwrite && operation.Kind == SyncPlanOperationKind.Copy);
+            request.TransferOptions.Overwrite && operation.Kind == SyncPlanOperationKind.Copy &&
+                operation.DestinationExisted);
 
     private static StorageResult ValidateOverwriteSafety(
         SyncPlanExecutionRequest request,
         SyncPlanOperation operation)
     {
-        if (!request.TransferOptions.Overwrite)
+        if (!request.TransferOptions.Overwrite || !operation.DestinationExisted)
         {
             return StorageResult.Success();
         }
 
         var destination = operation.Destination!;
         if (string.IsNullOrWhiteSpace(destination.VersionId) &&
-            string.IsNullOrWhiteSpace(destination.EntityTag))
+            string.IsNullOrWhiteSpace(destination.EntityTag) &&
+            (!request.TransferOptions.AllowNonAtomicDestinationWrites || operation.DestinationDigest is null))
         {
             return UnsafeMutation(
                 "sync.overwrite.identity_required",
@@ -635,6 +637,11 @@ public static class SyncPlanExecutor
 
         if (session.Capabilities[StorageFeature.ConditionalUpdate].Level == FeatureSupportLevel.Native &&
             session.Capabilities[StorageFeature.AtomicReplace].Level == FeatureSupportLevel.Native)
+        {
+            return StorageResult.Success();
+        }
+
+        if (request.TransferOptions.AllowNonAtomicDestinationWrites)
         {
             return StorageResult.Success();
         }
@@ -742,7 +749,10 @@ public static class SyncPlanExecutor
                         intent,
                         sourceOrTargetSession,
                         request.Sessions[destination.ProfileId],
-                        request.TransferOptions,
+                        request.TransferOptions with
+                        {
+                            Overwrite = request.TransferOptions.Overwrite && operation.DestinationExisted
+                        },
                         transferProgress,
                         cancellationToken).ConfigureAwait(false);
                     return transfer.IsFailure

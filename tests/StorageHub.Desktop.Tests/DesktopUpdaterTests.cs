@@ -75,6 +75,59 @@ public sealed class DesktopUpdaterTests
         Assert.False(migrated.DownloadAutomatically);
         Assert.False(migrated.IncludePrereleases);
         Assert.Equal(SshHostKeyDiscoveryMode.AskBeforeFetching, migrated.SshHostKeyDiscovery);
+        Assert.Equal(DesktopAppearance.System, migrated.Appearance);
+    }
+
+    [Theory]
+    [InlineData(DesktopAppearance.Light)]
+    [InlineData(DesktopAppearance.Dark)]
+    [InlineData(DesktopAppearance.System)]
+    public void AppearanceChoicesRoundTripWithoutChangingSchema(DesktopAppearance appearance)
+    {
+        using var fixture = new SettingsFixture();
+        fixture.Store.Save(DesktopUpdatePreferences.Defaults with { Appearance = appearance });
+
+        Assert.Equal(appearance, fixture.Store.Load().Appearance);
+        Assert.Contains("\"schemaVersion\": 7", File.ReadAllText(fixture.Path), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(WorkspaceLayout.SideBySide)]
+    [InlineData(WorkspaceLayout.TopAndBottom)]
+    public void DefaultWorkspaceLayoutRoundTrips(WorkspaceLayout layout)
+    {
+        using var fixture = new SettingsFixture();
+        fixture.Store.Save(DesktopUpdatePreferences.Defaults with { DefaultWorkspaceLayout = layout });
+
+        Assert.Equal(layout, fixture.Store.Load().DefaultWorkspaceLayout);
+    }
+
+    [Fact]
+    public void InvalidAppearanceInVersionFiveDefaultsToSystem()
+    {
+        using var fixture = new SettingsFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Path)!);
+        File.WriteAllText(
+            fixture.Path,
+            """
+            {
+              "schemaVersion": 5,
+              "checkAutomatically": true,
+              "downloadAutomatically": true,
+              "restartAutomatically": false,
+              "includePrereleases": true,
+              "sshHostKeyDiscovery": 2,
+              "maximumEditableFileBytes": 1048576,
+              "adaptiveConcurrency": true,
+              "minimumConcurrency": 1,
+              "maximumTransferConcurrency": 4,
+              "perConnectionConcurrency": 2,
+              "maximumSyncConcurrency": 2,
+              "appearance": 999
+            }
+            """);
+
+        Assert.Equal(DesktopAppearance.System, fixture.Store.Load().Appearance);
     }
 
     [Fact]

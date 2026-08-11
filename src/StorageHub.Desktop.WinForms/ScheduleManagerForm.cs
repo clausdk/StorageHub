@@ -1,11 +1,10 @@
 using System.Globalization;
-using Krypton.Toolkit;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
 /// <summary>Manages durable review-only and safety-gated automatic schedules.</summary>
-public sealed class ScheduleManagerForm : KryptonForm
+public sealed class ScheduleManagerForm : Form
 {
     private readonly IScheduleManagementAgentClient _scheduleClient;
     private readonly ISyncManagementAgentClient _syncClient;
@@ -65,13 +64,14 @@ public sealed class ScheduleManagerForm : KryptonForm
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        StorageHubTheme.Register(this);
 
         _modeNotice = new Label
         {
             Dock = DockStyle.Top,
             Height = 62,
             ForeColor = StorageHubTheme.Warning,
-            BackColor = Color.FromArgb(255, 244, 224),
+            BackColor = StorageHubTheme.SurfaceMuted,
             Padding = new Padding(18, 13, 18, 8),
             AccessibleName = "Schedule execution mode notice"
         };
