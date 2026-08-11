@@ -7,13 +7,20 @@ using StorageHub.Security;
 
 namespace StorageHub.Application.Connections;
 
+public enum ConnectionProfileType
+{
+    Storage = 0,
+    Client = 1
+}
+
 public enum ConnectionProviderKind
 {
     Local = 1,
     S3 = 2,
     Ftp = 3,
     Ftps = 4,
-    Sftp = 5
+    Sftp = 5,
+    Ssh = 6
 }
 
 public enum TlsCertificatePolicy
@@ -577,6 +584,26 @@ public sealed record SftpEndpoint : ConnectionEndpoint
     public string RootPath { get; }
 }
 
+public sealed record SshClientEndpoint : ConnectionEndpoint
+{
+    public SshClientEndpoint(string host, int port, SshHostKeyPolicy hostKeyPolicy)
+        : base(ConnectionProviderKind.Ssh)
+    {
+        if (!Enum.IsDefined(hostKeyPolicy) || hostKeyPolicy == SshHostKeyPolicy.Unspecified)
+        {
+            throw new ArgumentOutOfRangeException(nameof(hostKeyPolicy), "An SSH host-key policy is required.");
+        }
+
+        Host = ValidateHost(host);
+        Port = ValidatePort(port);
+        HostKeyPolicy = hostKeyPolicy;
+    }
+
+    public string Host { get; }
+    public int Port { get; }
+    public SshHostKeyPolicy HostKeyPolicy { get; }
+}
+
 public abstract record ConnectionAuthentication;
 
 public sealed record NoAuthentication : ConnectionAuthentication;
@@ -738,6 +765,9 @@ public sealed record ConnectionProfile
 
     public ConnectionProfileId Id { get; init; }
     public ConnectionProviderKind Provider { get; init; }
+    public ConnectionProfileType Type => Provider == ConnectionProviderKind.Ssh
+        ? ConnectionProfileType.Client
+        : ConnectionProfileType.Storage;
     public ConnectionProfileMetadata Metadata { get; init; }
     public ConnectionEndpoint Endpoint { get; init; }
     public ConnectionAuthentication Authentication { get; init; }
@@ -831,7 +861,7 @@ public sealed record ConnectionProfile
                 S3AccessKeyAuthentication,
             ConnectionProviderKind.Ftp or ConnectionProviderKind.Ftps =>
                 Authentication is NoAuthentication or UsernamePasswordAuthentication,
-            ConnectionProviderKind.Sftp =>
+            ConnectionProviderKind.Sftp or ConnectionProviderKind.Ssh =>
                 Authentication is UsernamePasswordAuthentication or SftpPrivateKeyAuthentication,
             _ => false
         };

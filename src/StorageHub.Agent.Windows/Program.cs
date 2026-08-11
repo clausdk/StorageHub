@@ -132,6 +132,7 @@ var transferCommands = new TransferQueueIpcCommandService(
     transferStore,
     transferStore,
     transferQueueSubsystem);
+var shellTransferCommands = new ShellTransferIpcCommandService(transferStore, transferEndpointConnector);
 var syncProfiles = new SqliteSyncProfileRepository(transferDatabase);
 var syncBaselines = new SqliteSyncBaselineStore(transferDatabase);
 var syncPlans = new SqliteSyncPlanStore(transferDatabase);
@@ -180,6 +181,10 @@ var syncCommands = new SyncManagementIpcCommandService(
     syncConflicts);
 var scheduleCommands = new ScheduleManagementIpcCommandService(scheduleManagementRepository);
 var objectInspectorCommands = new ObjectInspectorIpcCommandService(syncConnector);
+await using var sshTerminalCommands = new SshTerminalIpcCommandService(
+    transferProfiles,
+    () => vaultSubsystem.Vault,
+    transferTrustStore);
 var requestHandler = new AgentIpcRequestHandler(
     () => CreateStatusSnapshot(
         coordinator,
@@ -191,9 +196,11 @@ var requestHandler = new AgentIpcRequestHandler(
         profileCommands,
         trustCommands,
         transferCommands,
+        shellTransferCommands,
         syncCommands,
         scheduleCommands,
         objectInspectorCommands,
+        sshTerminalCommands,
         new AgentControlIpcCommandService(
             () => shutdown.TrySetResult(),
             Environment.ProcessId)));
@@ -203,7 +210,10 @@ var ipc = new NamedPipeIpcServerSubsystem(
         PipeName = StorageHubIpcPipeNames.Normal,
         AgentVersion = applicationVersion,
         AgentInstanceId = agentInstanceId,
-        MaxConcurrentClients = 8,
+        // The desktop intentionally owns independent clients for workspaces, queue,
+        // sync, settings, connection management, terminals, and status. Eight slots
+        // caused healthy clients to look offline while idle forms retained sessions.
+        MaxConcurrentClients = 64,
         RequestTimeout = TimeSpan.FromMinutes(2),
         SessionIdleTimeout = TimeSpan.FromMinutes(3)
     },
@@ -216,7 +226,7 @@ var secretIpc = new NamedPipeIpcServerSubsystem(
         PipeName = StorageHubIpcPipeNames.Secret,
         AgentVersion = applicationVersion,
         AgentInstanceId = agentInstanceId,
-        MaxConcurrentClients = 2,
+        MaxConcurrentClients = 8,
         RequestTimeout = TimeSpan.FromSeconds(30),
         FrameKind = IpcFrameKind.Secret
     },

@@ -1,13 +1,13 @@
-using Krypton.Toolkit;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
-public sealed class MainForm : KryptonForm
+public sealed class MainForm : Form
 {
     private readonly List<Image> _ownedImages = [];
     private readonly AgentStatusMonitor _agentMonitor = new();
     private readonly ManualTransferController _manualTransfers = new();
+    private readonly NamedPipeTransferQueueAgentClient _shellTransfers = new();
     private readonly RecursiveTransferController _recursiveTransfers;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly ToolStripStatusLabel _locationStatus = new() { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -22,6 +22,7 @@ public sealed class MainForm : KryptonForm
         ToolTipText = "Check for StorageHub updates"
     };
     private readonly DesktopUpdatePreferencesStore _updatePreferencesStore;
+    private readonly MenuStrip _menu;
     private readonly DesktopUpdater _updater;
     private readonly PackagedDesktopLifecycle? _packagedLifecycle;
     private readonly TabControl _workspaceTabs;
@@ -29,13 +30,16 @@ public sealed class MainForm : KryptonForm
     private readonly OverviewDashboardControl _overview;
     private readonly SyncTasksOverviewControl _syncTasks;
     private readonly ExternalEditorController _externalEditor;
+    private readonly Icon? _windowIcon;
     private ShellStatusSnapshot _status = ShellStatusSnapshot.Initial;
     private BrowserPaneControl? _activePane;
     private PaneClipboardSnapshot? _paneClipboard;
     private bool _changingWorkspaceTabs;
+    private bool _workspaceAddPending;
     private bool _monitorStarted;
     private bool _updaterStarted;
     private bool _agentRestartPending;
+    private bool _agentRecoveryInProgress;
 
     public MainForm()
         : this(DesktopUpdatePreferencesStore.CreateDefault())
@@ -54,6 +58,11 @@ public sealed class MainForm : KryptonForm
         _externalEditor = new ExternalEditorController(updatePreferencesStore);
         _externalEditor.FileUploaded += ExternalEditorFileUploaded;
         Text = "StorageHub";
+        _windowIcon = LoadWindowIcon();
+        if (_windowIcon is not null)
+        {
+            Icon = _windowIcon;
+        }
         AccessibleName = "StorageHub file manager";
         AccessibleDescription = "A secure dual-pane file manager for local and remote storage.";
         StartPosition = FormStartPosition.CenterScreen;
@@ -63,9 +72,10 @@ public sealed class MainForm : KryptonForm
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        StorageHubTheme.Register(this);
 
-        var menu = BuildMenu();
-        MainMenuStrip = menu;
+        _menu = BuildMenu();
+        MainMenuStrip = _menu;
         var toolbar = BuildToolbar();
 
         _workspaceTabs = new TabControl
@@ -73,11 +83,12 @@ public sealed class MainForm : KryptonForm
             Dock = DockStyle.Fill,
             AccessibleName = "Workspace tabs",
             AccessibleDescription = "Each tab contains independent source and destination browser panes.",
-            Padding = new Point(39, 5),
             HotTrack = true,
-            ShowToolTips = true,
-            DrawMode = TabDrawMode.OwnerDrawFixed
+            ShowToolTips = true
         };
+        StorageHubTheme.ConfigureTabs(_workspaceTabs);
+        _workspaceTabs.DrawItem += WorkspaceTabsDrawItem;
+        _workspaceTabs.MouseDown += WorkspaceTabsMouseDown;
         _overview = new OverviewDashboardControl();
         _overview.NewWorkspaceRequested += (_, _) => AddWorkspace();
         _overview.ConnectionsRequested += (_, _) => ShowConnectionManager();
@@ -93,9 +104,7 @@ public sealed class MainForm : KryptonForm
             ToolTipText = "New workspace",
             AccessibleName = "New workspace tab"
         });
-        _workspaceTabs.SelectedIndexChanged += WorkspaceTabsSelectedIndexChanged;
-        _workspaceTabs.DrawItem += WorkspaceTabsDrawItem;
-        _workspaceTabs.MouseDown += WorkspaceTabsMouseDown;
+        _workspaceTabs.Selecting += WorkspaceTabsSelecting;
 
         var mainSplit = new SplitContainer
         {
@@ -119,7 +128,7 @@ public sealed class MainForm : KryptonForm
         Controls.Add(mainSplit);
         Controls.Add(statusStrip);
         Controls.Add(toolbar);
-        Controls.Add(menu);
+        Controls.Add(_menu);
 
         ApplyStatus(_status);
         _agentMonitor.StatusChanged += AgentMonitorStatusChanged;
@@ -132,6 +141,7 @@ public sealed class MainForm : KryptonForm
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        _menu.Renderer = DesktopAppearanceService.MenuRenderer;
         if (!_monitorStarted)
         {
             _monitorStarted = true;
@@ -154,7 +164,7 @@ public sealed class MainForm : KryptonForm
             _lifetime.Cancel();
             _manualTransfers.TransfersEnqueued -= ManualTransfersEnqueued;
             _externalEditor.FileUploaded -= ExternalEditorFileUploaded;
-            _workspaceTabs.SelectedIndexChanged -= WorkspaceTabsSelectedIndexChanged;
+            _workspaceTabs.Selecting -= WorkspaceTabsSelecting;
             _workspaceTabs.DrawItem -= WorkspaceTabsDrawItem;
             _workspaceTabs.MouseDown -= WorkspaceTabsMouseDown;
             _agentMonitor.StatusChanged -= AgentMonitorStatusChanged;
@@ -165,8 +175,10 @@ public sealed class MainForm : KryptonForm
             _agentMonitor.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _recursiveTransfers.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _manualTransfers.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _shellTransfers.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _externalEditor.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _lifetime.Dispose();
+            _windowIcon?.Dispose();
         }
 
         base.Dispose(disposing);
@@ -189,7 +201,7 @@ public sealed class MainForm : KryptonForm
             AccessibleName = "Main menu",
             BackColor = StorageHubTheme.Surface,
             ForeColor = StorageHubTheme.Text,
-            Renderer = StorageHubTheme.CreateToolStripRenderer(),
+            Renderer = DesktopAppearanceService.MenuRenderer,
             ShowItemToolTips = true,
             Padding = new Padding(6, 3, 6, 3)
         };
@@ -249,7 +261,6 @@ public sealed class MainForm : KryptonForm
             AccessibleDescription = "Workspace and connection commands.",
             BackColor = StorageHubTheme.Surface,
             ForeColor = StorageHubTheme.Text,
-            Renderer = StorageHubTheme.CreateToolStripRenderer(),
             Padding = new Padding(5, 4, 5, 4),
             AutoSize = true
         };
@@ -265,7 +276,6 @@ public sealed class MainForm : KryptonForm
             AccessibleName = "Application status",
             BackColor = StorageHubTheme.Surface,
             ForeColor = StorageHubTheme.TextMuted,
-            Renderer = StorageHubTheme.CreateToolStripRenderer(),
             SizingGrip = true
         };
         _locationStatus.AccessibleName = "Current location";
@@ -289,7 +299,6 @@ public sealed class MainForm : KryptonForm
     {
         var page = new TabPage(CreateTabLabel(title))
         {
-            BackColor = StorageHubTheme.Canvas,
             AccessibleName = $"{title} workspace",
             ToolTipText = title,
             Tag = CreateTabMetadata(UiGlyph.Folder, closable: true)
@@ -317,12 +326,16 @@ public sealed class MainForm : KryptonForm
             _ = EnqueueManualTransferAsync(destination, source, args.Operation);
         source.TransferDropRequested += (_, args) => EnqueuePaneDrop(page, source, args);
         destination.TransferDropRequested += (_, args) => EnqueuePaneDrop(page, destination, args);
+        source.ShellImportDropRequested += (_, args) => _ = ReviewShellImportAsync(args);
+        destination.ShellImportDropRequested += (_, args) => _ = ReviewShellImportAsync(args);
         source.SelectionStaged += (_, args) => StagePaneSelection(source, args);
         destination.SelectionStaged += (_, args) => StagePaneSelection(destination, args);
         source.CanPaste = () => _paneClipboard is not null;
         destination.CanPaste = () => _paneClipboard is not null;
         source.PasteRequested += (_, _) => PasteIntoPane(source);
         destination.PasteRequested += (_, _) => PasteIntoPane(destination);
+        source.DeleteRequested += (_, _) => _ = ReviewDeleteAsync(source);
+        destination.DeleteRequested += (_, _) => _ = ReviewDeleteAsync(destination);
         source.EditRequested += (_, _) => EditSelectedFile(source);
         destination.EditRequested += (_, _) => EditSelectedFile(destination);
         source.ObjectInspectionRequested += (_, _) => ShowObjectInspector(source);
@@ -331,15 +344,138 @@ public sealed class MainForm : KryptonForm
         destination.ConnectionOpened += (_, args) => _overview.RecordRecentConnection(args.Connection);
         split.Panel1.Controls.Add(source);
         split.Panel2.Controls.Add(destination);
+
+        var layoutToolbar = new ToolStrip
+        {
+            Dock = DockStyle.Top,
+            AutoSize = false,
+            Height = 40,
+            GripStyle = ToolStripGripStyle.Hidden,
+            BackColor = StorageHubTheme.SurfaceMuted,
+            ForeColor = StorageHubTheme.Text,
+            ImageScalingSize = new Size(20, 20),
+            Padding = new Padding(6, 5, 6, 5),
+            AccessibleName = $"{title} workspace layout"
+        };
+        var layoutMenu = new ToolStripDropDownButton("Layout: Side by side")
+        {
+            Image = CreateOwnedIcon(UiGlyph.Compare, 18),
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            AccessibleName = "Workspace pane layout",
+            ToolTipText = "Arrange the two workspace panes"
+        };
+        var sideBySide = new ToolStripMenuItem("Side by side")
+        {
+            Checked = true,
+            Image = CreateOwnedIcon(UiGlyph.Compare, 16)
+        };
+        var topAndBottom = new ToolStripMenuItem("Top and bottom")
+        {
+            Image = CreateOwnedIcon(UiGlyph.More, 16)
+        };
+        sideBySide.Click += (_, _) => SetWorkspaceOrientation(
+            split,
+            layoutMenu,
+            sideBySide,
+            topAndBottom,
+            stacked: false);
+        topAndBottom.Click += (_, _) => SetWorkspaceOrientation(
+            split,
+            layoutMenu,
+            sideBySide,
+            topAndBottom,
+            stacked: true);
+        layoutMenu.DropDownItems.Add(sideBySide);
+        layoutMenu.DropDownItems.Add(topAndBottom);
+        layoutToolbar.Items.Add(layoutMenu);
+        layoutToolbar.Items.Add(new ToolStripSeparator());
+        layoutToolbar.Items.Add(new ToolStripLabel("CLIPBOARD")
+        {
+            Image = CreateOwnedIcon(UiGlyph.File, 18),
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            ForeColor = StorageHubTheme.TextMuted,
+            ToolTipText = "StorageHub's staged file selection"
+        });
+        var clipboardStatus = new ToolStripLabel("Empty")
+        {
+            Name = "WorkspaceClipboardStatus",
+            ForeColor = StorageHubTheme.Text,
+            ToolTipText = "Copy or move files from either storage pane"
+        };
+        var pasteClipboard = new ToolStripButton("Paste to active pane")
+        {
+            Name = "WorkspaceClipboardPaste",
+            Image = CreateOwnedIcon(UiGlyph.Save, 18),
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            Enabled = false,
+            ToolTipText = "Review and paste the staged selection into the active storage pane"
+        };
+        pasteClipboard.Click += (_, _) =>
+        {
+            var target = destination.ContainsFocus ? destination : source.ContainsFocus ? source : destination;
+            PasteIntoPane(target);
+        };
+        var clearClipboard = new ToolStripButton("Clear")
+        {
+            Name = "WorkspaceClipboardClear",
+            Image = CreateOwnedIcon(UiGlyph.Delete, 18),
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            Enabled = false,
+            ToolTipText = "Clear the StorageHub clipboard"
+        };
+        clearClipboard.Click += (_, _) => ClearPaneClipboard();
+        layoutToolbar.Items.Add(clipboardStatus);
+        layoutToolbar.Items.Add(pasteClipboard);
+        layoutToolbar.Items.Add(clearClipboard);
+
         page.Controls.Add(split);
+        page.Controls.Add(layoutToolbar);
+        if (_updatePreferencesStore.Load().DefaultWorkspaceLayout == WorkspaceLayout.TopAndBottom)
+        {
+            SetWorkspaceOrientation(
+                split,
+                layoutMenu,
+                sideBySide,
+                topAndBottom,
+                stacked: true);
+        }
+        RefreshPaneClipboardPresentation();
         return page;
+    }
+
+    private static void SetWorkspaceOrientation(
+        SplitContainer split,
+        ToolStripDropDownButton layoutMenu,
+        ToolStripMenuItem sideBySide,
+        ToolStripMenuItem topAndBottom,
+        bool stacked)
+    {
+        split.Panel1MinSize = 0;
+        split.Panel2MinSize = 0;
+        split.Orientation = stacked ? Orientation.Horizontal : Orientation.Vertical;
+        var available = stacked ? split.ClientSize.Height : split.ClientSize.Width;
+        if (available > split.SplitterWidth)
+        {
+            var half = (available - split.SplitterWidth) / 2;
+            split.SplitterDistance = half;
+            var desiredMinimum = stacked ? 150 : 300;
+            var effectiveMinimum = Math.Min(desiredMinimum, half);
+            split.Panel1MinSize = effectiveMinimum;
+            split.Panel2MinSize = effectiveMinimum;
+        }
+
+        sideBySide.Checked = !stacked;
+        topAndBottom.Checked = stacked;
+        layoutMenu.Text = stacked ? "Layout: Top and bottom" : "Layout: Side by side";
+        split.AccessibleDescription = stacked
+            ? "SSH or storage panes arranged from top to bottom."
+            : "SSH or storage panes arranged from left to right.";
     }
 
     private TabPage CreateFixedTab(string title, UiGlyph glyph, Control content)
     {
         var page = new TabPage(CreateTabLabel(title))
         {
-            BackColor = StorageHubTheme.Canvas,
             AccessibleName = title,
             ToolTipText = title,
             Tag = CreateTabMetadata(glyph, closable: false)
@@ -351,13 +487,7 @@ public sealed class MainForm : KryptonForm
     private WorkspaceTabMetadata CreateTabMetadata(UiGlyph glyph, bool closable) =>
         new(closable, CreateOwnedIcon(glyph, 16));
 
-    private static string CreateTabLabel(string title)
-    {
-        const int maximumCharacters = 20;
-        return title.Length <= maximumCharacters
-            ? title
-            : string.Concat(title.AsSpan(0, maximumCharacters - 1), "\u2026");
-    }
+    private static string CreateTabLabel(string title) => title;
 
     private Bitmap CreateOwnedIcon(UiGlyph glyph, int size)
     {
@@ -477,32 +607,40 @@ public sealed class MainForm : KryptonForm
         };
     }
 
-    private void WorkspaceTabsSelectedIndexChanged(object? sender, EventArgs e)
+    private void WorkspaceTabsSelecting(object? sender, TabControlCancelEventArgs e)
     {
-        if (!_changingWorkspaceTabs &&
-            _workspaceTabs.SelectedIndex == _workspaceTabs.TabPages.Count - 1)
+        if (!_changingWorkspaceTabs && e.TabPage == _workspaceTabs.TabPages[^1])
         {
-            AddWorkspace();
+            e.Cancel = true;
+            if (_workspaceAddPending)
+            {
+                return;
+            }
+
+            _workspaceAddPending = true;
+            _workspaceTabs.BeginInvoke(() =>
+            {
+                _workspaceAddPending = false;
+                if (!_workspaceTabs.IsDisposed)
+                {
+                    AddWorkspace();
+                }
+            });
         }
     }
 
     private void WorkspaceTabsDrawItem(object? sender, DrawItemEventArgs e)
     {
         var page = _workspaceTabs.TabPages[e.Index];
-        var selected = e.Index == _workspaceTabs.SelectedIndex;
         var bounds = _workspaceTabs.GetTabRect(e.Index);
-        var background = selected ? StorageHubTheme.Surface : StorageHubTheme.SurfaceMuted;
-        using var brush = new SolidBrush(background);
+        using var brush = new SolidBrush(e.Index == _workspaceTabs.SelectedIndex
+            ? StorageHubTheme.Surface
+            : StorageHubTheme.SurfaceMuted);
         e.Graphics.FillRectangle(brush, bounds);
 
         if (page == _workspaceTabs.TabPages[^1])
         {
-            TextRenderer.DrawText(
-                e.Graphics,
-                page.Text,
-                Font,
-                bounds,
-                StorageHubTheme.Text,
+            TextRenderer.DrawText(e.Graphics, page.Text, Font, bounds, StorageHubTheme.Text,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             return;
         }
@@ -516,29 +654,24 @@ public sealed class MainForm : KryptonForm
 
         var closeBounds = GetWorkspaceCloseBounds(bounds);
         var textRight = metadata?.Closable == true ? closeBounds.Left - 5 : bounds.Right - 7;
-        var textBounds = Rectangle.FromLTRB(iconBounds.Right + 5, bounds.Top, textRight, bounds.Bottom);
-        TextRenderer.DrawText(
-            e.Graphics,
-            page.Text,
-            Font,
-            textBounds,
+        TextRenderer.DrawText(e.Graphics, page.Text, Font,
+            Rectangle.FromLTRB(iconBounds.Right + 5, bounds.Top, textRight, bounds.Bottom),
             StorageHubTheme.Text,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        if (metadata?.Closable != true)
+        if (metadata?.Closable == true)
         {
-            return;
+            using var pen = new Pen(StorageHubTheme.TextMuted, Math.Max(1F, DeviceDpi / 96F * 1.4F));
+            e.Graphics.DrawLine(pen, closeBounds.Left + 4, closeBounds.Top + 4, closeBounds.Right - 4, closeBounds.Bottom - 4);
+            e.Graphics.DrawLine(pen, closeBounds.Right - 4, closeBounds.Top + 4, closeBounds.Left + 4, closeBounds.Bottom - 4);
         }
-
-        using var pen = new Pen(StorageHubTheme.TextMuted, Math.Max(1F, DeviceDpi / 96F * 1.4F));
-        e.Graphics.DrawLine(pen, closeBounds.Left + 4, closeBounds.Top + 4, closeBounds.Right - 4, closeBounds.Bottom - 4);
-        e.Graphics.DrawLine(pen, closeBounds.Right - 4, closeBounds.Top + 4, closeBounds.Left + 4, closeBounds.Bottom - 4);
     }
 
     private void WorkspaceTabsMouseDown(object? sender, MouseEventArgs e)
     {
         for (var index = 0; index < _workspaceTabs.TabPages.Count - 1; index++)
         {
-            if (_workspaceTabs.TabPages[index].Tag is WorkspaceTabMetadata { Closable: true } &&
+            if (e.Button == MouseButtons.Left &&
+                _workspaceTabs.TabPages[index].Tag is WorkspaceTabMetadata { Closable: true } &&
                 GetWorkspaceCloseBounds(_workspaceTabs.GetTabRect(index)).Contains(e.Location))
             {
                 CloseWorkspaceAt(index);
@@ -835,7 +968,15 @@ public sealed class MainForm : KryptonForm
             selection = capturedSelection;
         }
 
-        var destinationSnapshot = destination.CaptureDestinationSnapshot();
+        _locationStatus.Text = "Indexing the destination folder for conflict review…";
+        if (!await destination.EnsureListingCompleteAsync(_lifetime.Token).ConfigureAwait(true))
+        {
+            ShowManualTransferFailure("StorageHub could not finish indexing the destination folder.");
+            return;
+        }
+
+        var destinationSnapshot = destination.CaptureDestinationSnapshot(
+            selection.Items.Select(static item => item.Name).ToArray());
         if (destinationSnapshot.IsFailure)
         {
             ShowManualTransferFailure(destinationSnapshot.Error.Message);
@@ -930,6 +1071,7 @@ public sealed class MainForm : KryptonForm
         _paneClipboard = new PaneClipboardSnapshot(source, args.Selection, args.Operation);
         var verb = args.Operation == TransferQueueOperation.Move ? "Cut" : "Copied";
         _locationStatus.Text = $"{verb} {args.Selection.Items.Count:N0} item(s). Choose a destination and paste.";
+        RefreshPaneClipboardPresentation();
     }
 
     private void PasteIntoPane(BrowserPaneControl destination)
@@ -939,11 +1081,250 @@ public sealed class MainForm : KryptonForm
             return;
         }
 
+        var operation = clipboard.Operation == TransferQueueOperation.Move ? "MOVE" : "COPY";
+        var itemSummary = clipboard.Selection.Items.Count == 1
+            ? clipboard.Selection.Items[0].Name
+            : $"{clipboard.Selection.Items.Count:N0} selected items";
+        var decision = MessageBox.Show(
+            this,
+            $"You are about to {operation} {itemSummary}.\n\n" +
+            $"From: {DescribePaneContext(clipboard.Selection.Context)}\n" +
+            $"To: {destination.PaneDisplayName}\n\n" +
+            (clipboard.Operation == TransferQueueOperation.Move
+                ? "The originals are removed after the transfer completes successfully."
+                : "The originals will remain in place."),
+            $"Review {operation.ToLowerInvariant()}",
+            MessageBoxButtons.OKCancel,
+            clipboard.Operation == TransferQueueOperation.Move
+                ? MessageBoxIcon.Warning
+                : MessageBoxIcon.Information,
+            MessageBoxDefaultButton.Button2);
+        if (decision != DialogResult.OK)
+        {
+            return;
+        }
+
         _ = EnqueueManualTransferAsync(
             clipboard.SourcePane,
             destination,
             clipboard.Operation,
             clipboard.Selection);
+    }
+
+    private void ClearPaneClipboard()
+    {
+        _paneClipboard = null;
+        _locationStatus.Text = "StorageHub clipboard cleared.";
+        RefreshPaneClipboardPresentation();
+    }
+
+    private void RefreshPaneClipboardPresentation()
+    {
+        var description = _paneClipboard is { } clipboard
+            ? $"{(clipboard.Operation == TransferQueueOperation.Move ? "Move" : "Copy")} · " +
+              $"{clipboard.Selection.Items.Count:N0} item(s) · {DescribePaneContext(clipboard.Selection.Context)}"
+            : "Empty";
+        foreach (var toolbar in FindControls<ToolStrip>(_workspaceTabs))
+        {
+            if (toolbar.Items["WorkspaceClipboardStatus"] is ToolStripLabel status)
+            {
+                status.Text = description;
+            }
+
+            if (toolbar.Items["WorkspaceClipboardPaste"] is ToolStripButton paste)
+            {
+                paste.Enabled = _paneClipboard is not null;
+            }
+
+            if (toolbar.Items["WorkspaceClipboardClear"] is ToolStripButton clear)
+            {
+                clear.Enabled = _paneClipboard is not null;
+            }
+        }
+
+        foreach (var pane in FindControls<BrowserPaneControl>(_workspaceTabs))
+        {
+            pane.RefreshCommandState();
+        }
+    }
+
+    private static IEnumerable<T> FindControls<T>(Control root) where T : Control
+    {
+        foreach (Control child in root.Controls)
+        {
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (var descendant in FindControls<T>(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
+    private static string DescribePaneContext(PaneTransferContext context) => context.Kind switch
+    {
+        PaneTransferContextKind.SavedConnection => string.IsNullOrEmpty(context.RelativePath)
+            ? "saved connection root"
+            : context.RelativePath,
+        PaneTransferContextKind.ThisPc => string.IsNullOrEmpty(context.RelativePath)
+            ? "This PC"
+            : context.RelativePath,
+        _ => string.IsNullOrEmpty(context.RelativePath) ? "storage pane" : context.RelativePath
+    };
+
+    private async Task ReviewDeleteAsync(BrowserPaneControl pane)
+    {
+        var captured = pane.CaptureSelectionSnapshot();
+        if (captured.IsFailure)
+        {
+            ShowManualTransferFailure(captured.Error.Message);
+            return;
+        }
+
+        var selection = captured.Value;
+        var preview = string.Join(
+            Environment.NewLine,
+            selection.Items.Take(5).Select(static item => $"  • {item.Name}"));
+        if (selection.Items.Count > 5)
+        {
+            preview += $"{Environment.NewLine}  • …and {selection.Items.Count - 5:N0} more";
+        }
+
+        var local = selection.Context.Kind == PaneTransferContextKind.ThisPc;
+        var decision = MessageBox.Show(
+            this,
+            $"You are about to DELETE {selection.Items.Count:N0} item(s):\n\n{preview}\n\n" +
+            (local
+                ? "These items will be sent to the Windows Recycle Bin."
+                : "Remote items will be deleted through the saved connection. This may be permanent."),
+            "Review delete",
+            MessageBoxButtons.OKCancel,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (decision != DialogResult.OK)
+        {
+            return;
+        }
+
+        if (!local)
+        {
+            await DeleteRemoteSelectionAsync(pane, selection).ConfigureAwait(true);
+            return;
+        }
+
+        try
+        {
+            foreach (var item in selection.Items)
+            {
+                _lifetime.Token.ThrowIfCancellationRequested();
+                var fullPath = Path.GetFullPath(item.RelativePath);
+                if (item.IsContainer)
+                {
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(
+                        fullPath,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                }
+                else
+                {
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                        fullPath,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                }
+            }
+
+            pane.Reload();
+            _locationStatus.Text = $"Sent {selection.Items.Count:N0} item(s) to the Recycle Bin.";
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            ShowManualTransferFailure($"The selected items could not be deleted. {error.Message}");
+        }
+
+    }
+
+    private async Task DeleteRemoteSelectionAsync(
+        BrowserPaneControl pane,
+        PaneSelectionSnapshot selection)
+    {
+        if (selection.Context.Kind != PaneTransferContextKind.SavedConnection ||
+            selection.Context.ConnectionId is not { } connectionId ||
+            string.IsNullOrWhiteSpace(selection.Context.RootIdentity))
+        {
+            ShowManualTransferFailure("Remote deletion requires a saved connection with a verified storage root.");
+            return;
+        }
+
+        await using var client = new NamedPipeObjectInspectorAgentClient();
+        var deleted = 0;
+        foreach (var item in selection.Items)
+        {
+            try
+            {
+                var response = await client.DeleteItemAsync(
+                    new StorageItemDeleteRequest(
+                        EditableFileIpcContract.CurrentVersion,
+                        new ObjectInspectorAddress(
+                            connectionId,
+                            selection.Context.RootIdentity,
+                            item.RelativePath,
+                            item.NativeItemId,
+                            item.VersionId,
+                            item.EntityTag),
+                        Recursive: item.IsContainer),
+                    _lifetime.Token).ConfigureAwait(true);
+                if (response.Failure is not null)
+                {
+                    ShowManualTransferFailure(
+                        deleted == 0
+                            ? response.Failure.Message
+                            : $"Deleted {deleted:N0} item(s), then stopped. {response.Failure.Message}");
+                    pane.Reload();
+                    return;
+                }
+
+                deleted++;
+            }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception error) when (
+                error is IOException or InvalidDataException or InvalidOperationException or TimeoutException)
+            {
+                ShowManualTransferFailure(
+                    deleted == 0
+                        ? "The background agent could not delete the selected items."
+                        : $"Deleted {deleted:N0} item(s), then the background agent became unavailable.");
+                pane.Reload();
+                return;
+            }
+        }
+
+        pane.Reload();
+        _locationStatus.Text = $"Deleted {deleted:N0} remote item(s).";
+    }
+
+    private static Icon? LoadWindowIcon()
+    {
+        try
+        {
+            var executable = Environment.ProcessPath;
+            return string.IsNullOrWhiteSpace(executable)
+                ? null
+                : Icon.ExtractAssociatedIcon(executable);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     private async void EditSelectedFile(BrowserPaneControl pane)
@@ -1107,6 +1488,13 @@ public sealed class MainForm : KryptonForm
                     ActiveJobs = e.Status.ActiveTransfers + e.Status.ActiveSyncRuns
                 });
                 _agentStatus.ToolTipText = e.Status.Detail;
+                if (e.Status.State == AgentConnectionState.Disconnected &&
+                    _packagedLifecycle is not null &&
+                    !_agentRecoveryInProgress &&
+                    !_lifetime.IsCancellationRequested)
+                {
+                    _ = RecoverAgentAsync();
+                }
                 if (_agentRestartPending && e.Status.ActiveTransfers + e.Status.ActiveSyncRuns == 0)
                 {
                     _ = RestartAgentForConcurrencyAsync();
@@ -1116,6 +1504,74 @@ public sealed class MainForm : KryptonForm
         catch (InvalidOperationException)
         {
             // The window handle can disappear between the guard and BeginInvoke during shutdown.
+        }
+    }
+
+    private async Task ReviewShellImportAsync(ShellImportDropRequestedEventArgs args)
+    {
+        try
+        {
+            var plan = await _shellTransfers.PlanShellImportAsync(new ShellImportPlanRequest(
+                ShellTransferIpcContract.CurrentVersion, args.SourcePaths, args.Destination), _lifetime.Token).ConfigureAwait(true);
+            if (plan.Failure is not null || string.IsNullOrWhiteSpace(plan.ReviewToken))
+            {
+                ShowManualTransferFailure(plan.Failure?.Message ?? "StorageHub could not review the dropped items.");
+                return;
+            }
+
+            var conflicts = plan.Items.Count(item => item.DestinationConflict);
+            var choice = conflicts == 0
+                ? MessageBox.Show(this, $"Import {plan.Items.Length:N0} file(s) into this saved connection?", "Import from Explorer", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK
+                    ? ShellImportDisposition.ReplaceFiles : ShellImportDisposition.Cancel
+                : MessageBox.Show(this, $"{conflicts:N0} file(s) conflict at the destination.\n\nYes replaces conflicting files. No skips them. Cancel stops the import.", "Import conflicts", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning) switch
+                {
+                    DialogResult.Yes => ShellImportDisposition.ReplaceFiles,
+                    DialogResult.No => ShellImportDisposition.SkipConflictingFiles,
+                    _ => ShellImportDisposition.Cancel
+                };
+            var committed = await _shellTransfers.CommitShellImportAsync(new ShellImportCommitRequest(
+                ShellTransferIpcContract.CurrentVersion, plan.ReviewToken, choice), _lifetime.Token).ConfigureAwait(true);
+            if (committed.Failure is not null) ShowManualTransferFailure(committed.Failure.Message);
+            else if (committed.Accepted) _locationStatus.Text = $"Queued {committed.TransferIds.Length:N0} Explorer import file(s).";
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
+            InvalidOperationException or TimeoutException or System.Text.Json.JsonException)
+        {
+            ShowManualTransferFailure("The background agent could not review the dropped files. Please retry.");
+        }
+    }
+
+    private async Task RecoverAgentAsync()
+    {
+        if (_packagedLifecycle is null || _agentRecoveryInProgress || _lifetime.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _agentRecoveryInProgress = true;
+        ApplyStatus(_status with { AgentState = AgentConnectionState.Starting });
+        _agentStatus.ToolTipText = "StorageHub is reconnecting to the background agent.";
+        try
+        {
+            var result = await _packagedLifecycle.EnsureAgentAsync(_lifetime.Token);
+            if (result.IsReady && !_lifetime.IsCancellationRequested)
+            {
+                ApplyStatus(_status with { AgentState = AgentConnectionState.Connected });
+                _agentStatus.ToolTipText = result.Status == AgentEnsureStatus.Started
+                    ? "The background agent was restarted and is ready."
+                    : "The background agent reconnected and is ready.";
+                _ = _overview.RefreshAsync(_lifetime.Token);
+                _ = _syncTasks.RefreshAsync(_lifetime.Token);
+                _ = _transferQueue.RefreshQueueAsync(_lifetime.Token);
+            }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _agentRecoveryInProgress = false;
         }
     }
 

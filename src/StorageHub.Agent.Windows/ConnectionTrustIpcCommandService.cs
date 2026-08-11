@@ -442,6 +442,8 @@ public sealed class ConnectionTrustIpcCommandService : IAgentIpcCommandHandler
                 TrustArtifactKind.TlsCertificate, endpoint.Host, endpoint.Port),
             SftpEndpoint { HostKeyPolicy: SshHostKeyPolicy.Pinned } endpoint => new TrustTarget(
                 TrustArtifactKind.SshHostKey, endpoint.Host, endpoint.Port),
+            SshClientEndpoint { HostKeyPolicy: SshHostKeyPolicy.Pinned } endpoint => new TrustTarget(
+                TrustArtifactKind.SshHostKey, endpoint.Host, endpoint.Port),
             _ => null
         };
         return target is null

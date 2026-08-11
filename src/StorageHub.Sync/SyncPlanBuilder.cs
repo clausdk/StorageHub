@@ -219,7 +219,8 @@ public static class SyncPlanBuilder
                     operation.Destination!,
                     operation.ExpectedLength,
                     operation.SourceDigest,
-                    operation.DestinationDigest),
+                    operation.DestinationDigest,
+                    operation.DestinationExisted),
                 SyncPlanOperationKind.Delete => SyncPlanOperation.Delete(sequence, operation.Source),
                 SyncPlanOperationKind.CreateDirectory => SyncPlanOperation.CreateDirectory(sequence, operation.Source),
                 _ => throw new InvalidOperationException("Unknown pending sync operation.")
@@ -375,7 +376,8 @@ public static class SyncPlanBuilder
                     sourceEntry,
                     destinationEntry.Address,
                     sourceDigest,
-                    destinationDigest));
+                    destinationDigest,
+                    destinationExisted: true));
             }
         }
 
@@ -464,28 +466,32 @@ public static class SyncPlanBuilder
                         left!,
                         Destination(request.RightRoot, path),
                         GetDigest(request.Left.PortableDigests, path),
-                        destinationDigest: null));
+                        destinationDigest: null,
+                        destinationExisted: false));
                     break;
                 case SyncChangeKind.LeftModified:
                     operations.Add(PendingOperation.Copy(
                         left!,
                         right!.Address,
                         GetDigest(request.Left.PortableDigests, path),
-                        GetDigest(request.Right.PortableDigests, path)));
+                        GetDigest(request.Right.PortableDigests, path),
+                        destinationExisted: true));
                     break;
                 case SyncChangeKind.RightCreated:
                     operations.Add(PendingOperation.Copy(
                         right!,
                         Destination(request.LeftRoot, path),
                         GetDigest(request.Right.PortableDigests, path),
-                        destinationDigest: null));
+                        destinationDigest: null,
+                        destinationExisted: false));
                     break;
                 case SyncChangeKind.RightModified:
                     operations.Add(PendingOperation.Copy(
                         right!,
                         left!.Address,
                         GetDigest(request.Right.PortableDigests, path),
-                        GetDigest(request.Left.PortableDigests, path)));
+                        GetDigest(request.Left.PortableDigests, path),
+                        destinationExisted: true));
                     break;
                 case SyncChangeKind.LeftDeleted when request.DeletionMode == SyncDeletionMode.Propagate:
                     operations.Add(PendingOperation.Delete(right!));
@@ -550,11 +556,11 @@ public static class SyncPlanBuilder
 
         var aDigest = GetDigest(request.Left.PortableDigests, path);
         var bDigest = GetDigest(request.Right.PortableDigests, path);
-        operations.Add(PendingOperation.Copy(locationA, Destination(request.LeftRoot, aName), aDigest, null));
-        operations.Add(PendingOperation.Copy(locationA, Destination(request.RightRoot, aName), aDigest, null));
-        operations.Add(PendingOperation.Copy(locationB, Destination(request.LeftRoot, bName), bDigest, null));
-        operations.Add(PendingOperation.Copy(locationB, Destination(request.RightRoot, bName), bDigest, null));
-        operations.Add(PendingOperation.Copy(locationA, locationB.Address, aDigest, bDigest));
+        operations.Add(PendingOperation.Copy(locationA, Destination(request.LeftRoot, aName), aDigest, null, false));
+        operations.Add(PendingOperation.Copy(locationA, Destination(request.RightRoot, aName), aDigest, null, false));
+        operations.Add(PendingOperation.Copy(locationB, Destination(request.LeftRoot, bName), bDigest, null, false));
+        operations.Add(PendingOperation.Copy(locationB, Destination(request.RightRoot, bName), bDigest, null, false));
+        operations.Add(PendingOperation.Copy(locationA, locationB.Address, aDigest, bDigest, true));
     }
 
     private static void BuildTwoWayContainer(
@@ -711,7 +717,12 @@ public static class SyncPlanBuilder
     {
         operations.Add(source.IsContainer
             ? PendingOperation.CreateDirectory(destination)
-            : PendingOperation.Copy(source, destination, sourceDigest, destinationDigest: null));
+            : PendingOperation.Copy(
+                source,
+                destination,
+                sourceDigest,
+                destinationDigest: null,
+                destinationExisted: false));
     }
 
     private static PortableContentDigest? GetDigest(
@@ -770,6 +781,7 @@ public static class SyncPlanBuilder
         long? ExpectedLength,
         PortableContentDigest? SourceDigest,
         PortableContentDigest? DestinationDigest,
+        bool DestinationExisted,
         string RelativePath,
         bool BeforeWrites)
     {
@@ -777,13 +789,15 @@ public static class SyncPlanBuilder
             StorageEntry source,
             StorageAddress destination,
             PortableContentDigest? sourceDigest,
-            PortableContentDigest? destinationDigest) => new(
+            PortableContentDigest? destinationDigest,
+            bool destinationExisted) => new(
             SyncPlanOperationKind.Copy,
             source.Address,
             destination,
             source.Size,
             sourceDigest,
             destinationDigest,
+            destinationExisted,
             destination.CanonicalRelativePath,
             false);
 
@@ -794,6 +808,7 @@ public static class SyncPlanBuilder
             null,
             null,
             null,
+            false,
             target.Address.CanonicalRelativePath,
             beforeWrites);
 
@@ -804,6 +819,7 @@ public static class SyncPlanBuilder
             null,
             null,
             null,
+            false,
             target.CanonicalRelativePath,
             false);
     }

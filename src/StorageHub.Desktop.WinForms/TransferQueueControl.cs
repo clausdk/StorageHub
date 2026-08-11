@@ -70,7 +70,6 @@ public sealed class TransferQueueControl : UserControl
             GripStyle = ToolStripGripStyle.Hidden,
             BackColor = StorageHubTheme.Surface,
             ForeColor = StorageHubTheme.Text,
-            Renderer = StorageHubTheme.CreateToolStripRenderer(),
             AccessibleName = "Transfer queue commands",
             Padding = new Padding(4, 2, 4, 2)
         };
@@ -110,8 +109,6 @@ public sealed class TransferQueueControl : UserControl
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Transfer queue views",
-            Padding = new Point(14, 4),
-            HotTrack = true
         };
         foreach (var definition in QueueTabs)
         {
@@ -186,7 +183,6 @@ public sealed class TransferQueueControl : UserControl
     {
         var page = new TabPage(definition.Name)
         {
-            BackColor = StorageHubTheme.Surface,
             AccessibleName = $"{definition.Name} transfers"
         };
         var grid = CreateGrid(definition.Name);
@@ -201,9 +197,9 @@ public sealed class TransferQueueControl : UserControl
     {
         var page = new TabPage("Logs")
         {
-            BackColor = StorageHubTheme.Surface,
             AccessibleName = "Durable activity log"
         };
+        StorageHubTheme.ConfigureTabs(_tabs);
         page.Controls.Add(new ActivityLogControl());
         _tabs.TabPages.Add(page);
     }
@@ -212,7 +208,6 @@ public sealed class TransferQueueControl : UserControl
     {
         var page = new TabPage("Sync Runs")
         {
-            BackColor = StorageHubTheme.Surface,
             AccessibleName = "Synchronization runs"
         };
         page.Controls.Add(new SyncRunsControl());
@@ -231,7 +226,6 @@ public sealed class TransferQueueControl : UserControl
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
             RowHeadersVisible = false,
             BackgroundColor = StorageHubTheme.Surface,
-            BorderStyle = BorderStyle.None,
             GridColor = StorageHubTheme.Border,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
             MultiSelect = true,

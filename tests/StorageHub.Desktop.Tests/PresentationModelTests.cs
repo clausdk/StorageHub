@@ -1,11 +1,12 @@
 using StorageHub.Agent.Ipc;
+using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop.Tests;
 
 public sealed class PresentationModelTests
 {
     [Fact]
-    public void CoreProviderCatalogDefinesTheFiveFirstClassEditors()
+    public void CoreProviderCatalogSeparatesStorageProvidersFromClientProviders()
     {
         Assert.Equal(
             [
@@ -13,7 +14,8 @@ public sealed class PresentationModelTests
                 StorageProviderKind.S3,
                 StorageProviderKind.Ftp,
                 StorageProviderKind.Ftps,
-                StorageProviderKind.Sftp
+                StorageProviderKind.Sftp,
+                StorageProviderKind.Ssh
             ],
             ConnectionProviderCatalog.All.Select(provider => provider.Kind));
 
@@ -21,6 +23,13 @@ public sealed class PresentationModelTests
         Assert.Equal(21, ConnectionProviderCatalog.Get(StorageProviderKind.Ftp).DefaultPort);
         Assert.Equal(21, ConnectionProviderCatalog.Get(StorageProviderKind.Ftps).DefaultPort);
         Assert.Equal(22, ConnectionProviderCatalog.Get(StorageProviderKind.Sftp).DefaultPort);
+        var ssh = ConnectionProviderCatalog.Get(StorageProviderKind.Ssh);
+        Assert.Equal(22, ssh.DefaultPort);
+        Assert.Equal(ConnectionProfileType.Client, ssh.Type);
+        Assert.All(
+            ConnectionProviderCatalog.All.Where(static provider => provider.Kind != StorageProviderKind.Ssh),
+            static provider => Assert.Equal(ConnectionProfileType.Storage, provider.Type));
+        Assert.Contains("no PuTTY", ssh.Summary, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

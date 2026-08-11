@@ -10,13 +10,30 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
     private const int MaximumManifestPages = 1_000;
     private const long MaximumCombinedPathCharacters = 4_000_000;
     private readonly ManualTransferController _transfers;
-    private readonly NamedPipeRemoteStorageAgentClient _storage = new();
-    private readonly NamedPipeObjectInspectorAgentClient _mutations = new();
+    private readonly IRemoteStorageAgentClient _storage;
+    private readonly IObjectInspectorAgentClient _mutations;
+    private readonly bool _ownsClients;
     private bool _disposed;
 
     internal RecursiveTransferController(ManualTransferController transfers)
+        : this(
+            transfers,
+            new NamedPipeRemoteStorageAgentClient(),
+            new NamedPipeObjectInspectorAgentClient(),
+            ownsClients: true)
     {
-        _transfers = transfers;
+    }
+
+    internal RecursiveTransferController(
+        ManualTransferController transfers,
+        IRemoteStorageAgentClient storage,
+        IObjectInspectorAgentClient mutations,
+        bool ownsClients = false)
+    {
+        _transfers = transfers ?? throw new ArgumentNullException(nameof(transfers));
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _mutations = mutations ?? throw new ArgumentNullException(nameof(mutations));
+        _ownsClients = ownsClients;
     }
 
     internal async Task<ManualTransferEnqueueResult> EnqueueAsync(
@@ -81,7 +98,8 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
         {
             throw;
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or InvalidOperationException or TimeoutException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
+            InvalidOperationException or TimeoutException or System.Text.Json.JsonException)
         {
             return Failure(
                 "manual_transfer.manifest_unavailable",
@@ -98,8 +116,11 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
         }
 
         _disposed = true;
-        await _storage.DisposeAsync().ConfigureAwait(false);
-        await _mutations.DisposeAsync().ConfigureAwait(false);
+        if (_ownsClients)
+        {
+            await _storage.DisposeAsync().ConfigureAwait(false);
+            await _mutations.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private async Task<ManifestBuildResult> BuildManifestAsync(

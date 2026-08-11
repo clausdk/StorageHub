@@ -24,7 +24,8 @@ public sealed record SyncPlanOperation
         StorageAddress? destination,
         long? expectedLength,
         PortableContentDigest? sourceDigest,
-        PortableContentDigest? destinationDigest)
+        PortableContentDigest? destinationDigest,
+        bool destinationExisted)
     {
         Sequence = sequence;
         Kind = kind;
@@ -33,6 +34,7 @@ public sealed record SyncPlanOperation
         ExpectedLength = expectedLength;
         SourceDigest = sourceDigest;
         DestinationDigest = destinationDigest;
+        DestinationExisted = destinationExisted;
     }
 
     public int Sequence { get; }
@@ -52,6 +54,9 @@ public sealed record SyncPlanOperation
     /// <summary>Portable pre-operation destination evidence captured by the planning snapshot.</summary>
     public PortableContentDigest? DestinationDigest { get; }
 
+    /// <summary>Whether the destination was present in the complete planning snapshot.</summary>
+    public bool DestinationExisted { get; }
+
     public bool IsDestructive => Kind == SyncPlanOperationKind.Delete;
 
     public static SyncPlanOperation Copy(
@@ -60,7 +65,8 @@ public sealed record SyncPlanOperation
         StorageAddress destination,
         long? expectedLength,
         PortableContentDigest? sourceDigest = null,
-        PortableContentDigest? destinationDigest = null)
+        PortableContentDigest? destinationDigest = null,
+        bool destinationExisted = false)
     {
         ValidateSequence(sequence);
         ArgumentNullException.ThrowIfNull(source);
@@ -78,14 +84,15 @@ public sealed record SyncPlanOperation
             destination,
             expectedLength,
             sourceDigest,
-            destinationDigest);
+            destinationDigest,
+            destinationExisted);
     }
 
     public static SyncPlanOperation Delete(int sequence, StorageAddress target)
     {
         ValidateSequence(sequence);
         ArgumentNullException.ThrowIfNull(target);
-        return new SyncPlanOperation(sequence, SyncPlanOperationKind.Delete, target, null, null, null, null);
+        return new SyncPlanOperation(sequence, SyncPlanOperationKind.Delete, target, null, null, null, null, false);
     }
 
     public static SyncPlanOperation CreateDirectory(int sequence, StorageAddress target)
@@ -99,7 +106,8 @@ public sealed record SyncPlanOperation
             null,
             null,
             null,
-            null);
+            null,
+            false);
     }
 
     private static void ValidateSequence(int sequence) =>
@@ -173,7 +181,7 @@ public readonly record struct SyncPlanDigest
 /// </summary>
 public sealed record ImmutableSyncPlan
 {
-    public const int CurrentDigestSchemaVersion = 3;
+    public const int CurrentDigestSchemaVersion = 4;
 
     private ImmutableSyncPlan(
         OperationPlanId planId,
@@ -275,11 +283,11 @@ public sealed record ImmutableSyncPlan
             throw new ArgumentException("Plan creation time must be UTC.", nameof(createdAtUtc));
         }
 
-        if (digestSchemaVersion is not (2 or CurrentDigestSchemaVersion))
+        if (digestSchemaVersion is not (2 or 3 or CurrentDigestSchemaVersion))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(digestSchemaVersion),
-                "Only sync plan digest schemas 2 and 3 are supported.");
+                "Only sync plan digest schemas 2, 3, and 4 are supported.");
         }
 
         var immutableOperations = operations
@@ -290,8 +298,10 @@ public sealed record ImmutableSyncPlan
             .ToImmutableArray();
         ValidateSequences(immutableOperations, nameof(operations));
         if (digestSchemaVersion < CurrentDigestSchemaVersion &&
-            immutableOperations.Any(static operation =>
-                operation.SourceDigest is not null || operation.DestinationDigest is not null))
+            immutableOperations.Any(operation =>
+                digestSchemaVersion < 3 &&
+                    (operation.SourceDigest is not null || operation.DestinationDigest is not null) ||
+                digestSchemaVersion < 4 && operation.DestinationExisted))
         {
             throw new ArgumentException(
                 "Legacy digest schemas cannot carry portable content evidence.",
@@ -358,6 +368,10 @@ public sealed record ImmutableSyncPlan
             {
                 writer.AppendNullableDigest(operation.SourceDigest);
                 writer.AppendNullableDigest(operation.DestinationDigest);
+            }
+            if (digestSchemaVersion >= 4)
+            {
+                writer.AppendBoolean(operation.DestinationExisted);
             }
         }
 

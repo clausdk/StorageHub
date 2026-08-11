@@ -351,6 +351,66 @@ public sealed class TransferExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_NonAtomicCompatibilityCreatesOnLegacyDestination()
+    {
+        var fixture = CreateFixture([1, 2, 3]);
+        fixture.Destination.Capabilities = Capabilities(StorageFeature.WriteStream);
+
+        var result = await TransferExecutor.ExecuteAsync(
+            fixture.Intent,
+            fixture.Source,
+            fixture.Destination,
+            new TransferExecutionOptions(AllowNonAtomicDestinationWrites: true));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(StorageWriteMode.Overwrite, fixture.Destination.LastWriteRequest!.Mode);
+        Assert.Equal(fixture.Intent.Destination, fixture.Destination.LastWriteRequest.Destination);
+        Assert.Equal(new byte[] { 1, 2, 3 }, fixture.Destination.WrittenBytes);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NonAtomicCompatibilityReplacesWithoutStaging()
+    {
+        var fixture = CreateFixture([1, 2, 3]);
+        var taggedSource = StorageAddress.Create(
+            fixture.Source.ProfileId,
+            fixture.Source.RootIdentity,
+            fixture.Intent.Source.CanonicalRelativePath,
+            entityTag: "source-etag").Value;
+        var versionedDestination = StorageAddress.Create(
+            fixture.Destination.ProfileId,
+            fixture.Destination.RootIdentity,
+            fixture.Intent.Destination.CanonicalRelativePath,
+            versionId: "destination-v1").Value;
+        fixture.Source.Entry = CreateEntry(taggedSource, 3);
+        fixture.Destination.Entry = CreateEntry(versionedDestination, 1);
+        fixture.Destination.Capabilities = Capabilities(StorageFeature.WriteStream);
+        var intent = new TransferIntent(
+            fixture.Intent.TransferJobId,
+            TransferOperationKind.Copy,
+            taggedSource,
+            versionedDestination,
+            3,
+            TransferVerificationPolicy.Size,
+            fixture.Intent.CreatedAtUtc);
+
+        var result = await TransferExecutor.ExecuteAsync(
+            intent,
+            fixture.Source,
+            fixture.Destination,
+            new TransferExecutionOptions(
+                Overwrite: true,
+                AllowNonAtomicDestinationWrites: true));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(StorageWriteMode.Overwrite, fixture.Destination.LastWriteRequest!.Mode);
+        Assert.Equal(versionedDestination.CanonicalRelativePath,
+            fixture.Destination.LastWriteRequest.Destination.CanonicalRelativePath);
+        Assert.Null(fixture.Destination.LastWriteRequest.ExpectedDestinationVersionId);
+        Assert.Equal(0, fixture.Destination.MoveCalls);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_TruncatedSourceAbortsUncommittedDestination()
     {
         var fixture = CreateFixture([1, 2, 3]);

@@ -43,6 +43,35 @@ public sealed class SqliteSyncOrchestrationTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task Sync_profile_round_trips_non_atomic_destination_policy()
+    {
+        var repository = new SqliteSyncProfileRepository(_database, new FixedTimeProvider(Now));
+        var desired = new SyncProfile(
+            _profile.ProfileId,
+            _profile.DisplayName,
+            _profile.LeftConnectionProfileId,
+            _profile.LeftRoot,
+            _profile.RightConnectionProfileId,
+            _profile.RightRoot,
+            _profile.Direction,
+            _profile.DeletionMode,
+            _profile.ConflictPolicy,
+            _profile.DeletionSafetyPolicy,
+            _profile.TransferOptions with { AllowNonAtomicDestinationWrites = true },
+            _profile.Enabled,
+            _profile.Revision,
+            _profile.CreatedAtUtc,
+            _profile.UpdatedAtUtc);
+
+        var updated = await repository.UpdateAsync(desired, expectedRevision: _profile.Revision);
+        var loaded = await repository.GetAsync(_profileId);
+
+        Assert.Equal(SyncProfileWriteStatus.Succeeded, updated.Status);
+        Assert.NotNull(loaded);
+        Assert.True(loaded.TransferOptions.AllowNonAtomicDestinationWrites);
+    }
+
+    [Fact]
     public async Task Policy_update_is_revisioned_and_atomically_invalidates_the_baseline()
     {
         var baselineStore = new SqliteSyncBaselineStore(_database);

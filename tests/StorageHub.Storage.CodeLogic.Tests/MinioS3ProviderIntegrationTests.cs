@@ -57,10 +57,17 @@ public sealed class MinioS3ProviderIntegrationTests : IAsyncLifetime
             _settings.Endpoint,
             _settings.AccessKey,
             _settings.SecretKey);
-        await _administrativeClient.PutBucketAsync(new PutBucketRequest
+        try
         {
-            BucketName = _settings.Bucket
-        });
+            await _administrativeClient.PutBucketAsync(new PutBucketRequest
+            {
+                BucketName = _settings.Bucket
+            });
+        }
+        catch (BucketAlreadyOwnedByYouException)
+        {
+            // External/reusable fixtures may retain the bucket between isolated test processes.
+        }
         await _administrativeClient.PutObjectAsync(new PutObjectRequest
         {
             BucketName = _settings.Bucket,
@@ -111,6 +118,14 @@ public sealed class MinioS3ProviderIntegrationTests : IAsyncLifetime
             connection.Session,
             _profileId,
             _rootIdentity);
+        var library = Libraries.Get<StorageLibrary>() ??
+            throw new InvalidOperationException("CL.Storage was not registered by CodeLogic.");
+        await ProviderSessionConformance.AssertTransfersToAndFromLocalAsync(
+            new CodeLogicStorageSessionFactory(library),
+            connection.Session,
+            _profileId,
+            _rootIdentity,
+            Assert.IsType<string>(_testRoot));
 
         var root = StorageAddress.Create(_profileId, _rootIdentity, string.Empty).Value;
         var rootListing = await connection.Session.ListAsync(

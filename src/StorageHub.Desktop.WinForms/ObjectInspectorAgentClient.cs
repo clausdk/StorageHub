@@ -39,6 +39,11 @@ public interface IObjectInspectorAgentClient : IAsyncDisposable
         StorageDirectoryEnsureRequest request,
         CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("This inspector client does not support directory creation.");
+
+    Task<StorageItemDeleteResponse> DeleteItemAsync(
+        StorageItemDeleteRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This inspector client does not support deleting storage items.");
 }
 
 /// <summary>
@@ -148,6 +153,19 @@ public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentC
             cancellationToken);
     }
 
+    public Task<StorageItemDeleteResponse> DeleteItemAsync(
+        StorageItemDeleteRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequest(request, request?.HasValidBounds == true, nameof(request));
+        return ExecuteAsync<StorageItemDeleteRequest, StorageItemDeleteResponse>(
+            EditableFileIpcMessageTypes.DeleteRequest,
+            EditableFileIpcMessageTypes.DeleteResponse,
+            request!,
+            response => ValidateDeleteResponse(request!, response),
+            cancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -238,7 +256,8 @@ public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentC
                 "StorageHub could not authenticate to the local background agent.");
         }
         catch (Exception error) when (
-            error is IOException or InvalidDataException or InvalidOperationException or JsonException)
+            error is IOException or TimeoutException or UnauthorizedAccessException or
+                InvalidDataException or InvalidOperationException or JsonException)
         {
             await DisconnectAfterFailureAsync().ConfigureAwait(false);
             throw;
@@ -385,6 +404,19 @@ public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentC
         }
     }
 
+    private static void ValidateDeleteResponse(
+        StorageItemDeleteRequest request,
+        StorageItemDeleteResponse response)
+    {
+        if (response.ContractVersion != request.ContractVersion ||
+            response.Address != request.Address ||
+            !IsValidFailure(response.Failure) ||
+            response.Failure is not null == response.Deleted)
+        {
+            throw InvalidResponse();
+        }
+    }
+
     private static void ValidateRequest<TRequest>(
         TRequest? request,
         bool validBounds,
@@ -437,9 +469,9 @@ public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentC
                 ClientName = "StorageHub.Desktop.ObjectInspector",
                 ClientVersion = version,
                 ConnectTimeout = options.ConnectTimeout,
-                MaxConnectAttempts = 1,
-                InitialReconnectDelay = TimeSpan.Zero,
-                MaximumReconnectDelay = TimeSpan.Zero
+                MaxConnectAttempts = 3,
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
+                MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
             }));
     }
 

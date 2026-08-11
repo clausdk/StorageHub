@@ -98,6 +98,14 @@ public sealed class SftpProviderIntegrationTests : IAsyncLifetime
             connection.Session,
             profileId,
             rootIdentity);
+        await ProviderSessionConformance.AssertTransfersToAndFromLocalAsync(
+            new CodeLogicStorageSessionFactory(Assert.IsType<StorageLibrary>(_library)),
+            connection.Session,
+            profileId,
+            rootIdentity,
+            Assert.IsType<string>(_testRoot),
+            StorageWriteMode.Overwrite,
+            supportsSafeRemoteCreate: false);
 
         var createOnlyAddress = StorageAddress.Create(
             profileId,

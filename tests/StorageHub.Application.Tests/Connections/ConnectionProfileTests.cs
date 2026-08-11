@@ -120,6 +120,21 @@ public sealed class ConnectionProfileTests
     }
 
     [Fact]
+    public void Ssh_is_a_client_profile_and_uses_managed_reference_authentication()
+    {
+        var profile = ConnectionProfile.Create(
+            ConnectionProfileId.New(),
+            Metadata("SSH shell"),
+            new SshClientEndpoint("ssh.example.test", 22, SshHostKeyPolicy.Pinned),
+            new UsernamePasswordAuthentication("operator", Password),
+            OperationalOptions(),
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(ConnectionProfileType.Client, profile.Type);
+        Assert.Equal(ConnectionProviderKind.Ssh, profile.Provider);
+    }
+
+    [Fact]
     public void Authentication_contracts_expose_references_not_secret_strings()
     {
         var passwordProperty = typeof(UsernamePasswordAuthentication)
@@ -195,7 +210,10 @@ public sealed class ConnectionProfileTests
             ConnectionProfile.Create(ConnectionProfileId.New(), Metadata("SFTP"),
                 new SftpEndpoint("sftp.example.test", 22, SshHostKeyPolicy.Pinned),
                 new SftpPrivateKeyAuthentication("operator", SecretReference.Create(), SecretReference.Create(),
-                    SftpPrivateKeyFormat.OpenSsh), OperationalOptions(), now)
+                    SftpPrivateKeyFormat.OpenSsh), OperationalOptions(), now),
+            ConnectionProfile.Create(ConnectionProfileId.New(), Metadata("SSH"),
+                new SshClientEndpoint("ssh.example.test", 22, SshHostKeyPolicy.Pinned),
+                new UsernamePasswordAuthentication("operator", Password), OperationalOptions(), now)
         };
         return data;
     }

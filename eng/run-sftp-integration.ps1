@@ -1,9 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $FixtureRoot,
-    [string] $DotNetArtifactsPath,
-    [string] $CLStorageProjectPath,
-    [string] $CodeLogicLibsRoot
+    [string] $DotNetArtifactsPath
 )
 
 Set-StrictMode -Version Latest
@@ -241,13 +239,6 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($DotNetArtifactsPath)) {
         $arguments += @('--artifacts-path', [IO.Path]::GetFullPath($DotNetArtifactsPath))
     }
-    if (-not [string]::IsNullOrWhiteSpace($CLStorageProjectPath)) {
-        $arguments += "-p:CLStorageProjectPath=$([IO.Path]::GetFullPath($CLStorageProjectPath))"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($CodeLogicLibsRoot)) {
-        $arguments += "-p:CodeLogicLibsRoot=$([IO.Path]::GetFullPath($CodeLogicLibsRoot))"
-    }
-
     Write-Host 'Running password, encrypted-key, and changed-host-key SFTP conformance on loopback.'
     & dotnet @arguments
     if ($LASTEXITCODE -ne 0) {
@@ -264,23 +255,20 @@ try {
         '--no-build',
         '--no-restore',
         '--filter',
-        'Category=SftpHostKeyDiscoveryIntegration',
+        'Category=SftpHostKeyDiscoveryIntegration|Category=SshTerminalIntegration',
         '--logger',
         'trx;LogFileName=sftp-host-key-discovery.trx'
     )
     if (-not [string]::IsNullOrWhiteSpace($DotNetArtifactsPath)) {
         $discoveryArguments += @('--artifacts-path', [IO.Path]::GetFullPath($DotNetArtifactsPath))
     }
-    if (-not [string]::IsNullOrWhiteSpace($CLStorageProjectPath)) {
-        $discoveryArguments += "-p:CLStorageProjectPath=$([IO.Path]::GetFullPath($CLStorageProjectPath))"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($CodeLogicLibsRoot)) {
-        $discoveryArguments += "-p:CodeLogicLibsRoot=$([IO.Path]::GetFullPath($CodeLogicLibsRoot))"
-    }
-
-    Write-Host 'Verifying unauthenticated SSH host-key discovery against the real loopback endpoint.'
+    Write-Host 'Verifying SSH host-key discovery and managed terminal sessions against the real loopback endpoint.'
     & dotnet @discoveryArguments
     if ($LASTEXITCODE -ne 0) {
+        Get-ChildItem -LiteralPath $runRoot -Filter '*.log' -File | ForEach-Object {
+            Write-Host "Fixture log: $($_.Name)"
+            Get-Content -LiteralPath $_.FullName -Tail 80
+        }
         throw "The SSH host-key discovery integration test failed with exit code $LASTEXITCODE."
     }
 }

@@ -103,6 +103,37 @@ public sealed class LocalFileBrowserTests
     }
 
     [Fact]
+    public async Task PagedDataSourceStreamsLargeDirectoriesThroughOpaqueContinuations()
+    {
+        var root = Directory.CreateTempSubdirectory("StorageHub.PagedBrowser.");
+        try
+        {
+            for (var index = 0; index < 205; index++)
+            {
+                await File.WriteAllTextAsync(Path.Combine(root.FullName, $"file-{index:D3}.txt"), "x");
+            }
+
+            using var source = new LocalFileBrowserDataSource();
+            var location = LocalBrowserLocation.FromDirectory(root.FullName);
+            var first = await source.BrowsePageAsync(location, 100, null, CancellationToken.None);
+            var second = await source.BrowsePageAsync(location, 100, first.ContinuationToken, CancellationToken.None);
+            var third = await source.BrowsePageAsync(location, 100, second.ContinuationToken, CancellationToken.None);
+
+            Assert.Equal(100, first.Entries.Count);
+            Assert.Equal(100, second.Entries.Count);
+            Assert.Equal(5, third.Entries.Count);
+            Assert.True(first.HasMore);
+            Assert.True(second.HasMore);
+            Assert.False(third.HasMore);
+            Assert.Equal(205, third.IndexedEntryCount);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ControllerDoesNotCommitFailedNavigationOrExposeExceptionDetails()
     {
         await using var controller = new LocalBrowserController(new ThrowingDataSource(
@@ -143,6 +174,26 @@ public sealed class LocalFileBrowserTests
         Assert.True(controller.CanGoBack);
     }
 
+    [Fact]
+    public async Task ControllerKeepsOnlyCurrentLocalPageWhileTrackingContinuationProgress()
+    {
+        var source = new PagedFakeDataSource();
+        await using var controller = new LocalBrowserController(source);
+        var location = LocalBrowserLocation.FromDirectory(Path.Combine(Path.GetTempPath(), "paged"));
+
+        var opened = await controller.NavigateAsync(LocalBrowserNavigationKind.Navigate, location);
+        var more = await controller.LoadMoreAsync();
+
+        Assert.Single(opened.Snapshot!.Entries);
+        Assert.True(opened.Snapshot.HasMore);
+        Assert.Equal(LocalBrowserNavigationStatus.Succeeded, more.Status);
+        Assert.True(more.AppendedPage);
+        Assert.Single(more.Snapshot!.Entries);
+        Assert.Equal("second.txt", more.Snapshot.Entries[0].Name);
+        Assert.Equal(2, more.Snapshot.IndexedEntryCount);
+        Assert.False(more.Snapshot.HasMore);
+    }
+
     private static LocalBrowserEntry Entry(string name) =>
         new(name, name, IsContainer: false, 1, null, "File", string.Empty);
 
@@ -170,5 +221,22 @@ public sealed class LocalFileBrowserTests
 
             return new LocalBrowserSnapshot(location, []);
         }
+    }
+
+    private sealed class PagedFakeDataSource : IPagedLocalFileBrowserDataSource
+    {
+        public Task<LocalBrowserSnapshot> BrowseAsync(
+            LocalBrowserLocation location,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<LocalBrowserSnapshot> BrowsePageAsync(
+            LocalBrowserLocation location,
+            int pageSize,
+            string? continuationToken,
+            CancellationToken cancellationToken) => Task.FromResult(continuationToken is null
+                ? new LocalBrowserSnapshot(location, [Entry("first.txt")], "next", 1)
+                : new LocalBrowserSnapshot(location, [Entry("second.txt")], null, 2));
+
+        public void Release(string? continuationToken) { }
     }
 }

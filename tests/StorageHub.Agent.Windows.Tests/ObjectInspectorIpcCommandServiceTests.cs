@@ -180,6 +180,43 @@ public sealed class ObjectInspectorIpcCommandServiceTests
     }
 
     [Fact]
+    public async Task DeleteUsesCapturedRootPathAndConditionalIdentity()
+    {
+        var profileId = ConnectionProfileId.New();
+        var address = new ObjectInspectorAddress(
+            profileId.Value,
+            "s3:root",
+            "folder/item.bin",
+            NativeItemId: "native-1",
+            EntityTag: "etag-1");
+        var session = new FakeAdvancedSession(profileId, address.RootIdentity)
+        {
+            EffectiveCapabilities = new EffectiveStorageCapabilities([
+                new(StorageFeature.Delete, FeatureSupport.Native()),
+                new(StorageFeature.ConditionalDelete, FeatureSupport.Native())]),
+            DeleteResult = StorageResult.Success()
+        };
+        var service = new ObjectInspectorIpcCommandService(new FakeConnector(
+            StorageResult<ISyncEndpointConnection>.Success(new FakeConnection(session))));
+
+        var response = await service.HandleAsync(IpcEnvelope.Create(
+            EditableFileIpcMessageTypes.DeleteRequest,
+            Guid.NewGuid(),
+            1,
+            new StorageItemDeleteRequest(
+                EditableFileIpcContract.CurrentVersion,
+                address,
+                Recursive: false)));
+        var payload = response.Payload.Deserialize<StorageItemDeleteResponse>();
+
+        Assert.Equal(EditableFileIpcMessageTypes.DeleteResponse, response.MessageType);
+        Assert.True(payload?.Deleted);
+        Assert.Null(payload?.Failure);
+        Assert.Equal(address.RelativePath, session.LastDeleteRequest?.Address.CanonicalRelativePath);
+        Assert.Equal(address.EntityTag, session.LastDeleteRequest?.ExpectedEntityTag);
+    }
+
+    [Fact]
     public async Task InFlightCancellationDisposesRootScopedConnection()
     {
         var profileId = ConnectionProfileId.New();
@@ -239,7 +276,8 @@ public sealed class ObjectInspectorIpcCommandServiceTests
     {
         public ConnectionProfileId ProfileId { get; } = profileId;
         public string RootIdentity { get; } = rootIdentity;
-        public EffectiveStorageCapabilities Capabilities => EffectiveStorageCapabilities.None;
+        public EffectiveStorageCapabilities EffectiveCapabilities { get; init; } = EffectiveStorageCapabilities.None;
+        public EffectiveStorageCapabilities Capabilities => EffectiveCapabilities;
         public StorageAddress? LastAddress { get; private set; }
         public StorageVersionListRequest? LastVersionRequest { get; private set; }
         public int MetadataReadCount { get; private set; }
@@ -252,6 +290,8 @@ public sealed class ObjectInspectorIpcCommandServiceTests
         public StorageResult<StorageTags> TagsResult { get; init; } =
             StorageResult<StorageTags>.Success(StorageTags.Create(
                 new Dictionary<string, string>()).Value);
+        public StorageResult DeleteResult { get; init; } = StorageResult.Success();
+        public StorageDeleteRequest? LastDeleteRequest { get; private set; }
 
         public async ValueTask<StorageResult<StorageObjectVersionPage>> ListObjectVersionsAsync(
             StorageAddress address,
@@ -319,7 +359,12 @@ public sealed class ObjectInspectorIpcCommandServiceTests
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask<StorageResult> DeleteAsync(
             StorageDeleteRequest request,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastDeleteRequest = request;
+            return ValueTask.FromResult(DeleteResult);
+        }
         public ValueTask<StorageResult<StorageEntry>> CopyAsync(
             StorageCopyRequest request,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();

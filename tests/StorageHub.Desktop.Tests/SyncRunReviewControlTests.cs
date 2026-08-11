@@ -33,7 +33,7 @@ public sealed class SyncRunReviewControlTests
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        // WinForms and Krypton both maintain process-wide UI state. xUnit runs test
+        // WinForms maintains process-wide UI state. xUnit runs test
         // classes concurrently, so starting one STA per class allowed multiple forms
         // to initialize that shared state at once. Serialize the UI checks, and start
         // the timeout only after this test owns the gate so queued tests do not spend

@@ -92,9 +92,9 @@ public sealed class SyncRunReviewControl : UserControl
         var tabs = new TabControl
         {
             Dock = DockStyle.Fill,
-            Padding = new Point(14, 4),
             AccessibleName = "Sync plan details"
         };
+        StorageHubTheme.ConfigureTabs(tabs);
         _planGrid = CreateGrid("Immutable plan operations");
         _planGrid.Columns.Add("Sequence", "#");
         _planGrid.Columns.Add("Action", "Action");
@@ -536,7 +536,7 @@ public sealed class SyncRunReviewControl : UserControl
 
     private static TabPage CreatePagedTab(string name, Control content, Button next)
     {
-        var page = new TabPage(name) { BackColor = StorageHubTheme.Surface, Padding = new Padding(4) };
+        var page = new TabPage(name) { Padding = new Padding(4) };
         var footer = new Panel { Dock = DockStyle.Bottom, Height = 42, Padding = new Padding(4) };
         footer.Controls.Add(next);
         page.Controls.Add(content);

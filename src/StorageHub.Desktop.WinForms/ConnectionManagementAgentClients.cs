@@ -257,7 +257,8 @@ public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionPr
             await DisconnectAfterFailureAsync().ConfigureAwait(false);
             throw;
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or InvalidOperationException or JsonException)
+        catch (Exception error) when (error is IOException or TimeoutException or UnauthorizedAccessException or
+            InvalidDataException or InvalidOperationException or JsonException)
         {
             await DisconnectAfterFailureAsync().ConfigureAwait(false);
             throw;
@@ -455,9 +456,9 @@ public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionPr
             ClientName = "StorageHub.Desktop.ConnectionManager",
             ClientVersion = version,
             ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 1,
-            InitialReconnectDelay = TimeSpan.Zero,
-            MaximumReconnectDelay = TimeSpan.Zero
+            MaxConnectAttempts = 3,
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
+            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
         }));
     }
 
@@ -680,7 +681,8 @@ public sealed class NamedPipeRemoteSecretVaultClient : IRemoteSecretVaultClient
             await DisconnectAfterFailureAsync().ConfigureAwait(false);
             throw;
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or InvalidOperationException or JsonException)
+        catch (Exception error) when (error is IOException or TimeoutException or UnauthorizedAccessException or
+            InvalidDataException or InvalidOperationException or JsonException)
         {
             await DisconnectAfterFailureAsync().ConfigureAwait(false);
             throw;
@@ -770,9 +772,9 @@ public sealed class NamedPipeRemoteSecretVaultClient : IRemoteSecretVaultClient
             ClientName = "StorageHub.Desktop.SecretEnrollment",
             ClientVersion = version,
             ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 1,
-            InitialReconnectDelay = TimeSpan.Zero,
-            MaximumReconnectDelay = TimeSpan.Zero,
+            MaxConnectAttempts = 3,
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
+            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400),
             FrameKind = IpcFrameKind.Secret
         }));
     }

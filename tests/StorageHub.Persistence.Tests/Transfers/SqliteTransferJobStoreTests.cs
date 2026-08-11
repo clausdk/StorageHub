@@ -162,7 +162,7 @@ public sealed class SqliteTransferJobStoreTests : IDisposable
         var legacyJob = Assert.IsType<DurableTransferJob>(await store.FindAsync(jobId));
 
         Assert.True(upgraded.IsReady, upgraded.Message);
-        Assert.Equal(SymmetricSyncSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
+        Assert.Equal(NonAtomicSyncWritesSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
         Assert.Equal(TransferState.NeedsReconciliation, legacyJob.State.State);
         Assert.Equal(TransferStatusCode.StateUncertain, legacyJob.State.StatusCode);
         Assert.Equal(1, legacyJob.State.Attempt);

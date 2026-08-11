@@ -289,29 +289,47 @@ public sealed class SyncTasksOverviewControl : UserControl
         var card = CreateCard();
         card.Dock = DockStyle.Fill;
         card.Margin = new Padding(column == 0 ? 0 : 6, 0, column == 2 ? 0 : 6, 0);
-        card.Controls.Add(new PictureBox
+        var grid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 2,
+            Padding = new Padding(12, 10, 12, 10),
+            Margin = Padding.Empty
+        };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+        var icon = new PictureBox
         {
             Image = UiIconFactory.Create(glyph, accent, 24),
             SizeMode = PictureBoxSizeMode.CenterImage,
-            Size = new Size(36, 36),
-            Location = new Point(12, 16)
-        });
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty
+        };
         var value = new Label
         {
             Text = "0",
-            AutoSize = true,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.BottomLeft,
             Font = new Font("Segoe UI Semibold", 15F),
             ForeColor = StorageHubTheme.Text,
-            Location = new Point(56, 12)
+            Margin = Padding.Empty
         };
-        card.Controls.Add(value);
-        card.Controls.Add(new Label
+        var titleLabel = new Label
         {
             Text = title,
-            AutoSize = true,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.TopLeft,
             ForeColor = StorageHubTheme.TextMuted,
-            Location = new Point(57, 47)
-        });
+            Margin = Padding.Empty
+        };
+        grid.Controls.Add(icon, 0, 0);
+        grid.SetRowSpan(icon, 2);
+        grid.Controls.Add(value, 1, 0);
+        grid.Controls.Add(titleLabel, 1, 1);
+        card.Controls.Add(grid);
         host.Controls.Add(card, column, 0);
         return value;
     }
@@ -320,21 +338,34 @@ public sealed class SyncTasksOverviewControl : UserControl
     {
         card = CreateCard();
         card.Dock = DockStyle.Fill;
-        card.Controls.Add(new PictureBox
+        var grid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 2,
+            Padding = new Padding(14, 10, 14, 14),
+            Margin = Padding.Empty
+        };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var icon = new PictureBox
         {
             Image = UiIconFactory.Create(glyph, StorageHubTheme.Primary, 20),
             SizeMode = PictureBoxSizeMode.CenterImage,
-            Size = new Size(30, 30),
-            Location = new Point(14, 8)
-        });
-        card.Controls.Add(new Label
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty
+        };
+        var titleLabel = new Label
         {
             Text = title,
-            AutoSize = true,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
             Font = StorageHubTheme.CreateSectionFont(),
             ForeColor = StorageHubTheme.Text,
-            Location = new Point(48, 10)
-        });
+            Margin = Padding.Empty
+        };
         var images = new ImageList { ImageSize = new Size(18, 18), ColorDepth = ColorDepth.Depth32Bit };
         images.Images.Add("enabled", UiIconFactory.Create(UiGlyph.Test, StorageHubTheme.Success, 18));
         images.Images.Add("disabled", UiIconFactory.Create(UiGlyph.Pause, StorageHubTheme.TextMuted, 18));
@@ -344,19 +375,22 @@ public sealed class SyncTasksOverviewControl : UserControl
         {
             View = View.Details,
             FullRowSelect = true,
-            BorderStyle = BorderStyle.None,
             SmallImageList = images,
             BackColor = StorageHubTheme.Surface,
             ForeColor = StorageHubTheme.Text,
             HeaderStyle = ColumnHeaderStyle.Nonclickable,
-            Location = new Point(14, 44),
-            Size = new Size(920, 170),
-            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 8, 0, 0)
         };
+        StorageHubTheme.ConfigureList(list);
         list.Columns.Add("Name", 360);
         list.Columns.Add(thirdColumn, 180);
         list.Columns.Add("Updated", 180);
-        card.Controls.Add(list);
+        grid.Controls.Add(icon, 0, 0);
+        grid.Controls.Add(titleLabel, 1, 0);
+        grid.Controls.Add(list, 0, 1);
+        grid.SetColumnSpan(list, 2);
+        card.Controls.Add(grid);
         return list;
     }
 

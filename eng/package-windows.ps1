@@ -8,9 +8,7 @@ param(
 
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
-    [string] $OutputRoot,
-
-    [string] $CodeLogicLibsRoot
+    [string] $OutputRoot
 )
 
 Set-StrictMode -Version Latest
@@ -380,20 +378,12 @@ function Get-PeSubsystem {
 function Get-LockFileSnapshot {
     param(
         [Parameter(Mandatory)]
-        [string] $SourceRoot,
-
-        [string] $ExternalLockFile
+        [string] $SourceRoot
     )
 
     $snapshot = @{}
     foreach ($lockFile in Get-ChildItem -LiteralPath $SourceRoot -Filter 'packages.lock.json' -File -Recurse) {
         $snapshot[$lockFile.FullName] = (Get-FileHash -LiteralPath $lockFile.FullName -Algorithm SHA256).Hash
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($ExternalLockFile) -and
-        (Test-Path -LiteralPath $ExternalLockFile)) {
-        $fullPath = [System.IO.Path]::GetFullPath($ExternalLockFile)
-        $snapshot[$fullPath] = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash
     }
 
     return $snapshot
@@ -431,7 +421,7 @@ function Assert-ReplaceableReleaseBundle {
         [string] $ExpectedRid,
 
         [Parameter(Mandatory)]
-        [string] $ExpectedClStorageRevision
+        [string] $ExpectedClStoragePackageVersion
     )
 
     if (-not (Test-Path -LiteralPath $BundlePath)) {
@@ -462,7 +452,7 @@ function Assert-ReplaceableReleaseBundle {
 
     if ($buildInfo.packId -cne $ExpectedPackId -or
         $buildInfo.rid -cne $ExpectedRid -or
-        $buildInfo.clStorageRevision -cne $ExpectedClStorageRevision -or
+        $buildInfo.clStoragePackageVersion -cne $ExpectedClStoragePackageVersion -or
         $buildInfo.unsigned -ne $true) {
         throw "Refusing to replace OutputRoot '$BundlePath' because its ownership metadata does not match this packager."
     }
@@ -491,7 +481,7 @@ $readmePath = Join-Path $repoRoot 'README.md'
 $iconPath = Join-Path $repoRoot 'assets\branding\storagehub.ico'
 $splashImagePath = Join-Path $repoRoot 'assets\branding\storagehub-icon.png'
 $toolManifestPath = Join-Path $repoRoot '.config\dotnet-tools.json'
-$directoryBuildPropsPath = Join-Path $repoRoot 'Directory.Build.props'
+$directoryPackagesPropsPath = Join-Path $repoRoot 'Directory.Packages.props'
 
 foreach ($requiredFile in @(
         $desktopProject,
@@ -501,7 +491,7 @@ foreach ($requiredFile in @(
         $iconPath,
         $splashImagePath,
         $toolManifestPath,
-        $directoryBuildPropsPath)) {
+        $directoryPackagesPropsPath)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Required packaging input '$requiredFile' does not exist."
     }
@@ -513,34 +503,16 @@ if ($manifestVpk.version -ne $script:VpkVersion -or $manifestVpk.rollForward -ne
     throw "The local vpk tool must be pinned to exact version $($script:VpkVersion) with rollForward disabled."
 }
 
-$propsText = Get-Content -LiteralPath $directoryBuildPropsPath -Raw
-$revisionMatch = [System.Text.RegularExpressions.Regex]::Match(
+$propsText = Get-Content -LiteralPath $directoryPackagesPropsPath -Raw
+$versionMatch = [System.Text.RegularExpressions.Regex]::Match(
     $propsText,
-    '<CLStorageExpectedRevision>([0-9a-fA-F]{40})</CLStorageExpectedRevision>')
-if (-not $revisionMatch.Success) {
-    throw 'Directory.Build.props does not contain a pinned CL.Storage revision.'
+    '<PackageVersion\s+Include="CodeLogic\.Storage"\s+Version="([^"]+)"\s*/>')
+if (-not $versionMatch.Success) {
+    throw 'Directory.Packages.props does not contain a pinned CodeLogic.Storage package version.'
 }
-$clStorageRevision = $revisionMatch.Groups[1].Value.ToLowerInvariant()
+$clStoragePackageVersion = $versionMatch.Groups[1].Value
 
-if ([string]::IsNullOrWhiteSpace($CodeLogicLibsRoot)) {
-    $CodeLogicLibsRoot = [System.Environment]::GetEnvironmentVariable('CodeLogicLibsRoot')
-}
-if ([string]::IsNullOrWhiteSpace($CodeLogicLibsRoot)) {
-    $userProfilePath = [System.Environment]::GetFolderPath(
-        [System.Environment+SpecialFolder]::UserProfile)
-    $CodeLogicLibsRoot = Join-Path $userProfilePath 'Documents\GitHub\CodeLogic.Libs'
-}
-
-$codeLogicRootPath = Resolve-AbsolutePath -Path $CodeLogicLibsRoot -BasePath $repoRoot
-$clStorageProject = Join-Path $codeLogicRootPath 'CL.Storage\CL.Storage.csproj'
-if (-not (Test-Path -LiteralPath $clStorageProject -PathType Leaf)) {
-    throw "CL.Storage was not found at '$clStorageProject'."
-}
-
-$externalLockFile = Join-Path (Split-Path -Parent $clStorageProject) 'packages.lock.json'
-$sourceLocksBefore = Get-LockFileSnapshot `
-    -SourceRoot (Join-Path $repoRoot 'src') `
-    -ExternalLockFile $externalLockFile
+$sourceLocksBefore = Get-LockFileSnapshot -SourceRoot (Join-Path $repoRoot 'src')
 
 $dotnetVersionOutput = & $dotnetCommand.Source --version
 if ($LASTEXITCODE -ne 0) {
@@ -659,16 +631,12 @@ foreach ($directory in @(
 
 $temporaryLicensePath = Join-Path $installerMetadata 'LICENSE.md'
 Copy-Item -LiteralPath $licensePath -Destination $temporaryLicensePath -Force
-# MSBuild treats a literal comma in -p values as a second property separator.
-# Percent-escape it so the compiler receives the two-entry PathMap unchanged.
-$pathMap = "$repoRoot=/_/StorageHub%2C$codeLogicRootPath=/_/CodeLogic.Libs"
+$pathMap = "$repoRoot=/_/StorageHub"
 
 $commonDependencyArguments = @(
     '--runtime', $script:Rid,
     '--artifacts-path', $buildArtifacts,
-    '--nologo',
-    "-p:CLStorageProjectPath=$clStorageProject",
-    "-p:CodeLogicLibsRoot=$codeLogicRootPath"
+    '--nologo'
 )
 $commonPublishArguments = @(
     '--configuration', 'Release',
@@ -740,9 +708,7 @@ try {
         -ArgumentList $agentArguments `
         -Description 'Publish self-contained StorageHub Agent as WinExe'
 
-    $sourceLocksAfter = Get-LockFileSnapshot `
-        -SourceRoot (Join-Path $repoRoot 'src') `
-        -ExternalLockFile $externalLockFile
+    $sourceLocksAfter = Get-LockFileSnapshot -SourceRoot (Join-Path $repoRoot 'src')
     Assert-LockFilesUnchanged -Before $sourceLocksBefore -After $sourceLocksAfter
 
     Copy-PublishPayload -SourceDirectory $desktopPublish -DestinationDirectory $stageRoot
@@ -761,7 +727,7 @@ try {
         version = $Version
         packId = $script:PackId
         storageHubCommit = $storageHubCommit
-        clStorageRevision = $clStorageRevision
+        clStoragePackageVersion = $clStoragePackageVersion
         rid = $script:Rid
         dotnetSdkVersion = $dotnetSdkVersion
         unsigned = $true
@@ -929,7 +895,7 @@ try {
         -BundlePath $releaseRoot `
         -ExpectedPackId $script:PackId `
         -ExpectedRid $script:Rid `
-        -ExpectedClStorageRevision $clStorageRevision
+        -ExpectedClStoragePackageVersion $clStoragePackageVersion
     $previousRelease = Join-Path $workRoot 'previous-release'
     if (Test-Path -LiteralPath $releaseRoot) {
         Move-Item -LiteralPath $releaseRoot -Destination $previousRelease

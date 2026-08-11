@@ -29,6 +29,14 @@ public interface ITransferQueueAgentClient : IAsyncDisposable
     Task<TransferMutationResponse> ReconcileAsync(
         TransferReconcileRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<ShellImportPlanResponse> PlanShellImportAsync(
+        ShellImportPlanRequest request,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException("This transfer client does not support shell imports.");
+
+    Task<ShellImportCommitResponse> CommitShellImportAsync(
+        ShellImportCommitRequest request,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException("This transfer client does not support shell imports.");
 }
 
 /// <summary>
@@ -143,6 +151,34 @@ public sealed class NamedPipeTransferQueueAgentClient : ITransferQueueAgentClien
             cancellationToken);
     }
 
+    public Task<ShellImportPlanResponse> PlanShellImportAsync(ShellImportPlanRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!ShellTransferIpcContract.IsSupported(request.ContractVersion) || !request.HasValidBounds)
+            throw new ArgumentException("The shell import plan is outside the negotiated IPC contract bounds.", nameof(request));
+        return ExecuteAsync<ShellImportPlanRequest, ShellImportPlanResponse>(
+            ShellTransferIpcMessageTypes.PlanImportRequest, ShellTransferIpcMessageTypes.PlanImportResponse, request,
+            response =>
+            {
+                if (!ShellTransferIpcContract.IsSupported(response.ContractVersion) || response.Items is null || response.Items.Length > ShellTransferIpcLimits.MaximumEntries ||
+                    response.Items.Any(item => item is null || string.IsNullOrWhiteSpace(item.RelativePath) || item.RelativePath.Length > TransferQueueIpcLimits.MaximumRelativePathLength || item.Length < 0) ||
+                    response.ReviewToken is { Length: > ShellTransferIpcLimits.MaximumReviewTokenLength }) throw InvalidResponse();
+            }, cancellationToken);
+    }
+
+    public Task<ShellImportCommitResponse> CommitShellImportAsync(ShellImportCommitRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!ShellTransferIpcContract.IsSupported(request.ContractVersion) || !request.HasValidBounds)
+            throw new ArgumentException("The shell import commit is outside the negotiated IPC contract bounds.", nameof(request));
+        return ExecuteAsync<ShellImportCommitRequest, ShellImportCommitResponse>(
+            ShellTransferIpcMessageTypes.CommitImportRequest, ShellTransferIpcMessageTypes.CommitImportResponse, request,
+            response =>
+            {
+                if (!ShellTransferIpcContract.IsSupported(response.ContractVersion) || response.TransferIds is null || response.TransferIds.Any(id => id == Guid.Empty)) throw InvalidResponse();
+            }, cancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -244,7 +280,8 @@ public sealed class NamedPipeTransferQueueAgentClient : ITransferQueueAgentClien
                 "StorageHub could not authenticate to the local background agent.");
         }
         catch (Exception error) when (
-            error is IOException or InvalidDataException or InvalidOperationException or JsonException)
+            error is IOException or TimeoutException or UnauthorizedAccessException or
+                InvalidDataException or InvalidOperationException or JsonException)
         {
             await DisconnectAfterFailureAsync().ConfigureAwait(false);
             throw;
@@ -443,9 +480,9 @@ public sealed class NamedPipeTransferQueueAgentClient : ITransferQueueAgentClien
             ClientName = "StorageHub.Desktop.TransferQueue",
             ClientVersion = version,
             ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 1,
-            InitialReconnectDelay = TimeSpan.Zero,
-            MaximumReconnectDelay = TimeSpan.Zero
+            MaxConnectAttempts = 3,
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
+            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
         }));
     }
 

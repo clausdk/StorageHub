@@ -209,6 +209,52 @@ public sealed class SyncPlanExecutorTests
     }
 
     [Fact]
+    public async Task NonAtomic_write_policy_substitution_is_rejected_by_execution_approval()
+    {
+        var fixture = CreateFixture();
+        var plan = CreatePlan(
+            SyncPlanOperation.Delete(0, fixture.RightAddress("obsolete.bin", versionId: "v1")));
+        var sessions = CreateSessions(fixture);
+        var snapshots = CreateSnapshots(fixture);
+        var approval = SyncExecutionApproval.Create(plan, sessions, snapshots);
+        var request = new SyncPlanExecutionRequest(
+            plan,
+            approval,
+            sessions,
+            snapshots,
+            transferOptions: new TransferExecutionOptions(AllowNonAtomicDestinationWrites: true));
+
+        var result = await SyncPlanExecutor.ExecuteAsync(request);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("sync.execution.approval_mismatch", result.Error.Code);
+        Assert.Equal(0, fixture.TotalProviderCalls);
+    }
+
+    [Fact]
+    public async Task NonAtomic_write_policy_executes_new_file_on_legacy_destination()
+    {
+        var fixture = CreateFixture();
+        fixture.Right.Capabilities = Capabilities(StorageFeature.WriteStream);
+        var plan = CreatePlan(SyncPlanOperation.Copy(
+            0,
+            fixture.LeftAddress("source.bin"),
+            fixture.RightAddress("source.bin"),
+            fixture.Payload.LongLength));
+
+        var result = await SyncPlanExecutor.ExecuteAsync(CreateRequest(
+            fixture,
+            plan,
+            transferOptions: new TransferExecutionOptions(
+                BufferSize: 4_096,
+                AllowNonAtomicDestinationWrites: true)));
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, result.Value.ExecutedOperations);
+        Assert.Equal(fixture.Payload, fixture.Right.WrittenBytes);
+    }
+
+    [Fact]
     public async Task Overwrite_without_version_or_entity_tag_identity_is_rejected_in_full_preflight()
     {
         var fixture = CreateFixture();
@@ -224,7 +270,8 @@ public sealed class SyncPlanExecutorTests
                 0,
                 fixture.LeftAddress("source.bin"),
                 fixture.RightAddress("source.bin"),
-                fixture.Payload.LongLength));
+                fixture.Payload.LongLength,
+                destinationExisted: true));
 
         var result = await SyncPlanExecutor.ExecuteAsync(CreateRequest(
             fixture,
@@ -254,7 +301,8 @@ public sealed class SyncPlanExecutorTests
             0,
             fixture.LeftAddress("source.bin", versionId: "source-v1"),
             fixture.RightAddress("source.bin", versionId: "destination-v1"),
-            fixture.Payload.LongLength));
+            fixture.Payload.LongLength,
+            destinationExisted: true));
 
         var result = await SyncPlanExecutor.ExecuteAsync(CreateRequest(
             fixture,
@@ -282,7 +330,8 @@ public sealed class SyncPlanExecutorTests
             0,
             fixture.LeftAddress("source.bin", versionId: "source-v1"),
             fixture.RightAddress("source.bin", versionId: "destination-v1"),
-            fixture.Payload.LongLength));
+            fixture.Payload.LongLength,
+            destinationExisted: true));
 
         var result = await SyncPlanExecutor.ExecuteAsync(CreateRequest(
             fixture,

@@ -110,7 +110,7 @@ public readonly record struct SyncExecutionApproval
         string? profilePolicySha256 = null)
     {
         using var writer = new ApprovalDigestWriter();
-        writer.AppendInt32(1); // Approval schema version.
+        writer.AppendInt32(2); // Approval schema version.
         writer.AppendString(plan.Digest.Sha256Hex);
         writer.AppendInt32((int)mode);
         writer.AppendSnapshot(snapshots.Left);
@@ -147,6 +147,7 @@ public readonly record struct SyncExecutionApproval
 
         writer.AppendBoolean(transferOptions.Overwrite);
         writer.AppendInt32(transferOptions.BufferSize);
+        writer.AppendBoolean(transferOptions.AllowNonAtomicDestinationWrites);
         writer.AppendBoolean(profilePolicySha256 is not null);
         if (profilePolicySha256 is not null)
         {

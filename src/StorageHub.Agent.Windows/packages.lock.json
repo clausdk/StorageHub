@@ -8,6 +8,22 @@
         "resolved": "4.1.0",
         "contentHash": "zmlsOZ+kRGW62zyn7HdblpsOIeqZ74FeA757rcS1NJTyp40NUq6SIBmnKGotjUEAHz/uQZPVDIh98kJ8fhQGwQ=="
       },
+      "CodeLogic.Storage": {
+        "type": "Direct",
+        "requested": "[4.6.83, )",
+        "resolved": "4.6.83",
+        "contentHash": "eiQXEE61niddl7DnI9Tz5iVO9vd3XZ2EjQX+d/ydz6n8uHpEvplDYmLYPOTByW642k4dra1xNdGGyByNsaF3lA==",
+        "dependencies": {
+          "AWSSDK.S3": "4.0.101.6",
+          "Azure.Identity": "1.21.0",
+          "Azure.Storage.Blobs": "12.29.1",
+          "CodeLogic": "[4.0.0, 5.0.0)",
+          "FluentFTP": "54.2.0",
+          "Google.Cloud.Storage.V1": "4.15.0",
+          "SSH.NET": "2025.1.0",
+          "WebDAVClient": "2.7.0"
+        }
+      },
       "SSH.NET": {
         "type": "Direct",
         "requested": "[2025.1.0, )",
@@ -319,19 +335,6 @@
         "resolved": "2.7.0",
         "contentHash": "GrQtXKI+kKgaNB9nJMiZLRLhJxXqsNM1b4sITwi1cnKNAM0Fezjnt4P/+rpFhZW467Rfd7BAFLtQ9XIgvXDcQw=="
       },
-      "CodeLogic.Storage": {
-        "type": "Project",
-        "dependencies": {
-          "AWSSDK.S3": "[4.0.101.6, )",
-          "Azure.Identity": "[1.21.0, )",
-          "Azure.Storage.Blobs": "[12.29.1, )",
-          "CodeLogic": "[4.*, )",
-          "FluentFTP": "[54.2.0, )",
-          "Google.Cloud.Storage.V1": "[4.15.0, )",
-          "SSH.NET": "[2025.1.0, )",
-          "WebDAVClient": "[2.7.0, )"
-        }
-      },
       "storagehub.agent": {
         "type": "Project",
         "dependencies": {
@@ -393,7 +396,7 @@
         "type": "Project",
         "dependencies": {
           "CodeLogic": "[4.1.0, )",
-          "CodeLogic.Storage": "[4.6.0, )",
+          "CodeLogic.Storage": "[4.6.83, )",
           "SSH.NET": "[2025.1.0, )",
           "StorageHub.Application": "[0.1.0, )",
           "StorageHub.Contracts": "[0.1.0, )",

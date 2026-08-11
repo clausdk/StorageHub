@@ -10,35 +10,17 @@ Read the [architecture](docs/architecture.md),
 [development status](docs/development-status.md). For security-sensitive defects,
 follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
-Development currently requires Windows, PowerShell, the .NET SDK selected by
-[global.json](global.json), and a local checkout of
-[Media2A/CodeLogic.Libs](https://github.com/Media2A/CodeLogic.Libs). The complete
-solution directly references `CL.Storage.csproj`.
+Development currently requires Windows, PowerShell, and the .NET SDK selected by
+[global.json](global.json). CodeLogic dependencies are restored from NuGet.
 
 ## Set up the repository
 
-The default layout is:
-
-```text
-%USERPROFILE%\Documents\GitHub\
-|-- StorageHub\
-`-- CodeLogic.Libs\
-    `-- CL.Storage\CL.Storage.csproj
-```
-
-If your repositories live elsewhere, define the paths per invocation:
-
 ```powershell
-$clRoot = 'C:\src\CodeLogic.Libs'
-$clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
-
-dotnet restore StorageHub.slnx --locked-mode `
-  -p:CLStorageProjectPath="$clProject" `
-  -p:CodeLogicLibsRoot="$clRoot"
+dotnet restore StorageHub.slnx --locked-mode
 ```
 
-Do not commit a machine-specific path or a locally packed replacement for
-`CL.Storage`.
+Package versions are centrally managed in `Directory.Packages.props`, and lock
+files make restores reproducible.
 
 ## Make a change
 
@@ -73,24 +55,11 @@ the invariant is safe.
 Run the same checks as CI from the repository root:
 
 ```powershell
-$clRoot = 'C:\src\CodeLogic.Libs'
-$clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
-
 dotnet restore StorageHub.slnx --locked-mode `
-  -p:NuGetAudit=true -p:NuGetAuditMode=all `
-  -p:CLStorageProjectPath="$clProject" `
-  -p:CodeLogicLibsRoot="$clRoot"
+  -p:NuGetAudit=true -p:NuGetAuditMode=all
 
-dotnet build StorageHub.slnx --configuration Release --no-restore `
-  -p:CLStorageProjectPath="$clProject" `
-  -p:CodeLogicLibsRoot="$clRoot"
-
-dotnet test StorageHub.slnx --configuration Release --no-build --no-restore `
-  -p:CLStorageProjectPath="$clProject" `
-  -p:CodeLogicLibsRoot="$clRoot"
-
-$env:CLStorageProjectPath = $clProject
-$env:CodeLogicLibsRoot = $clRoot
+dotnet build StorageHub.slnx --configuration Release --no-restore
+dotnet test StorageHub.slnx --configuration Release --no-build --no-restore
 dotnet list StorageHub.slnx package --vulnerable --include-transitive --no-restore
 ```
 

@@ -70,6 +70,71 @@ public sealed class PackagedDesktopLifecycleTests
     }
 
     [Fact]
+    public async Task EnsureAgentReplacesAvailableAgentFromAnotherBuildDirectory()
+    {
+        var fixture = CreateFixture(
+            agentAvailable: true,
+            waitResult: true,
+            shutdownResult: true,
+            enforceExpectedProcess: true,
+            expectedProcessRunning: false);
+
+        var result = await fixture.Lifecycle.EnsureAgentAsync();
+
+        Assert.Equal(AgentEnsureStatus.Started, result.Status);
+        Assert.Equal(AgentShutdownReason.Restart, Assert.Single(fixture.AgentClient.ShutdownReasons));
+        Assert.Single(fixture.Launcher.Launches);
+    }
+
+    [Fact]
+    public async Task EnsureAgentWaitsForAnExistingProcessThatIsStillStarting()
+    {
+        var fixture = CreateFixture(
+            agentAvailable: false,
+            waitResult: true,
+            enforceExpectedProcess: true,
+            expectedProcessRunning: true);
+
+        var result = await fixture.Lifecycle.EnsureAgentAsync();
+
+        Assert.Equal(AgentEnsureStatus.AlreadyRunning, result.Status);
+        Assert.Empty(fixture.Launcher.Launches);
+        Assert.Equal(1, fixture.AgentClient.WaitCalls);
+        Assert.Equal(0, fixture.ProcessMonitor!.TerminateCalls);
+    }
+
+    [Fact]
+    public async Task EnsureAgentReplacesAnUnresponsiveExpectedProcessBeforeLaunching()
+    {
+        var fixture = CreateFixture(
+            agentAvailable: false,
+            waitResult: false,
+            enforceExpectedProcess: true,
+            expectedProcessRunning: true,
+            terminateResult: true);
+
+        var result = await fixture.Lifecycle.EnsureAgentAsync();
+
+        Assert.Equal(AgentEnsureStatus.StartupTimedOut, result.Status);
+        Assert.Single(fixture.Launcher.Launches);
+        Assert.Equal(1, fixture.ProcessMonitor!.TerminateCalls);
+        Assert.Equal(2, fixture.AgentClient.WaitCalls);
+    }
+
+    [Theory]
+    [InlineData(AgentEnsureStatus.MissingExecutable, "missing")]
+    [InlineData(AgentEnsureStatus.LaunchFailed, "could not be started")]
+    [InlineData(AgentEnsureStatus.StartupTimedOut, "did not become ready")]
+    public void StartupPreflightExplainsWhyTheDesktopWillNotOpen(
+        AgentEnsureStatus status,
+        string expectedText)
+    {
+        var message = DesktopStartupPreflight.DescribeFailure(status);
+
+        Assert.Contains(expectedText, message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void VelopackHooksRegisterRefreshStopAndUnregisterWithoutADataDeletionSurface()
     {
         var fixture = CreateFixture(shutdownResult: true);
@@ -129,7 +194,10 @@ public sealed class PackagedDesktopLifecycleTests
         bool agentAvailable = false,
         bool fileExists = true,
         bool waitResult = false,
-        bool shutdownResult = false)
+        bool shutdownResult = false,
+        bool enforceExpectedProcess = false,
+        bool expectedProcessRunning = false,
+        bool terminateResult = false)
     {
         var applicationDirectory = Path.Combine(
             Path.GetTempPath(),
@@ -144,6 +212,9 @@ public sealed class PackagedDesktopLifecycleTests
             WaitResult = waitResult,
             ShutdownResult = shutdownResult
         };
+        var processMonitor = enforceExpectedProcess
+            ? new FakeProcessMonitor(expectedProcessRunning, terminateResult)
+            : null;
         var lifecycle = new PackagedDesktopLifecycle(
             desktopExecutable,
             applicationDirectory,
@@ -156,12 +227,14 @@ public sealed class PackagedDesktopLifecycleTests
                 StringComparison.Ordinal)
                     ? "1"
                     : null,
-            _ => fileExists);
+            _ => fileExists,
+            processMonitor: processMonitor);
         return new LifecycleFixture(
             lifecycle,
             runEntries,
             launcher,
             agentClient,
+            processMonitor,
             applicationDirectory,
             desktopExecutable);
     }
@@ -171,6 +244,7 @@ public sealed class PackagedDesktopLifecycleTests
         FakeRunEntryStore RunEntries,
         FakeProcessLauncher Launcher,
         FakeAgentLifecycleClient AgentClient,
+        FakeProcessMonitor? ProcessMonitor,
         string ApplicationDirectory,
         string DesktopExecutable);
 
@@ -199,7 +273,7 @@ public sealed class PackagedDesktopLifecycleTests
 
     private sealed class FakeAgentLifecycleClient : IPackagedAgentLifecycleClient
     {
-        public bool Available { get; init; }
+        public bool Available { get; set; }
 
         public bool WaitResult { get; init; }
 
@@ -231,7 +305,34 @@ public sealed class PackagedDesktopLifecycleTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ShutdownReasons.Add(reason);
+            if (ShutdownResult)
+            {
+                Available = false;
+            }
             return ValueTask.FromResult(ShutdownResult);
         }
+    }
+
+    private sealed class FakeProcessMonitor(bool running, bool terminateResult) : IPackagedAgentProcessMonitor
+    {
+        public int TerminateCalls { get; private set; }
+
+        public bool IsRunning(string executablePath) => running;
+
+        public ValueTask<bool> TryTerminateAsync(
+            string executablePath,
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            TerminateCalls++;
+            return ValueTask.FromResult(terminateResult);
+        }
+
+        public ValueTask<bool> WaitForExitAsync(
+            int processId,
+            string executablePath,
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default) => ValueTask.FromResult(true);
     }
 }

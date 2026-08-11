@@ -63,6 +63,11 @@ public interface IPackagedAgentProcessMonitor
 {
     bool IsRunning(string executablePath);
 
+    ValueTask<bool> TryTerminateAsync(
+        string executablePath,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default);
+
     ValueTask<bool> WaitForExitAsync(
         int processId,
         string executablePath,
@@ -142,14 +147,16 @@ public sealed record PackagedDesktopLifecycleOptions
 /// starting the sibling background Agent, and requesting a bounded graceful stop.
 /// It never reads, writes, or removes StorageHub's durable data directory.
 /// </summary>
-public sealed class PackagedDesktopLifecycle
+public sealed class PackagedDesktopLifecycle : IDisposable
 {
+    private readonly SemaphoreSlim _ensureGate = new(1, 1);
     private readonly string _desktopExecutablePath;
     private readonly string _agentDirectory;
     private readonly string _agentExecutablePath;
     private readonly ICurrentUserRunEntryStore _runEntryStore;
     private readonly IAgentProcessLauncher _processLauncher;
     private readonly IPackagedAgentLifecycleClient _agentClient;
+    private readonly IPackagedAgentProcessMonitor? _processMonitor;
     private readonly Func<string, string?> _getEnvironmentVariable;
     private readonly Func<string, bool> _fileExists;
     private readonly PackagedDesktopLifecycleOptions _options;
@@ -162,7 +169,8 @@ public sealed class PackagedDesktopLifecycle
         IPackagedAgentLifecycleClient agentClient,
         Func<string, string?> getEnvironmentVariable,
         Func<string, bool>? fileExists = null,
-        PackagedDesktopLifecycleOptions? options = null)
+        PackagedDesktopLifecycleOptions? options = null,
+        IPackagedAgentProcessMonitor? processMonitor = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(desktopExecutablePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationDirectory);
@@ -187,6 +195,7 @@ public sealed class PackagedDesktopLifecycle
         _runEntryStore = runEntryStore;
         _processLauncher = processLauncher;
         _agentClient = agentClient;
+        _processMonitor = processMonitor;
         _getEnvironmentVariable = getEnvironmentVariable;
         _fileExists = fileExists ?? File.Exists;
     }
@@ -209,6 +218,7 @@ public sealed class PackagedDesktopLifecycle
             applicationDirectory,
             options.AgentSubdirectory,
             options.AgentExecutableName);
+        var processMonitor = new WindowsPackagedAgentProcessMonitor();
         return new PackagedDesktopLifecycle(
             ResolveStableDesktopExecutable(executablePath),
             applicationDirectory,
@@ -217,10 +227,11 @@ public sealed class PackagedDesktopLifecycle
             new NamedPipePackagedAgentLifecycleClient(
                 DesktopApplicationVersion.Current,
                 agentExecutablePath,
-                new WindowsPackagedAgentProcessMonitor()),
+                processMonitor),
             Environment.GetEnvironmentVariable,
             File.Exists,
-            options);
+            options,
+            processMonitor);
     }
 
     private static string ResolveStableDesktopExecutable(string executablePath)
@@ -284,11 +295,49 @@ public sealed class PackagedDesktopLifecycle
     public async ValueTask<AgentEnsureResult> EnsureAgentAsync(
         CancellationToken cancellationToken = default)
     {
+        await _ensureGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (await _agentClient.IsAvailableAsync(cancellationToken).ConfigureAwait(false))
+            var available = await _agentClient.IsAvailableAsync(cancellationToken).ConfigureAwait(false);
+            if (available && (_processMonitor is null || _processMonitor.IsRunning(_agentExecutablePath)))
             {
                 return new AgentEnsureResult(AgentEnsureStatus.AlreadyRunning);
+            }
+
+            if (available)
+            {
+                var stopped = await _agentClient.RequestShutdownAndWaitAsync(
+                    AgentShutdownReason.Restart,
+                    _options.ShutdownTimeout,
+                    cancellationToken).ConfigureAwait(false);
+                if (!stopped || !await WaitUntilUnavailableAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    return new AgentEnsureResult(AgentEnsureStatus.LaunchFailed);
+                }
+            }
+
+            // A process can be alive while its IPC listener is still starting, temporarily
+            // saturated, or irrecoverably hung. Give the existing instance the full startup
+            // window before replacing only the exact packaged Agent executable. Launching a
+            // second copy immediately just makes the data-directory singleton reject it.
+            if (_processMonitor?.IsRunning(_agentExecutablePath) == true)
+            {
+                if (await _agentClient
+                    .WaitUntilAvailableAsync(_options.StartupTimeout, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    return new AgentEnsureResult(AgentEnsureStatus.AlreadyRunning);
+                }
+
+                if (!await _processMonitor
+                    .TryTerminateAsync(
+                        _agentExecutablePath,
+                        _options.ShutdownTimeout,
+                        cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    return new AgentEnsureResult(AgentEnsureStatus.LaunchFailed);
+                }
             }
 
             if (!_fileExists(_agentExecutablePath))
@@ -318,6 +367,24 @@ public sealed class PackagedDesktopLifecycle
         {
             return new AgentEnsureResult(AgentEnsureStatus.LaunchFailed);
         }
+        finally
+        {
+            _ensureGate.Release();
+        }
+    }
+
+    private async ValueTask<bool> WaitUntilUnavailableAsync(CancellationToken cancellationToken)
+    {
+        var deadline = TimeProvider.System.GetUtcNow() + _options.ShutdownTimeout;
+        while (TimeProvider.System.GetUtcNow() < deadline)
+        {
+            if (!await _agentClient.IsAvailableAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+        }
+        return false;
     }
 
     public async ValueTask<bool> TryStopAgentAsync(
@@ -338,6 +405,16 @@ public sealed class PackagedDesktopLifecycle
         {
             return false;
         }
+    }
+
+    public void Dispose()
+    {
+        // Program owns this lifecycle for the entire UI lifetime. If window shutdown
+        // cancels an in-flight recovery, let its finally block leave the gate before
+        // releasing the native wait handle.
+        _ensureGate.Wait();
+        _ensureGate.Release();
+        _ensureGate.Dispose();
     }
 
     private static string RequireAbsoluteExecutablePath(string value, string parameterName)

@@ -254,7 +254,10 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
             new DeletionSafetyPolicy(
                 reader.GetInt32(12),
                 decimal.Parse(reader.GetString(13), NumberStyles.Number, CultureInfo.InvariantCulture)),
-            new TransferExecutionOptions(reader.GetInt64(14) == 1, reader.GetInt32(15)),
+            new TransferExecutionOptions(
+                reader.GetInt64(14) == 1,
+                reader.GetInt32(15),
+                reader.GetInt64(22) == 1),
             reader.GetInt64(10) == 1,
             reader.GetInt64(11),
             SyncPersistenceUtilities.ParseTimestamp(reader.GetString(16), "sync profile creation time"),
@@ -282,13 +285,14 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
              direction, deletion_policy, conflict_policy, policy_hash, enabled,
              profile_revision, maximum_deletion_count, maximum_deletion_percentage,
              transfer_overwrite, transfer_buffer_size, created_utc, updated_utc,
-             behavior, include_globs_json, exclude_globs_json, include_hidden_files)
+             behavior, include_globs_json, exclude_globs_json, include_hidden_files,
+             allow_non_atomic_destination_writes)
             VALUES
             ($id, $name, $leftId, $rightId, $leftRoot, $rightRoot,
              $direction, $deletion, $conflict, $hash, $enabled,
              $revision, $maximumDeletes, $maximumPercentage,
              $overwrite, $bufferSize, $created, $updated,
-             $behavior, $includeGlobs, $excludeGlobs, $includeHidden);
+             $behavior, $includeGlobs, $excludeGlobs, $includeHidden, $allowNonAtomicWrites);
             """;
         Bind(command, profile);
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -325,6 +329,7 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
                 include_globs_json = $includeGlobs,
                 exclude_globs_json = $excludeGlobs,
                 include_hidden_files = $includeHidden,
+                allow_non_atomic_destination_writes = $allowNonAtomicWrites,
                 updated_utc = $updated,
                 baseline_generation = CASE WHEN $reset = 1 THEN 0 ELSE baseline_generation END,
                 baseline_revision = CASE WHEN $reset = 1 THEN baseline_revision + 1 ELSE baseline_revision END,
@@ -364,6 +369,9 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
         command.Parameters.AddWithValue("$includeGlobs", JsonSerializer.Serialize(profile.FilterPolicy.IncludeGlobs));
         command.Parameters.AddWithValue("$excludeGlobs", JsonSerializer.Serialize(profile.FilterPolicy.ExcludeGlobs));
         command.Parameters.AddWithValue("$includeHidden", profile.FilterPolicy.IncludeHiddenFiles ? 1 : 0);
+        command.Parameters.AddWithValue(
+            "$allowNonAtomicWrites",
+            profile.TransferOptions.AllowNonAtomicDestinationWrites ? 1 : 0);
     }
 
     private static async Task DeleteBaselineAsync(
@@ -477,6 +485,6 @@ public sealed class SqliteSyncProfileRepository : ISyncProfileRepository
         direction, deletion_policy, conflict_policy, policy_hash, enabled, profile_revision,
         maximum_deletion_count, maximum_deletion_percentage, transfer_overwrite,
         transfer_buffer_size, created_utc, updated_utc, behavior, include_globs_json,
-        exclude_globs_json, include_hidden_files
+        exclude_globs_json, include_hidden_files, allow_non_atomic_destination_writes
         """;
 }

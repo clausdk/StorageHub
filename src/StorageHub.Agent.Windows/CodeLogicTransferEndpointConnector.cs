@@ -2,6 +2,7 @@ using StorageHub.Agent.Transfers;
 using StorageHub.Application.Connections;
 using StorageHub.Contracts.Results;
 using StorageHub.Domain.Identifiers;
+using StorageHub.Domain.Storage;
 using StorageHub.Storage.Abstractions;
 using StorageHub.Storage.CodeLogic;
 
@@ -79,6 +80,13 @@ internal sealed class CodeLogicTransferEndpointConnector(
                 "The provider connection could not be opened.");
         }
     }
+
+    public ValueTask<StorageResult<ITransferEndpointConnection>> OpenAsync(
+        StorageAddress address,
+        CancellationToken cancellationToken = default) =>
+        LocalFilesystemTransferEndpoint.IsLocalSource(address)
+            ? ValueTask.FromResult(LocalFilesystemTransferEndpoint.Open(address))
+            : OpenAsync(address.ProfileId, cancellationToken);
 
     private static StorageResult<ITransferEndpointConnection> Fail(
         string code,

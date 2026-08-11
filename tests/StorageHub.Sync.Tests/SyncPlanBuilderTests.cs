@@ -61,6 +61,7 @@ public sealed class SyncPlanBuilderTests
         Assert.True(result.IsSuccess);
         var operation = Assert.Single(result.Value.Plan.Operations);
         Assert.Equal(SyncPlanOperationKind.Copy, operation.Kind);
+        Assert.False(operation.DestinationExisted);
         Assert.Equal("source.txt", operation.SourceOrTarget.CanonicalRelativePath);
         Assert.Equal("source.txt", operation.Destination!.CanonicalRelativePath);
         Assert.Empty(result.Value.Conflicts);
@@ -177,6 +178,7 @@ public sealed class SyncPlanBuilderTests
         var operation = Assert.Single(result.Value.Plan.Operations);
         Assert.Equal("left-v2", operation.SourceOrTarget.VersionId);
         Assert.Equal("right-v1", operation.Destination!.VersionId);
+        Assert.True(operation.DestinationExisted);
     }
 
     [Fact]

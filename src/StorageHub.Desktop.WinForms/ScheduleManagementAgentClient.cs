@@ -235,7 +235,8 @@ public sealed class NamedPipeScheduleManagementAgentClient : IScheduleManagement
             throw;
         }
         catch (Exception error) when (
-            error is IOException or InvalidDataException or InvalidOperationException or JsonException)
+            error is IOException or TimeoutException or UnauthorizedAccessException or
+                InvalidDataException or InvalidOperationException or JsonException)
         {
             await DisconnectAfterFailureAsync().ConfigureAwait(false);
             throw;
@@ -440,9 +441,9 @@ public sealed class NamedPipeScheduleManagementAgentClient : IScheduleManagement
             ClientName = "StorageHub.Desktop.ScheduleManagement",
             ClientVersion = version,
             ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 1,
-            InitialReconnectDelay = TimeSpan.Zero,
-            MaximumReconnectDelay = TimeSpan.Zero
+            MaxConnectAttempts = 3,
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
+            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
         }));
     }
 

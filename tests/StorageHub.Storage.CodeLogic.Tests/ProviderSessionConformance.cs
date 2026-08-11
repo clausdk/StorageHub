@@ -3,22 +3,116 @@ using StorageHub.Domain.Identifiers;
 using StorageHub.Domain.Storage;
 using StorageHub.Storage.Abstractions;
 using StorageHub.Storage.Models;
+using StorageHub.Transfers;
+using CL.Storage.Configuration;
 
 namespace StorageHub.Storage.CodeLogic.Tests;
 
 internal static class ProviderSessionConformance
 {
+    public static async Task AssertTransfersToAndFromLocalAsync(
+        CodeLogicStorageSessionFactory factory,
+        IStorageEndpointSession remoteSession,
+        ConnectionProfileId remoteProfileId,
+        string remoteRootIdentity,
+        string testRoot,
+        StorageWriteMode remoteWriteMode = StorageWriteMode.CreateNew,
+        bool supportsSafeRemoteCreate = true)
+    {
+        var localRoot = Path.Combine(testRoot, $"transfer-local-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(localRoot);
+        var localProfileId = ConnectionProfileId.New();
+        var localRootIdentity = $"local-transfer-root-{Guid.NewGuid():N}";
+        var registered = await factory.RegisterLocalAsync(
+            localProfileId,
+            localRootIdentity,
+            new LocalConnectionConfig { RootPath = localRoot, Enabled = true });
+        Assert.True(registered.IsSuccess, Failure(registered.Error));
+
+        await using var localConnection = registered.Value;
+        var localToRemotePayload = Enumerable.Range(0, 96_000)
+            .Select(index => (byte)(index % 239))
+            .ToArray();
+        const string localSourcePath = "outbound/local-to-remote.bin";
+        var localSourceFile = Path.Combine(localRoot, "outbound", "local-to-remote.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(localSourceFile)!);
+        await File.WriteAllBytesAsync(localSourceFile, localToRemotePayload);
+
+        var localSource = Address(localProfileId, localRootIdentity, localSourcePath);
+        var remoteDestination = Address(
+            remoteProfileId,
+            remoteRootIdentity,
+            $"transfers/local-to-remote-{Guid.NewGuid():N}.bin");
+        var outbound = await TransferExecutor.ExecuteAsync(
+            new TransferIntent(
+                TransferJobId.New(),
+                TransferOperationKind.Copy,
+                localSource,
+                remoteDestination,
+                localToRemotePayload.LongLength,
+                TransferVerificationPolicy.StrongHashWhenAvailable,
+                DateTimeOffset.UtcNow),
+            localConnection.Session,
+            remoteSession);
+        if (supportsSafeRemoteCreate)
+        {
+            Assert.True(outbound.IsSuccess, Failure(outbound.Error));
+            Assert.Equal(localToRemotePayload, await ReadAllAsync(remoteSession, remoteDestination));
+        }
+        else
+        {
+            Assert.True(outbound.IsFailure);
+            Assert.Equal("transfer.conditional_mutation.unsupported", outbound.Error.Code);
+        }
+
+        var remoteToLocalPayload = Enumerable.Range(0, 112_000)
+            .Select(index => (byte)(255 - (index % 251)))
+            .ToArray();
+        var remoteSource = Address(
+            remoteProfileId,
+            remoteRootIdentity,
+            $"transfers/remote-to-local-{Guid.NewGuid():N}.bin");
+        var committedRemote = await WriteAsync(
+            remoteSession,
+            remoteSource,
+            remoteToLocalPayload,
+            remoteWriteMode);
+        var localDestination = Address(
+            localProfileId,
+            localRootIdentity,
+            "inbound/remote-to-local.bin");
+        var inbound = await TransferExecutor.ExecuteAsync(
+            new TransferIntent(
+                TransferJobId.New(),
+                TransferOperationKind.Copy,
+                committedRemote.Address,
+                localDestination,
+                remoteToLocalPayload.LongLength,
+                TransferVerificationPolicy.StrongHashWhenAvailable,
+                DateTimeOffset.UtcNow),
+            remoteSession,
+            localConnection.Session);
+        Assert.True(inbound.IsSuccess, Failure(inbound.Error));
+        Assert.Equal(
+            remoteToLocalPayload,
+            await File.ReadAllBytesAsync(Path.Combine(localRoot, "inbound", "remote-to-local.bin")));
+    }
+
     public static async Task AssertBoundedRoundTripAsync(
         IStorageEndpointSession session,
         ConnectionProfileId profileId,
         string rootIdentity,
-        StorageWriteMode writeMode = StorageWriteMode.CreateNew)
+        StorageWriteMode writeMode = StorageWriteMode.CreateNew,
+        bool assertCommittedSize = true)
     {
         var payload = Enumerable.Range(0, 180_000).Select(index => (byte)(index % 241)).ToArray();
         var destination = Address(profileId, rootIdentity, "nested/naïve-東京.bin");
 
         var committed = await WriteAsync(session, destination, payload, writeMode);
-        Assert.Equal(payload.LongLength, committed.Size);
+        if (assertCommittedSize)
+        {
+            Assert.Equal(payload.LongLength, committed.Size);
+        }
 
         var read = await session.OpenReadAsync(new StorageReadRequest(destination));
         Assert.True(read.IsSuccess, Failure(read.Error));
@@ -143,5 +237,8 @@ internal static class ProviderSessionConformance
 
     private static string Failure(StorageFailure? failure) => failure is null
         ? "The operation failed without a structured failure."
-        : $"{failure.Code}: {failure.Message}";
+        : $"{failure.Code}: {failure.Message}" +
+          (string.IsNullOrWhiteSpace(failure.ProviderCode)
+              ? string.Empty
+              : $" (provider: {failure.ProviderCode})");
 }

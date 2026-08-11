@@ -9,6 +9,7 @@ public sealed class ConnectionEditorDraftFactoryTests
     [InlineData(StorageProviderKind.Ftp, 30, 0)]
     [InlineData(StorageProviderKind.Ftps, 30, 0)]
     [InlineData(StorageProviderKind.Sftp, 30, 0)]
+    [InlineData(StorageProviderKind.Ssh, 30, 0)]
     public void RemoteDraftsUseOnlyOperationalDefaultsTheirProviderCanEnforce(
         StorageProviderKind provider,
         int operationTimeoutSeconds,
@@ -44,6 +45,21 @@ public sealed class ConnectionEditorDraftFactoryTests
         Assert.Equal(ConnectionAuthenticationKind.SftpPrivateKey, draft.Authentication.Kind);
         Assert.Equal(values["privateKeyReference"], draft.Authentication.PrivateKeyReference);
         Assert.Equal(values["privateKeyPassphraseReference"], draft.Authentication.PrivateKeyPassphraseReference);
+    }
+
+    [Fact]
+    public void BuildsSshClientDraftWithLabelsAndClientType()
+    {
+        var values = ValidValues(StorageProviderKind.Ssh);
+        values["folder"] = "Operations";
+        values["labels"] = "production, linux, production";
+
+        var draft = ConnectionEditorDraftFactory.Build(StorageProviderKind.Ssh, values);
+
+        Assert.Equal(ConnectionProfileType.Client, draft.Type);
+        Assert.Equal(StorageConnectionProvider.Ssh, draft.Endpoint.Provider);
+        Assert.Equal("Operations", draft.Metadata.FolderPath);
+        Assert.Equal(["production", "linux"], Assert.IsType<string[]>(draft.Metadata.Tags));
     }
 
     [Fact]
@@ -135,6 +151,16 @@ public sealed class ConnectionEditorDraftFactoryTests
         {
             ["profileName"] = "SFTP",
             ["host"] = "sftp.example.test",
+            ["port"] = "22",
+            ["username"] = "operator",
+            ["authenticationMode"] = "Password reference",
+            ["passwordReference"] = "shs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ["hostKeyFingerprint"] = new string('A', 64)
+        },
+        StorageProviderKind.Ssh => new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["profileName"] = "SSH shell",
+            ["host"] = "ssh.example.test",
             ["port"] = "22",
             ["username"] = "operator",
             ["authenticationMode"] = "Password reference",

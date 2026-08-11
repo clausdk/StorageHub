@@ -12,11 +12,23 @@ public sealed class BrowserPaneControl : UserControl
     private const int MaximumCachedDirectoriesPerConnection = 2_000;
     private const int MaximumTreeDirectories = 2_000;
     private const int MaximumTreeChildrenPerDirectory = 500;
+    private static readonly BrowserListItem ParentNavigationItem = new(
+        "..",
+        string.Empty,
+        "Parent folder",
+        string.Empty,
+        "Go up one level",
+        IsContainer: true,
+        Kind: StorageItemKind.Directory,
+        IsParentNavigation: true);
     private readonly List<Image> _ownedImages = [];
     private readonly ImageList _browserImages;
+    private readonly WindowsShellIconProvider _shellIcons;
+    private readonly PagedListingIndex _listingIndex;
     private readonly bool _localBrowsingEnabled;
     private readonly LocalBrowserController? _localBrowser;
     private readonly RemoteBrowserController? _remoteBrowser;
+    private readonly Func<Guid, string, SshTerminalForm> _sshTerminalFactory;
     private readonly ComboBox _connectionSelector;
     private readonly ToolStrip _navigation;
     private readonly ToolStripButton _backButton;
@@ -26,14 +38,25 @@ public sealed class BrowserPaneControl : UserControl
     private readonly ToolStripButton _loadMoreButton;
     private readonly ToolStripTextBox _addressBox;
     private readonly ToolStripTextBox _filterBox;
+    private readonly ToolStrip _fileCommands;
+    private readonly ToolStripButton _copyButton;
+    private readonly ToolStripButton _moveButton;
+    private readonly ToolStripButton _pasteButton;
+    private readonly ToolStripButton _deleteButton;
+    private readonly ToolStripDropDownButton _moreButton;
     private readonly TreeView _directoryTree;
     private readonly ListView _fileList;
     private readonly TableLayoutPanel _loadingOverlay;
     private readonly ContextMenuStrip _fileContextMenu;
     private readonly Label _connectionState;
+    private readonly Label _connectionNameLabel;
+    private readonly Label _connectionTypeBadge;
+    private readonly Label _providerBadge;
     private readonly Panel _accentBar;
     private readonly Label _errorBanner;
     private readonly Label _summary;
+    private readonly Panel _contentHost;
+    private readonly Panel _browserSurface;
     private IReadOnlyList<BrowserListItem> _allItems = [];
     private IReadOnlyList<BrowserListItem> _items = [];
     private readonly Dictionary<Guid, RemoteDirectoryCache> _remoteDirectoryCaches = [];
@@ -43,18 +66,26 @@ public sealed class BrowserPaneControl : UserControl
     private bool _initialLoadStarted;
     private bool _updatingConnectionChoices;
     private bool _updatingTreeSelection;
+    private bool _remotePageLoadInProgress;
+    private bool _localPageLoadInProgress;
     private long _uiNavigationSequence;
     private Guid? _lastReportedConnectionId;
+    private SshTerminalForm? _embeddedTerminal;
+    private Guid? _embeddedTerminalConnectionId;
 
     public BrowserPaneControl(
         string title,
         bool showLocalDefault,
-        RemoteBrowserController? remoteBrowser = null)
+        RemoteBrowserController? remoteBrowser = null,
+        Func<Guid, string, SshTerminalForm>? sshTerminalFactory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         _localBrowsingEnabled = showLocalDefault;
         _localBrowser = showLocalDefault ? new LocalBrowserController() : null;
         _remoteBrowser = remoteBrowser ?? new RemoteBrowserController();
+        _listingIndex = new PagedListingIndex();
+        _sshTerminalFactory = sshTerminalFactory ?? ((connectionId, displayName) =>
+            new SshTerminalForm(connectionId, displayName));
         Dock = DockStyle.Fill;
         AccessibleName = $"{title} browser pane";
         AccessibleDescription = $"Browse and select items on the {title.ToLowerInvariant()} endpoint.";
@@ -72,38 +103,67 @@ public sealed class BrowserPaneControl : UserControl
         var header = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 64,
+            Height = 88,
+            MinimumSize = new Size(0, 88),
             ColumnCount = 3,
-            RowCount = 2,
-            Padding = new Padding(8, 5, 8, 5),
+            RowCount = 1,
+            Padding = new Padding(8, 7, 8, 7),
             BackColor = StorageHubTheme.Surface
         };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116));
         header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         using var sectionFont = StorageHubTheme.CreateSectionFont();
-        var titleLabel = new Label
+        _connectionNameLabel = new Label
         {
-            Text = title,
+            Text = showLocalDefault ? "This PC" : "Connections Home",
             Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
+            TextAlign = ContentAlignment.BottomLeft,
             Font = new Font(sectionFont, sectionFont.Style),
             ForeColor = StorageHubTheme.Text,
             AutoEllipsis = true,
             UseMnemonic = false,
             Margin = new Padding(4, 0, 8, 0),
-            AccessibleName = $"{title} pane"
+            AccessibleName = $"{title} active connection"
         };
+        _connectionTypeBadge = CreatePaneBadge("STORAGE", StorageHubTheme.Primary);
+        _providerBadge = CreatePaneBadge("LOCAL", StorageHubTheme.TextMuted);
+        var badges = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(1, 1, 0, 0)
+        };
+        badges.Controls.Add(_connectionTypeBadge);
+        badges.Controls.Add(_providerBadge);
+        var identity = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 2,
+            ColumnCount = 1,
+            Margin = Padding.Empty
+        };
+        identity.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
+        identity.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+        identity.Controls.Add(_connectionNameLabel, 0, 0);
+        identity.Controls.Add(badges, 0, 1);
+        var identityFrame = CreateHeaderFrame(new Padding(8, 3, 8, 3), new Padding(0, 0, 0, 0));
+        identityFrame.AccessibleName = $"{title} connection identity";
+        identityFrame.Controls.Add(identity);
 
         _connectionSelector = new ComboBox
         {
             Dock = DockStyle.Fill,
             DropDownStyle = ComboBoxStyle.DropDownList,
-            DrawMode = DrawMode.OwnerDrawFixed,
-            ItemHeight = 24,
+            DrawMode = DrawMode.OwnerDrawVariable,
+            ItemHeight = 32,
+            IntegralHeight = false,
+            DropDownHeight = 260,
+            BackColor = StorageHubTheme.Surface,
+            ForeColor = StorageHubTheme.Text,
             Margin = new Padding(0, 2, 0, 2),
             AccessibleName = $"{title} connection",
             AccessibleDescription = "Select the local or remote connection displayed in this pane."
@@ -126,6 +186,8 @@ public sealed class BrowserPaneControl : UserControl
         }
 
         _connectionSelector.SelectedIndex = 0;
+        _connectionSelector.DropDown += ConnectionSelectorDropDown;
+        _connectionSelector.MeasureItem += MeasureConnectionItem;
         _connectionSelector.DrawItem += DrawConnectionItem;
         _connectionSelector.SelectedIndexChanged += ConnectionSelectionChanged;
 
@@ -136,32 +198,49 @@ public sealed class BrowserPaneControl : UserControl
             TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = showLocalDefault ? StorageHubTheme.Success : StorageHubTheme.TextMuted,
             Margin = new Padding(3, 0, 0, 0),
+            Padding = new Padding(1, 2, 1, 2),
+            MinimumSize = new Size(0, 28),
             AccessibleName = $"{title} connection state"
         };
+        var selectorGrid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
+        selectorGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        selectorGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        selectorGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        selectorGrid.Controls.Add(_connectionSelector, 0, 0);
+        selectorGrid.Controls.Add(_connectionState, 0, 1);
+        var selectorFrame = CreateHeaderFrame(new Padding(6, 2, 6, 2), new Padding(8, 0, 8, 0));
+        selectorFrame.AccessibleName = $"{title} connection selection and status";
+        selectorFrame.Controls.Add(selectorGrid);
 
         var manageButton = new Button
         {
             Text = "Manage…",
-            AutoSize = true,
+            Dock = DockStyle.Fill,
             AccessibleName = "Open Connection Manager",
             TabIndex = 1
         };
         StorageHubTheme.StyleSecondaryButton(manageButton);
-        manageButton.Margin = new Padding(8, 2, 0, 2);
+        manageButton.Margin = Padding.Empty;
         manageButton.Click += ManageConnectionsClicked;
+        var manageFrame = CreateHeaderFrame(new Padding(5), Padding.Empty);
+        manageFrame.AccessibleName = $"{title} connection actions";
+        manageFrame.Controls.Add(manageButton);
 
-        header.Controls.Add(titleLabel, 0, 0);
-        header.SetRowSpan(titleLabel, 2);
-        header.Controls.Add(_connectionSelector, 1, 0);
-        header.Controls.Add(_connectionState, 1, 1);
-        header.Controls.Add(manageButton, 2, 0);
-        header.SetRowSpan(manageButton, 2);
+        header.Controls.Add(identityFrame, 0, 0);
+        header.Controls.Add(selectorFrame, 1, 0);
+        header.Controls.Add(manageFrame, 2, 0);
 
         _navigation = new ToolStrip
         {
             Dock = DockStyle.Top,
             GripStyle = ToolStripGripStyle.Hidden,
-            Renderer = StorageHubTheme.CreateToolStripRenderer(),
             BackColor = StorageHubTheme.SurfaceMuted,
             ForeColor = StorageHubTheme.Text,
             ImageScalingSize = new Size(18, 18),
@@ -198,6 +277,8 @@ public sealed class BrowserPaneControl : UserControl
             AutoSize = false,
             Width = 330,
             Text = showLocalDefault ? "This PC" : "Connections",
+            BackColor = StorageHubTheme.Surface,
+            ForeColor = StorageHubTheme.Text,
             AccessibleName = $"{title} address",
             AccessibleDescription = showLocalDefault
                 ? "Enter an absolute local or UNC folder path, then press Enter."
@@ -213,6 +294,8 @@ public sealed class BrowserPaneControl : UserControl
         {
             AutoSize = false,
             Width = 120,
+            BackColor = StorageHubTheme.Surface,
+            ForeColor = StorageHubTheme.Text,
             AccessibleName = $"{title} filter",
             AccessibleDescription = "Filter the visible items by name. Wildcards star and question mark are supported.",
             ToolTipText = "Filter by name (* and ? wildcards supported)"
@@ -220,6 +303,39 @@ public sealed class BrowserPaneControl : UserControl
         _filterBox.TextChanged += FilterTextChanged;
         _navigation.Items.Add(_filterBox);
         _navigation.Layout += NavigationLayoutChanged;
+
+        _fileCommands = new ToolStrip
+        {
+            Dock = DockStyle.Top,
+            GripStyle = ToolStripGripStyle.Hidden,
+            BackColor = StorageHubTheme.Surface,
+            ForeColor = StorageHubTheme.Text,
+            ImageScalingSize = new Size(16, 16),
+            Padding = new Padding(6, 2, 6, 2),
+            AccessibleName = $"{title} file commands"
+        };
+        _fileCommands.Items.Add(new ToolStripLabel("FILES")
+        {
+            ForeColor = StorageHubTheme.TextMuted,
+            Font = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold)
+        });
+        _fileCommands.Items.Add(new ToolStripSeparator());
+        _copyButton = CreateCommandButton(UiGlyph.File, "Copy", "Stage selected items for copying");
+        _moveButton = CreateCommandButton(UiGlyph.Forward, "Move", "Stage selected items for moving");
+        _pasteButton = CreateCommandButton(UiGlyph.Save, "Paste", "Review and paste the StorageHub clipboard here");
+        _deleteButton = CreateCommandButton(UiGlyph.Delete, "Delete", "Review and delete selected items");
+        _copyButton.Click += (_, _) => StageSelection(TransferQueueOperation.Copy);
+        _moveButton.Click += (_, _) => StageSelection(TransferQueueOperation.Move);
+        _pasteButton.Click += (_, _) => PasteRequested?.Invoke(this, EventArgs.Empty);
+        _deleteButton.Click += (_, _) => DeleteRequested?.Invoke(this, EventArgs.Empty);
+        _fileCommands.Items.Add(_copyButton);
+        _fileCommands.Items.Add(_moveButton);
+        _fileCommands.Items.Add(_pasteButton);
+        _fileCommands.Items.Add(new ToolStripSeparator());
+        _fileCommands.Items.Add(_deleteButton);
+
+        _moreButton = CreateMoreCommandsButton(title);
+        _fileCommands.Items.Add(_moreButton);
 
         _directoryTree = new TreeView
         {
@@ -233,6 +349,7 @@ public sealed class BrowserPaneControl : UserControl
             AccessibleDescription = "Folders and connection roots."
         };
         _browserImages = CreateBrowserImageList();
+        _shellIcons = new WindowsShellIconProvider(_browserImages);
         _directoryTree.ImageList = _browserImages;
         var rootNode = _directoryTree.Nodes.Add(showLocalDefault ? "This PC" : "Connections");
         rootNode.Tag = showLocalDefault ? LocalBrowserLocation.ThisPc : null;
@@ -259,18 +376,21 @@ public sealed class BrowserPaneControl : UserControl
         _fileList.Columns.Add("Type", 120);
         _fileList.Columns.Add("Modified", 155);
         _fileList.Columns.Add("Status", 100);
+        StorageHubTheme.ConfigureList(_fileList);
         UpdateSortColumnHeaders();
         _fileList.RetrieveVirtualItem += RetrieveVirtualItem;
+        _fileList.CacheVirtualItems += FileListCacheVirtualItems;
         _fileList.ColumnClick += FileListColumnClick;
         _fileList.DoubleClick += FileListDoubleClick;
         _fileList.KeyDown += FileListKeyDown;
         _fileList.ItemDrag += FileListItemDrag;
+        _fileList.SelectedIndexChanged += FileSelectionChanged;
         ConfigureDropTarget(_fileList);
         ConfigureDropTarget(_directoryTree);
         _fileContextMenu = new ContextMenuStrip
         {
+            Renderer = DesktopAppearanceService.MenuRenderer,
             AccessibleName = $"{title} transfer commands",
-            Renderer = StorageHubTheme.CreateToolStripRenderer()
         };
         var open = CreateContextMenuItem("Open", UiGlyph.Folder);
         var edit = CreateContextMenuItem("Edit in external editor...", UiGlyph.File);
@@ -309,21 +429,25 @@ public sealed class BrowserPaneControl : UserControl
         _fileContextMenu.Items.Add(inspectObject);
         _fileContextMenu.Opening += (_, _) =>
         {
-            var hasSelection = _fileList.SelectedIndices.Count > 0;
+            var hasSelection = HasTransferableSelection();
             var singleSelection = _fileList.SelectedIndices.Count == 1;
-            var selectedContainer = singleSelection &&
-                (uint)_fileList.SelectedIndices[0] < (uint)_items.Count &&
-                _items[_fileList.SelectedIndices[0]].IsContainer;
+            var selectedItem = singleSelection && (uint)_fileList.SelectedIndices[0] < (uint)_items.Count
+                ? _items[_fileList.SelectedIndices[0]]
+                : null;
+            var selectedContainer = selectedItem is { IsContainer: true };
+            var selectedParent = selectedItem is { IsParentNavigation: true };
             open.Enabled = singleSelection;
-            open.Text = selectedContainer ? "Open" : "Open in external editor...";
-            edit.Enabled = singleSelection && !selectedContainer;
+            open.Text = selectedParent
+                ? "Go up one level"
+                : selectedContainer ? "Open" : "Open in external editor...";
+            edit.Enabled = singleSelection && !selectedContainer && !selectedParent;
             copy.Enabled = hasSelection;
             cut.Enabled = hasSelection;
             paste.Enabled = CanPaste?.Invoke() == true;
             copyToOtherPane.Enabled = hasSelection;
             moveToOtherPane.Enabled = hasSelection;
-            selectAll.Enabled = _fileList.VirtualListSize > 0;
-            inspectObject.Enabled = singleSelection;
+            selectAll.Enabled = _items.Any(static item => !item.IsParentNavigation);
+            inspectObject.Enabled = singleSelection && !selectedParent;
         };
         _fileList.ContextMenuStrip = _fileContextMenu;
         _fileList.MouseDown += FileListMouseDown;
@@ -368,16 +492,32 @@ public sealed class BrowserPaneControl : UserControl
             Height = 34,
             Padding = new Padding(10, 8, 10, 6),
             Visible = false,
-            BackColor = Color.FromArgb(255, 242, 222),
+            BackColor = StorageHubTheme.SurfaceMuted,
             ForeColor = StorageHubTheme.Warning,
             AccessibleName = $"{title} browser error",
             AccessibleRole = AccessibleRole.Alert
         };
 
-        Controls.Add(browserSplit);
-        Controls.Add(_summary);
-        Controls.Add(_errorBanner);
-        Controls.Add(_navigation);
+        _browserSurface = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = StorageHubTheme.Surface,
+            AccessibleName = $"{title} storage browser"
+        };
+        _browserSurface.Controls.Add(browserSplit);
+        _browserSurface.Controls.Add(_summary);
+        _browserSurface.Controls.Add(_errorBanner);
+        _browserSurface.Controls.Add(_navigation);
+        _browserSurface.Controls.Add(_fileCommands);
+        _contentHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = StorageHubTheme.Surface,
+            AccessibleName = $"{title} pane content"
+        };
+        _contentHost.Controls.Add(_browserSurface);
+
+        Controls.Add(_contentHost);
         Controls.Add(header);
         Controls.Add(_accentBar);
 
@@ -396,6 +536,7 @@ public sealed class BrowserPaneControl : UserControl
         }
 
         UpdateConnectionPresentation();
+        RefreshCommandState();
     }
 
     /// <summary>Raised by pane copy/move hooks; the workspace owns resolving the opposite pane.</summary>
@@ -405,6 +546,8 @@ public sealed class BrowserPaneControl : UserControl
 
     public event EventHandler? PasteRequested;
 
+    public event EventHandler? DeleteRequested;
+
     public event EventHandler? EditRequested;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -412,6 +555,9 @@ public sealed class BrowserPaneControl : UserControl
 
     /// <summary>Raised when an immutable selection from another pane is dropped onto this pane.</summary>
     public event EventHandler<PaneTransferDropRequestedEventArgs>? TransferDropRequested;
+
+    /// <summary>Raised only for ordinary Explorer FileDrop data over a saved connection.</summary>
+    public event EventHandler<ShellImportDropRequestedEventArgs>? ShellImportDropRequested;
 
     /// <summary>Raised when one selected saved-connection object should be inspected read-only.</summary>
     public event EventHandler? ObjectInspectionRequested;
@@ -446,7 +592,8 @@ public sealed class BrowserPaneControl : UserControl
         return PaneSelectionSnapshot.Create(context.Value, items);
     }
 
-    public StorageResult<PaneDestinationSnapshot> CaptureDestinationSnapshot()
+    public StorageResult<PaneDestinationSnapshot> CaptureDestinationSnapshot(
+        IReadOnlyCollection<string>? relevantNames = null)
     {
         var context = CaptureTransferContext();
         if (context.IsFailure)
@@ -454,8 +601,18 @@ public sealed class BrowserPaneControl : UserControl
             return StorageResult<PaneDestinationSnapshot>.Fail(context.Error);
         }
 
-        var items = new List<PaneTransferItem>(_allItems.Count);
-        foreach (var item in _allItems)
+        if (_localBrowser?.CurrentSnapshot?.HasMore == true ||
+            _remoteBrowser?.CurrentSnapshot?.HasMore == true)
+        {
+            return StorageResult<PaneDestinationSnapshot>.Fail(new StorageFailure(
+                "manual_transfer.destination.index_incomplete",
+                StorageFailureKind.Conflict,
+                "Finish indexing the destination folder before reviewing transfer conflicts."));
+        }
+
+        var indexedItems = relevantNames is null ? _allItems : _listingIndex.FindByNames(relevantNames);
+        var items = new List<PaneTransferItem>(indexedItems.Count);
+        foreach (var item in indexedItems)
         {
             var mapped = MapTransferItem(item);
             if (mapped.IsFailure)
@@ -469,12 +626,70 @@ public sealed class BrowserPaneControl : UserControl
         return PaneDestinationSnapshot.Create(context.Value, items);
     }
 
+    public async Task<bool> EnsureListingCompleteAsync(CancellationToken cancellationToken = default)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_localPageLoadInProgress || _remotePageLoadInProgress)
+            {
+                await Task.Delay(50, cancellationToken).ConfigureAwait(true);
+                continue;
+            }
+
+            if (IsLocalConnectionSelected && _localBrowser?.CurrentSnapshot is { HasMore: true } local)
+            {
+                var before = local.IndexedEntryCount;
+                await LoadMoreLocalAsync().ConfigureAwait(true);
+                var after = _localBrowser.CurrentSnapshot;
+                if (after is { HasMore: true } && after.IndexedEntryCount <= before) return false;
+                continue;
+            }
+
+            if (IsRemoteSnapshotSelected && _remoteBrowser?.CurrentSnapshot is { HasMore: true } remote)
+            {
+                var before = remote.IndexedEntryCount;
+                await LoadMoreRemoteAsync(automatic: true).ConfigureAwait(true);
+                var after = _remoteBrowser.CurrentSnapshot;
+                if (after is { HasMore: true } && after.IndexedEntryCount <= before) return false;
+                continue;
+            }
+
+            return true;
+        }
+    }
+
+    public StorageResult<TransferQueueAddress> CaptureShellImportDestination(string? relativePath = null)
+    {
+        var context = CaptureTransferContext();
+        if (context.IsFailure || context.Value.Kind != PaneTransferContextKind.SavedConnection ||
+            context.Value.ConnectionId is not { } id || string.IsNullOrWhiteSpace(context.Value.RootIdentity))
+        {
+            return StorageResult<TransferQueueAddress>.Fail(new StorageFailure(
+                "shell-transfer.destination.invalid", StorageFailureKind.Validation,
+                "Explorer drops require an open saved connection folder."));
+        }
+        return StorageResult<TransferQueueAddress>.Success(new TransferQueueAddress(
+            id, context.Value.RootIdentity, relativePath ?? context.Value.RelativePath));
+    }
+
     public void SetItems(IEnumerable<BrowserListItem> items)
     {
         ArgumentNullException.ThrowIfNull(items);
-        _allItems = items as IReadOnlyList<BrowserListItem> ?? items.ToArray();
-        SortItems();
+        _fileList.SelectedIndices.Clear();
+        _listingIndex.Reset(items);
+        _allItems = _listingIndex.CreateView(_sortColumn, _sortAscending);
         ApplyFilter();
+    }
+
+    private void AppendItems(IEnumerable<BrowserListItem> items)
+    {
+        var selectedLocations = CaptureSelectedLocations();
+        _fileList.SelectedIndices.Clear();
+        _listingIndex.Append(items);
+        _allItems = _listingIndex.CreateView(_sortColumn, _sortAscending);
+        ApplyFilter();
+        RestoreSelectedLocations(selectedLocations);
     }
 
     /// <summary>Navigates the currently selected local or saved-connection surface backward.</summary>
@@ -489,6 +704,20 @@ public sealed class BrowserPaneControl : UserControl
     /// <summary>Reloads the current location or the saved-connections home.</summary>
     public void Reload() => RefreshClicked(this, EventArgs.Empty);
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string PaneDisplayName => _connectionNameLabel.Text;
+
+    public void RefreshCommandState()
+    {
+        var storageVisible = !IsSshClientSelected;
+        var hasSelection = storageVisible && HasTransferableSelection();
+        _copyButton.Enabled = hasSelection;
+        _moveButton.Enabled = hasSelection;
+        _deleteButton.Enabled = hasSelection;
+        _pasteButton.Enabled = storageVisible && CanPaste?.Invoke() == true;
+        _moreButton.Enabled = storageVisible;
+    }
+
     /// <summary>Selects every visible item in the pane without selecting filtered-out items.</summary>
     public void SelectAllVisibleItems()
     {
@@ -497,7 +726,10 @@ public sealed class BrowserPaneControl : UserControl
         {
             for (var index = 0; index < _fileList.VirtualListSize; index++)
             {
-                _fileList.SelectedIndices.Add(index);
+                if ((uint)index < (uint)_items.Count && !_items[index].IsParentNavigation)
+                {
+                    _fileList.SelectedIndices.Add(index);
+                }
             }
         }
         finally
@@ -526,8 +758,14 @@ public sealed class BrowserPaneControl : UserControl
         if (disposing)
         {
             _uiNavigationSequence++;
-            _connectionSelector.DrawItem -= DrawConnectionItem;
-            _connectionSelector.SelectedIndexChanged -= ConnectionSelectionChanged;
+            if (!_connectionSelector.IsDisposed)
+            {
+                _connectionSelector.DrawItem -= DrawConnectionItem;
+                _connectionSelector.MeasureItem -= MeasureConnectionItem;
+                _connectionSelector.DropDown -= ConnectionSelectorDropDown;
+                _connectionSelector.SelectedIndexChanged -= ConnectionSelectionChanged;
+            }
+            DisposeEmbeddedTerminal();
             _backButton.Click -= BackClicked;
             _forwardButton.Click -= ForwardClicked;
             _upButton.Click -= UpClicked;
@@ -538,10 +776,12 @@ public sealed class BrowserPaneControl : UserControl
             _navigation.Layout -= NavigationLayoutChanged;
             _directoryTree.AfterSelect -= DirectoryTreeAfterSelect;
             _fileList.RetrieveVirtualItem -= RetrieveVirtualItem;
+            _fileList.CacheVirtualItems -= FileListCacheVirtualItems;
             _fileList.ColumnClick -= FileListColumnClick;
             _fileList.DoubleClick -= FileListDoubleClick;
             _fileList.KeyDown -= FileListKeyDown;
             _fileList.ItemDrag -= FileListItemDrag;
+            _fileList.SelectedIndexChanged -= FileSelectionChanged;
             _fileList.MouseDown -= FileListMouseDown;
             UnconfigureDropTarget(_fileList);
             UnconfigureDropTarget(_directoryTree);
@@ -563,6 +803,8 @@ public sealed class BrowserPaneControl : UserControl
         if (disposing)
         {
             _browserImages.Dispose();
+            _shellIcons.Dispose();
+            _listingIndex.Dispose();
             foreach (var image in _ownedImages)
             {
                 image.Dispose();
@@ -581,10 +823,14 @@ public sealed class BrowserPaneControl : UserControl
         }
 
         var value = _items[e.ItemIndex];
+        var imageKey = _shellIcons.GetKey(value, IsLocalConnectionSelected);
+        // Virtual ListView rows do not consistently resolve ImageKey after ImageList additions.
+        // Give the native control the concrete slot as well as the stable cache key.
         e.Item = new ListViewItem([value.Name, value.Size, value.Type, value.Modified, value.Status])
         {
-            ToolTipText = value.Name,
-            ImageKey = GetItemImageKey(value)
+            ToolTipText = value.IsParentNavigation ? value.Status : value.Name,
+            ImageKey = imageKey,
+            ImageIndex = _browserImages.Images.IndexOfKey(imageKey)
         };
     }
 
@@ -611,28 +857,52 @@ public sealed class BrowserPaneControl : UserControl
         ApplyFilter();
     }
 
+    private void FileSelectionChanged(object? sender, EventArgs e) => RefreshCommandState();
+
+    private void FileListCacheVirtualItems(object? sender, CacheVirtualItemsEventArgs e)
+    {
+        var threshold = IsLocalConnectionSelected
+            ? LocalBrowserController.DefaultPageSize
+            : RemoteBrowserController.DefaultPageSize;
+        if (e.EndIndex >= Math.Max(0, _fileList.VirtualListSize - threshold))
+        {
+            RequestAutomaticPrefetch();
+        }
+    }
+
+    private void RequestAutomaticPrefetch()
+    {
+        if (IsDisposed || Disposing || !_fileList.IsHandleCreated ||
+            _remotePageLoadInProgress || _localPageLoadInProgress)
+        {
+            return;
+        }
+
+        var localMore = IsLocalConnectionSelected && _localBrowser?.CurrentSnapshot?.HasMore == true;
+        var remoteMore = IsRemoteSnapshotSelected && _remoteBrowser?.CurrentSnapshot?.HasMore == true;
+        if (!localMore && !remoteMore) return;
+
+        var topIndex = 0;
+        try
+        {
+            topIndex = _fileList.TopItem?.Index ?? 0;
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        var approximateVisibleRows = Math.Max(10, _fileList.ClientSize.Height / Math.Max(1, _fileList.Font.Height) + 4);
+        var threshold = localMore ? LocalBrowserController.DefaultPageSize : RemoteBrowserController.DefaultPageSize;
+        if (topIndex + approximateVisibleRows >= Math.Max(0, _fileList.VirtualListSize - threshold))
+        {
+            if (localMore) _ = LoadMoreLocalAsync();
+            else _ = LoadMoreRemoteAsync(automatic: true);
+        }
+    }
+
     private void SortItems()
     {
-        var direction = _sortAscending ? 1 : -1;
-        _allItems = _allItems
-            .OrderByDescending(static item => item.IsContainer)
-            .ThenBy(item => item, Comparer<BrowserListItem>.Create((left, right) =>
-            {
-                var compared = _sortColumn switch
-                {
-                    BrowserSortColumn.Name => StringComparer.CurrentCultureIgnoreCase.Compare(left.Name, right.Name),
-                    BrowserSortColumn.Size => Nullable.Compare(left.Length, right.Length),
-                    BrowserSortColumn.Type => StringComparer.CurrentCultureIgnoreCase.Compare(left.Type, right.Type),
-                    BrowserSortColumn.Modified => Nullable.Compare(left.ModifiedUtc, right.ModifiedUtc),
-                    BrowserSortColumn.Status => StringComparer.CurrentCultureIgnoreCase.Compare(left.Status, right.Status),
-                    _ => 0
-                };
-                compared = compared == 0
-                    ? StringComparer.CurrentCultureIgnoreCase.Compare(left.Name, right.Name)
-                    : compared;
-                return direction * compared;
-            }))
-            .ToArray();
+        _allItems = _listingIndex.CreateView(_sortColumn, _sortAscending);
     }
 
     private void UpdateSortColumnHeaders()
@@ -684,7 +954,7 @@ public sealed class BrowserPaneControl : UserControl
         switch (result.Status)
         {
             case LocalBrowserNavigationStatus.Succeeded when result.Snapshot is not null:
-                PresentSnapshot(result.Snapshot);
+                PresentSnapshot(result.Snapshot, result.AppendedPage);
                 if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
                 {
                     ShowNotice(result.ErrorMessage);
@@ -704,6 +974,40 @@ public sealed class BrowserPaneControl : UserControl
         }
 
         UpdateNavigationButtons();
+    }
+
+    private async Task LoadMoreLocalAsync()
+    {
+        if (_localBrowser is null || !IsLocalConnectionSelected || _localPageLoadInProgress ||
+            IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        _localPageLoadInProgress = true;
+        UpdateSummaryText();
+        try
+        {
+            var result = await _localBrowser.LoadMoreAsync();
+            if (IsDisposed || Disposing) return;
+            if (result.Status == LocalBrowserNavigationStatus.Succeeded && result.Snapshot is not null)
+            {
+                PresentSnapshot(result.Snapshot, appendPage: true);
+                UpdateNavigationButtons();
+            }
+            else if (result.Status == LocalBrowserNavigationStatus.Failed)
+            {
+                ShowError(result.ErrorMessage ?? "StorageHub could not continue indexing this folder.");
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        finally
+        {
+            _localPageLoadInProgress = false;
+            if (!IsDisposed && !Disposing) UpdateSummaryText();
+        }
     }
 
     private async Task LoadRemoteConnectionsAsync(bool preserveCurrentSurface = false)
@@ -833,16 +1137,25 @@ public sealed class BrowserPaneControl : UserControl
         PresentRemoteResult(result);
     }
 
-    private async Task LoadMoreRemoteAsync()
+    private async Task LoadMoreRemoteAsync(bool automatic = false)
     {
-        if (_remoteBrowser is null || !IsRemoteSnapshotSelected || IsDisposed || Disposing)
+        if (_remoteBrowser is null || !IsRemoteSnapshotSelected || IsDisposed || Disposing ||
+            _remotePageLoadInProgress)
         {
             return;
         }
 
+        _remotePageLoadInProgress = true;
         var sequence = ++_uiNavigationSequence;
-        SetNavigationBusy(true);
-        HideError();
+        if (!automatic)
+        {
+            SetNavigationBusy(true);
+            HideError();
+        }
+        else
+        {
+            UpdateSummaryText();
+        }
         RemoteBrowserNavigationResult result;
         try
         {
@@ -852,13 +1165,20 @@ public sealed class BrowserPaneControl : UserControl
         {
             return;
         }
+        finally
+        {
+            _remotePageLoadInProgress = false;
+        }
 
         if (sequence != _uiNavigationSequence || IsDisposed || Disposing)
         {
             return;
         }
 
-        SetNavigationBusy(false);
+        if (!automatic)
+        {
+            SetNavigationBusy(false);
+        }
         PresentRemoteResult(result);
     }
 
@@ -873,7 +1193,7 @@ public sealed class BrowserPaneControl : UserControl
                     cache.Invalidate(unavailablePath);
                 }
 
-                PresentRemoteSnapshot(result.Snapshot);
+                PresentRemoteSnapshot(result.Snapshot, result.AppendedPage);
                 if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
                 {
                     ShowNotice(result.ErrorMessage);
@@ -909,10 +1229,10 @@ public sealed class BrowserPaneControl : UserControl
         UpdateNavigationButtons();
     }
 
-    private void PresentRemoteSnapshot(RemoteBrowserSnapshot snapshot)
+    private void PresentRemoteSnapshot(RemoteBrowserSnapshot snapshot, bool appendPage = false)
     {
         _addressBox.Text = snapshot.DisplayPath;
-        SetItems(snapshot.Entries.Select(static entry => new BrowserListItem(
+        var pageItems = snapshot.Entries.Select(static entry => new BrowserListItem(
             entry.Name,
             entry.Size is null ? string.Empty : UiFormatting.FormatBytes(entry.Size.Value),
             DescribeRemoteType(entry),
@@ -929,12 +1249,24 @@ public sealed class BrowserPaneControl : UserControl
             entry.NativeItemId,
             entry.VersionId,
             entry.EntityTag,
-            entry.LastModifiedUtc)));
+            entry.LastModifiedUtc));
+        if (appendPage)
+        {
+            AppendItems(pageItems);
+        }
+        else
+        {
+            SetItems(pageItems);
+        }
         _connectionState.Text = "● Ready";
         _connectionState.ForeColor = StorageHubTheme.Success;
         _connectionState.AccessibleDescription = $"Showing {snapshot.Connection.DisplayName} {snapshot.DisplayPath}";
-        UpdateRemoteDirectoryTree(snapshot);
+        UpdateRemoteDirectoryTree(snapshot, appendPage);
         UpdateSummaryText();
+        if (snapshot.HasMore)
+        {
+            BeginInvoke(new Action(RequestAutomaticPrefetch));
+        }
         if (_lastReportedConnectionId != snapshot.Connection.ConnectionId)
         {
             _lastReportedConnectionId = snapshot.Connection.ConnectionId;
@@ -944,6 +1276,15 @@ public sealed class BrowserPaneControl : UserControl
 
     private void ReplaceRemoteConnectionChoices(IReadOnlyList<ConnectionSummary> connections)
     {
+        connections = connections
+            .Where(static connection =>
+                connection.Type == ConnectionProfileType.Storage ||
+                connection is
+                {
+                    Type: ConnectionProfileType.Client,
+                    Provider: StorageConnectionProvider.Ssh
+                })
+            .ToArray();
         var activeConnectionIds = connections.Select(static connection => connection.ConnectionId).ToHashSet();
         foreach (var cachedConnectionId in _remoteDirectoryCaches.Keys
             .Where(id => !activeConnectionIds.Contains(id))
@@ -976,9 +1317,7 @@ public sealed class BrowserPaneControl : UserControl
                 StorageProviderKind.Local,
                 "Saved connections",
                 "Browse"));
-            foreach (var connection in connections)
-            {
-                _connectionSelector.Items.Add(new ConnectionCardModel(
+            var savedCards = connections.Select(connection => new ConnectionCardModel(
                     connection.DisplayName,
                     MapProvider(connection.Provider),
                     connection.FolderPath ?? "Saved connection",
@@ -986,7 +1325,14 @@ public sealed class BrowserPaneControl : UserControl
                     connection.IsFavorite,
                     connection.ConnectionId,
                     connection.IsEnabled,
-                    connection.AccentColor));
+                    connection.AccentColor,
+                    connection.FolderPath,
+                    connection.Tags))
+                .OrderBy(static card => ConnectionGroupSortKey(card), StringComparer.CurrentCultureIgnoreCase)
+                .ThenBy(static card => card.Name, StringComparer.CurrentCultureIgnoreCase);
+            foreach (var card in savedCards)
+            {
+                _connectionSelector.Items.Add(card);
             }
 
             var homeIndex = _localBrowsingEnabled ? 1 : 0;
@@ -1017,6 +1363,7 @@ public sealed class BrowserPaneControl : UserControl
 
     private void PresentConnectionsHome(IReadOnlyList<ConnectionSummary> connections)
     {
+        ShowBrowserSurface();
         _addressBox.Text = "Connections";
         _directoryTree.Nodes.Clear();
         var connectionsRoot = _directoryTree.Nodes.Add("Connections");
@@ -1047,7 +1394,7 @@ public sealed class BrowserPaneControl : UserControl
         _loadMoreButton.Enabled = false;
     }
 
-    private void UpdateRemoteDirectoryTree(RemoteBrowserSnapshot snapshot)
+    private void UpdateRemoteDirectoryTree(RemoteBrowserSnapshot snapshot, bool appendPage)
     {
         var cache = GetRemoteDirectoryCache(snapshot.Connection.ConnectionId);
         cache.Update(
@@ -1059,7 +1406,8 @@ public sealed class BrowserPaneControl : UserControl
                 .ToArray(),
             isComplete: !snapshot.HasMore,
             ++_remoteCacheSequence,
-            MaximumCachedDirectoriesPerConnection);
+            MaximumCachedDirectoriesPerConnection,
+            appendPage);
         var expandedPaths = _directoryTree.Nodes.Count == 1 &&
             _directoryTree.Nodes[0].Tag is RemoteTreeRoot existingRoot &&
             existingRoot.ConnectionId == snapshot.Connection.ConnectionId
@@ -1201,13 +1549,14 @@ public sealed class BrowserPaneControl : UserControl
         StorageConnectionProvider.Ftp => StorageProviderKind.Ftp,
         StorageConnectionProvider.Ftps => StorageProviderKind.Ftps,
         StorageConnectionProvider.Sftp => StorageProviderKind.Sftp,
+        StorageConnectionProvider.Ssh => StorageProviderKind.Ssh,
         _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, "Unknown storage provider.")
     };
 
-    private void PresentSnapshot(LocalBrowserSnapshot snapshot)
+    private void PresentSnapshot(LocalBrowserSnapshot snapshot, bool appendPage = false)
     {
         _addressBox.Text = snapshot.Location.DisplayText;
-        SetItems(snapshot.Entries.Select(static entry => new BrowserListItem(
+        var pageItems = snapshot.Entries.Select(static entry => new BrowserListItem(
             entry.Name,
             entry.Length is null ? string.Empty : UiFormatting.FormatBytes(entry.Length.Value),
             entry.Type,
@@ -1217,32 +1566,72 @@ public sealed class BrowserPaneControl : UserControl
             entry.IsContainer,
             entry.IsContainer ? StorageItemKind.Directory : StorageItemKind.File,
             entry.Length,
-            ModifiedUtc: entry.Modified)));
+            ModifiedUtc: entry.Modified));
+        if (appendPage) AppendItems(pageItems);
+        else SetItems(pageItems);
         _connectionState.Text = "● Ready";
         _connectionState.ForeColor = StorageHubTheme.Success;
         _connectionState.AccessibleDescription = $"Showing {snapshot.Location.DisplayText}";
-        UpdateDirectoryTree(snapshot);
+        if (!appendPage) UpdateDirectoryTree(snapshot);
+        if (snapshot.HasMore) BeginInvoke(new Action(RequestAutomaticPrefetch));
     }
 
     private void ApplyFilter()
     {
+        var selectedLocations = CaptureSelectedLocations();
+        _fileList.SelectedIndices.Clear();
         var filter = _filterBox.Text;
-        _items = string.IsNullOrWhiteSpace(filter)
-            ? _allItems
-            : _allItems.Where(item => LocalBrowserPresentation.MatchesFilter(item.Name, filter)).ToArray();
+        var filteredItems = _listingIndex.CreateView(_sortColumn, _sortAscending, filter);
+        _items = ComposeVisibleItems(filteredItems, CanNavigateUpInCurrentSurface());
         _fileList.VirtualListSize = _items.Count;
         _fileList.Invalidate();
+        RestoreSelectedLocations(selectedLocations);
         UpdateSummaryText();
+    }
+
+    private string[] CaptureSelectedLocations() => _fileList.SelectedIndices.Cast<int>()
+        .Where(index => (uint)index < (uint)_items.Count)
+        .Select(index => _items[index].Location)
+        .Where(static location => !string.IsNullOrWhiteSpace(location))
+        .Cast<string>()
+        .ToArray();
+
+    private void RestoreSelectedLocations(string[] locations)
+    {
+        if (locations.Length == 0) return;
+        var parentOffset = CanNavigateUpInCurrentSurface() ? 1 : 0;
+        _fileList.BeginUpdate();
+        try
+        {
+            foreach (var location in locations)
+            {
+                var index = _listingIndex.FindIndex(
+                    _sortColumn,
+                    _sortAscending,
+                    _filterBox.Text,
+                    location);
+                if (index is { } found) _fileList.SelectedIndices.Add(found + parentOffset);
+            }
+        }
+        finally
+        {
+            _fileList.EndUpdate();
+        }
     }
 
     private void UpdateSummaryText()
     {
         var filter = _filterBox.Text;
-        var countText = _items.Count == _allItems.Count
-            ? $"{_items.Count:N0} items"
-            : $"{_items.Count:N0} of {_allItems.Count:N0} items";
-        _summary.Text = IsRemoteSnapshotSelected && _remoteBrowser?.CurrentSnapshot?.HasMore == true
-            ? countText + " | more available"
+        var visibleItemCount = _items.Count(static item => !item.IsParentNavigation);
+        var countText = visibleItemCount == _allItems.Count
+            ? $"{visibleItemCount:N0} items"
+            : $"{visibleItemCount:N0} of {_allItems.Count:N0} items";
+        var hasMore = IsRemoteSnapshotSelected && _remoteBrowser?.CurrentSnapshot?.HasMore == true ||
+            IsLocalConnectionSelected && _localBrowser?.CurrentSnapshot?.HasMore == true;
+        _summary.Text = hasMore
+            ? countText + (_remotePageLoadInProgress || _localPageLoadInProgress
+                ? " | indexing next page…"
+                : " | more available")
             : countText;
         _summary.AccessibleDescription = string.IsNullOrWhiteSpace(filter)
             ? _summary.Text
@@ -1416,8 +1805,10 @@ public sealed class BrowserPaneControl : UserControl
             ? !_localBrowser!.CurrentLocation.IsThisPc
             : remoteActive && _remoteBrowser!.CanGoUp;
         _refreshButton.Enabled = localActive || remoteActive || IsAnyConnectionsHomeSelected;
-        _loadMoreButton.Visible = !_localBrowsingEnabled || remoteActive;
-        _loadMoreButton.Enabled = remoteActive && _remoteBrowser!.CurrentSnapshot!.HasMore;
+        var localHasMore = localActive && _localBrowser?.CurrentSnapshot?.HasMore == true;
+        var remoteHasMore = remoteActive && _remoteBrowser!.CurrentSnapshot!.HasMore;
+        _loadMoreButton.Visible = !_localBrowsingEnabled || remoteActive || localHasMore;
+        _loadMoreButton.Enabled = localHasMore || remoteHasMore;
         _addressBox.ReadOnly = !(localActive || remoteActive);
         _addressBox.AccessibleDescription = localActive
             ? "Enter an absolute local or UNC folder path, then press Enter."
@@ -1471,6 +1862,14 @@ public sealed class BrowserPaneControl : UserControl
         _connectionSelector.SelectedItem is ConnectionCardModel { ConnectionId: { } connectionId } &&
         _remoteBrowser?.CurrentSnapshot?.Connection.ConnectionId == connectionId;
 
+    private bool IsSshClientSelected =>
+        _connectionSelector.SelectedItem is ConnectionCardModel
+        {
+            Type: ConnectionProfileType.Client,
+            Provider: StorageProviderKind.Ssh,
+            ConnectionId: not null
+        };
+
     private void BackClicked(object? sender, EventArgs e)
     {
         _ = IsLocalConnectionSelected
@@ -1508,7 +1907,11 @@ public sealed class BrowserPaneControl : UserControl
         }
     }
 
-    private void LoadMoreClicked(object? sender, EventArgs e) => _ = LoadMoreRemoteAsync();
+    private void LoadMoreClicked(object? sender, EventArgs e)
+    {
+        if (IsLocalConnectionSelected) _ = LoadMoreLocalAsync();
+        else _ = LoadMoreRemoteAsync();
+    }
 
     private void AddressBoxKeyDown(object? sender, KeyEventArgs e)
     {
@@ -1586,6 +1989,17 @@ public sealed class BrowserPaneControl : UserControl
 
         var data = new DataObject();
         data.SetData(PaneDragDataFormat, autoConvert: false, new PaneDragPayload(this, selection.Value));
+        // Local Explorer items can be handed back to Explorer with the standard format. Saved
+        // connection items retain the internal payload until their virtual-file exporter is used.
+        if (selection.Value.Context.Kind == PaneTransferContextKind.ThisPc)
+        {
+            var paths = _fileList.SelectedIndices.Cast<int>()
+                .Where(index => (uint)index < (uint)_items.Count)
+                .Select(index => _items[index].Location)
+                .Where(path => !string.IsNullOrWhiteSpace(path) && Path.IsPathFullyQualified(path))
+                .Cast<string>().ToArray();
+            if (paths.Length > 0) data.SetData(DataFormats.FileDrop, paths);
+        }
         _ = _fileList.DoDragDrop(data, DragDropEffects.Copy | DragDropEffects.Move);
     }
 
@@ -1611,7 +2025,7 @@ public sealed class BrowserPaneControl : UserControl
         e.Effect = GetDropEffect(e);
         if (e.Effect != DragDropEffects.None && sender is Control control)
         {
-            control.BackColor = Color.FromArgb(235, 242, 253);
+            control.BackColor = StorageHubTheme.CurrentPalette.Selection;
         }
     }
 
@@ -1629,6 +2043,18 @@ public sealed class BrowserPaneControl : UserControl
     {
         DropTargetDragLeave(sender, EventArgs.Empty);
         var effect = GetDropEffect(e);
+        if (TryGetPaneDragPayload(e.Data) is null && e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
+        {
+            var treeTarget = sender is TreeView tree && tree.GetNodeAt(e.X, e.Y) is { Tag: string path }
+                ? path : null;
+            var destination = CaptureShellImportDestination(treeTarget);
+            var paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+            if (destination.IsSuccess && paths is { Length: > 0 })
+            {
+                ShellImportDropRequested?.Invoke(this, new ShellImportDropRequestedEventArgs(paths, destination.Value));
+            }
+            return;
+        }
         if (effect == DragDropEffects.None || TryGetPaneDragPayload(e.Data) is not { } payload)
         {
             return;
@@ -1645,7 +2071,12 @@ public sealed class BrowserPaneControl : UserControl
     private DragDropEffects GetDropEffect(DragEventArgs e)
     {
         var payload = TryGetPaneDragPayload(e.Data);
-        if (payload is null || ReferenceEquals(payload.SourcePane, this))
+        if (payload is null)
+        {
+            return e.Data?.GetDataPresent(DataFormats.FileDrop) == true && CaptureShellImportDestination().IsSuccess
+                ? DragDropEffects.Copy : DragDropEffects.None;
+        }
+        if (ReferenceEquals(payload.SourcePane, this))
         {
             return DragDropEffects.None;
         }
@@ -1706,7 +2137,11 @@ public sealed class BrowserPaneControl : UserControl
         }
 
         var index = _fileList.SelectedIndices[0];
-        if ((uint)index < (uint)_items.Count && _items[index].IsContainer)
+        if ((uint)index < (uint)_items.Count && _items[index].IsParentNavigation)
+        {
+            NavigateUp();
+        }
+        else if ((uint)index < (uint)_items.Count && _items[index].IsContainer)
         {
             OpenSelectedContainer();
         }
@@ -1718,7 +2153,9 @@ public sealed class BrowserPaneControl : UserControl
 
     private void RaiseEditRequested()
     {
-        if (_fileList.SelectedIndices.Count == 1)
+        if (_fileList.SelectedIndices.Count == 1 &&
+            (uint)_fileList.SelectedIndices[0] < (uint)_items.Count &&
+            !_items[_fileList.SelectedIndices[0]].IsParentNavigation)
         {
             EditRequested?.Invoke(this, EventArgs.Empty);
         }
@@ -1747,7 +2184,7 @@ public sealed class BrowserPaneControl : UserControl
 
     private void RaiseTransferRequested(TransferQueueOperation operation)
     {
-        if (_fileList.SelectedIndices.Count > 0)
+        if (HasTransferableSelection())
         {
             TransferRequested?.Invoke(this, new PaneTransferRequestedEventArgs(operation));
         }
@@ -1764,6 +2201,14 @@ public sealed class BrowserPaneControl : UserControl
 
     private StorageResult<PaneTransferContext> CaptureTransferContext()
     {
+        if (IsSshClientSelected)
+        {
+            return StorageResult<PaneTransferContext>.Fail(new StorageFailure(
+                "manual_transfer.pane.client_not_storage",
+                StorageFailureKind.Validation,
+                "Choose a storage folder in this pane before transferring files."));
+        }
+
         if (IsRemoteSnapshotSelected && _remoteBrowser?.CurrentSnapshot is { } remote)
         {
             return PaneTransferContext.Create(
@@ -1838,6 +2283,12 @@ public sealed class BrowserPaneControl : UserControl
         }
 
         var selected = _items[index];
+        if (selected.IsParentNavigation)
+        {
+            NavigateUp();
+            return;
+        }
+
         if (!selected.IsContainer || string.IsNullOrWhiteSpace(selected.Location))
         {
             return;
@@ -1925,6 +2376,152 @@ public sealed class BrowserPaneControl : UserControl
         };
     }
 
+    private ToolStripButton CreateCommandButton(UiGlyph glyph, string text, string description)
+    {
+        var image = UiIconFactory.Create(glyph, StorageHubTheme.Text, 16, DeviceDpi / 96F);
+        _ownedImages.Add(image);
+        return new ToolStripButton(text)
+        {
+            Image = image,
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            AccessibleName = text,
+            AccessibleDescription = description,
+            ToolTipText = description,
+            Enabled = false
+        };
+    }
+
+    private ToolStripDropDownButton CreateMoreCommandsButton(string paneTitle)
+    {
+        var image = UiIconFactory.Create(UiGlyph.More, StorageHubTheme.Text, 16, DeviceDpi / 96F);
+        _ownedImages.Add(image);
+        var button = new ToolStripDropDownButton
+        {
+            Alignment = ToolStripItemAlignment.Right,
+            Image = image,
+            DisplayStyle = ToolStripItemDisplayStyle.Image,
+            AccessibleName = $"{paneTitle} more file commands",
+            AccessibleDescription = "Open additional commands for this file pane.",
+            ToolTipText = "More file commands",
+            ShowDropDownArrow = false
+        };
+
+        var open = CreateContextMenuItem("Open", UiGlyph.Folder);
+        var edit = CreateContextMenuItem("Edit in external editor...", UiGlyph.File);
+        var copy = CreateContextMenuItem("Copy", UiGlyph.File, "Ctrl+C");
+        var move = CreateContextMenuItem("Move", UiGlyph.Forward, "Ctrl+X");
+        var paste = CreateContextMenuItem("Paste", UiGlyph.Save, "Ctrl+V");
+        var delete = CreateContextMenuItem("Delete", UiGlyph.Delete, "Delete");
+        var copyToOtherPane = CreateContextMenuItem("Copy to other pane", UiGlyph.Forward);
+        var moveToOtherPane = CreateContextMenuItem("Move to other pane", UiGlyph.Run);
+        var refresh = CreateContextMenuItem("Refresh", UiGlyph.Refresh, "F5");
+        var selectAll = CreateContextMenuItem("Select all", UiGlyph.Test, "Ctrl+A");
+        var properties = CreateContextMenuItem("Properties...", UiGlyph.Info);
+
+        open.Font = new Font(open.Font, FontStyle.Bold);
+        open.Click += (_, _) => OpenOrEditSelected();
+        edit.Click += (_, _) => RaiseEditRequested();
+        copy.Click += (_, _) => StageSelection(TransferQueueOperation.Copy);
+        move.Click += (_, _) => StageSelection(TransferQueueOperation.Move);
+        paste.Click += (_, _) => PasteRequested?.Invoke(this, EventArgs.Empty);
+        delete.Click += (_, _) => DeleteRequested?.Invoke(this, EventArgs.Empty);
+        copyToOtherPane.Click += (_, _) => RaiseTransferRequested(TransferQueueOperation.Copy);
+        moveToOtherPane.Click += (_, _) => RaiseTransferRequested(TransferQueueOperation.Move);
+        refresh.Click += (_, _) => Reload();
+        selectAll.Click += (_, _) => SelectAllVisibleItems();
+        properties.Click += (_, _) => ObjectInspectionRequested?.Invoke(this, EventArgs.Empty);
+
+        button.DropDownItems.Add(open);
+        button.DropDownItems.Add(edit);
+        button.DropDownItems.Add(new ToolStripSeparator());
+        button.DropDownItems.Add(copy);
+        button.DropDownItems.Add(move);
+        button.DropDownItems.Add(paste);
+        button.DropDownItems.Add(delete);
+        button.DropDownItems.Add(new ToolStripSeparator());
+        button.DropDownItems.Add(copyToOtherPane);
+        button.DropDownItems.Add(moveToOtherPane);
+        button.DropDownItems.Add(new ToolStripSeparator());
+        button.DropDownItems.Add(refresh);
+        button.DropDownItems.Add(selectAll);
+        button.DropDownItems.Add(new ToolStripSeparator());
+        button.DropDownItems.Add(properties);
+        button.DropDown.Renderer = DesktopAppearanceService.MenuRenderer;
+        button.DropDownOpening += (_, _) =>
+        {
+            var hasSelection = HasTransferableSelection();
+            var singleSelection = _fileList.SelectedIndices.Count == 1;
+            var selectedItem = singleSelection && (uint)_fileList.SelectedIndices[0] < (uint)_items.Count
+                ? _items[_fileList.SelectedIndices[0]]
+                : null;
+            var selectedContainer = selectedItem is { IsContainer: true };
+            var selectedParent = selectedItem is { IsParentNavigation: true };
+            open.Enabled = singleSelection;
+            open.Text = selectedParent
+                ? "Go up one level"
+                : selectedContainer ? "Open" : "Open in external editor...";
+            edit.Enabled = singleSelection && !selectedContainer && !selectedParent;
+            copy.Enabled = hasSelection;
+            move.Enabled = hasSelection;
+            paste.Enabled = CanPaste?.Invoke() == true;
+            delete.Enabled = hasSelection;
+            copyToOtherPane.Enabled = hasSelection;
+            moveToOtherPane.Enabled = hasSelection;
+            selectAll.Enabled = _items.Any(static item => !item.IsParentNavigation);
+            properties.Enabled = singleSelection && !selectedParent;
+        };
+        return button;
+    }
+
+    internal static IReadOnlyList<BrowserListItem> ComposeVisibleItems(
+        IReadOnlyList<BrowserListItem> items,
+        bool canNavigateUp)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        return canNavigateUp ? new ParentPrefixedReadOnlyList(items) : items;
+    }
+
+    private bool CanNavigateUpInCurrentSurface() =>
+        IsLocalConnectionSelected
+            ? _localBrowser is not null && !_localBrowser.CurrentLocation.IsThisPc
+            : IsRemoteSnapshotSelected && _remoteBrowser?.CanGoUp == true;
+
+    private bool HasTransferableSelection()
+    {
+        if (_fileList.SelectedIndices.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var index in _fileList.SelectedIndices.Cast<int>())
+        {
+            if ((uint)index >= (uint)_items.Count || _items[index].IsParentNavigation)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private sealed class ParentPrefixedReadOnlyList(IReadOnlyList<BrowserListItem> items)
+        : IReadOnlyList<BrowserListItem>
+    {
+        public int Count => checked(items.Count + 1);
+        public BrowserListItem this[int index] => index switch
+        {
+            0 => ParentNavigationItem,
+            > 0 when index <= items.Count => items[index - 1],
+            _ => throw new ArgumentOutOfRangeException(nameof(index))
+        };
+        public IEnumerator<BrowserListItem> GetEnumerator()
+        {
+            yield return ParentNavigationItem;
+            foreach (var item in items) yield return item;
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     private ImageList CreateBrowserImageList()
     {
         var scale = DeviceDpi / 96F;
@@ -1989,25 +2586,257 @@ public sealed class BrowserPaneControl : UserControl
         node.SelectedImageKey = key;
     }
 
+    private static Label CreatePaneBadge(string text, Color color) => new()
+    {
+        Text = text,
+        AutoSize = true,
+        ForeColor = color,
+        BackColor = StorageHubTheme.SurfaceMuted,
+        Padding = new Padding(6, 2, 6, 2),
+        Margin = new Padding(2, 0, 4, 0),
+        Font = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold, GraphicsUnit.Point)
+    };
+
+    private static Panel CreateHeaderFrame(Padding padding, Padding margin) => new()
+    {
+        Dock = DockStyle.Fill,
+        Padding = padding,
+        Margin = margin,
+        BackColor = StorageHubTheme.SurfaceMuted,
+        BorderStyle = BorderStyle.FixedSingle
+    };
+
+    private void MeasureConnectionItem(object? sender, MeasureItemEventArgs e)
+    {
+        if (e.Index < 0 || e.Index >= _connectionSelector.Items.Count)
+        {
+            e.ItemHeight = 32;
+            return;
+        }
+
+        e.ItemHeight = GetConnectionItemHeight(e.Index);
+    }
+
+    private int GetConnectionItemHeight(int index) => IsFirstConnectionInGroup(index) ? 76 : 54;
+
+    private void ConnectionSelectorDropDown(object? sender, EventArgs e)
+    {
+        if (_connectionSelector.Items.Count == 0)
+        {
+            return;
+        }
+
+        using var badgeFont = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold, GraphicsUnit.Point);
+        using var groupFont = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold, GraphicsUnit.Point);
+        var desiredWidth = _connectionSelector.Width;
+        var desiredHeight = 4;
+        for (var index = 0; index < _connectionSelector.Items.Count; index++)
+        {
+            if (_connectionSelector.Items[index] is not ConnectionCardModel card)
+            {
+                continue;
+            }
+
+            desiredHeight += GetConnectionItemHeight(index);
+            var badge = card.Type == ConnectionProfileType.Client
+                ? $"CLIENT · {card.Provider.ToString().ToUpperInvariant()}"
+                : card.Provider == StorageProviderKind.Local
+                    ? "SYSTEM · LOCAL"
+                    : $"STORAGE · {card.Provider.ToString().ToUpperInvariant()}";
+            var nameAndBadge = TextRenderer.MeasureText(card.Name, _connectionSelector.Font).Width +
+                TextRenderer.MeasureText(badge, badgeFont).Width + 92;
+            var detailWidth = TextRenderer.MeasureText(card.Endpoint, _connectionSelector.Font).Width + 76;
+            var groupWidth = TextRenderer.MeasureText(
+                GetConnectionGroupLabel(card).ToUpperInvariant(),
+                groupFont).Width + 44;
+            desiredWidth = Math.Max(desiredWidth, Math.Max(nameAndBadge, Math.Max(detailWidth, groupWidth)));
+        }
+
+        var workingArea = Screen.FromControl(_connectionSelector).WorkingArea;
+        _connectionSelector.DropDownWidth = Math.Min(
+            Math.Max(_connectionSelector.Width, desiredWidth),
+            Math.Max(_connectionSelector.Width, workingArea.Width - 48));
+        _connectionSelector.DropDownHeight = Math.Min(
+            desiredHeight,
+            Math.Max(180, Math.Min(560, workingArea.Height - 96)));
+    }
+
     private void DrawConnectionItem(object? sender, DrawItemEventArgs e)
     {
-        e.DrawBackground();
-        if (e.Index >= 0 && _connectionSelector.Items[e.Index] is ConnectionCardModel card)
+        using var background = new SolidBrush(StorageHubTheme.Surface);
+        e.Graphics.FillRectangle(background, e.Bounds);
+        if (e.Index < 0 || _connectionSelector.Items[e.Index] is not ConnectionCardModel card)
         {
-            var accent = StorageHubTheme.ParseAccent(card.AccentHex);
-            using var brush = new SolidBrush(accent);
-            e.Graphics.FillEllipse(brush, e.Bounds.Left + 6, e.Bounds.Top + (e.Bounds.Height - 9) / 2, 9, 9);
-            var textColor = (e.State & DrawItemState.Selected) != 0 ? SystemColors.HighlightText : StorageHubTheme.Text;
+            return;
+        }
+
+        var compact = (e.State & DrawItemState.ComboBoxEdit) != 0;
+        if (compact)
+        {
+            DrawCompactConnectionItem(e.Graphics, e.Bounds, card, e.Font ?? Font);
+            return;
+        }
+
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        var firstInGroup = IsFirstConnectionInGroup(e.Index);
+        var groupTop = firstInGroup ? 22 : 0;
+        if (firstInGroup)
+        {
+            using var groupFont = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold, GraphicsUnit.Point);
             TextRenderer.DrawText(
                 e.Graphics,
-                card.Name,
-                e.Font ?? Font,
-                new Rectangle(e.Bounds.Left + 22, e.Bounds.Top, e.Bounds.Width - 24, e.Bounds.Height),
-                textColor,
+                GetConnectionGroupLabel(card).ToUpperInvariant(),
+                groupFont,
+                new Rectangle(e.Bounds.Left + 12, e.Bounds.Top + 2, e.Bounds.Width - 24, 18),
+                StorageHubTheme.TextMuted,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
 
-        e.DrawFocusRectangle();
+        var cardBounds = new Rectangle(
+            e.Bounds.Left + 8,
+            e.Bounds.Top + groupTop + 2,
+            Math.Max(1, e.Bounds.Width - 16),
+            Math.Max(1, e.Bounds.Height - groupTop - 5));
+        var selected = (e.State & DrawItemState.Selected) != 0;
+        using var cardFill = new SolidBrush(selected
+            ? StorageHubTheme.CurrentPalette.Selection
+            : StorageHubTheme.SurfaceMuted);
+        using var border = new Pen(selected
+            ? StorageHubTheme.ParseAccent(card.AccentHex)
+            : StorageHubTheme.Border,
+            selected ? 1.8F : 1F);
+        using var cardPath = CreateRoundedRectangle(cardBounds, 10);
+        e.Graphics.FillPath(cardFill, cardPath);
+        e.Graphics.DrawPath(border, cardPath);
+
+        var accent = StorageHubTheme.ParseAccent(card.AccentHex);
+        using var accentBrush = new SolidBrush(accent);
+        e.Graphics.FillEllipse(accentBrush, cardBounds.Left + 12, cardBounds.Top + 11, 9, 9);
+
+        var badgeText = card.Type == ConnectionProfileType.Client
+            ? $"CLIENT · {card.Provider.ToString().ToUpperInvariant()}"
+            : card.Provider == StorageProviderKind.Local
+                ? "SYSTEM · LOCAL"
+                : $"STORAGE · {card.Provider.ToString().ToUpperInvariant()}";
+        using var badgeFont = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold, GraphicsUnit.Point);
+        var badgeSize = TextRenderer.MeasureText(badgeText, badgeFont, Size.Empty, TextFormatFlags.NoPadding);
+        var badgeBounds = new Rectangle(
+            cardBounds.Right - badgeSize.Width - 19,
+            cardBounds.Top + Math.Max(6, (cardBounds.Height - 22) / 2),
+            badgeSize.Width + 12,
+            20);
+        using var badgeFill = new SolidBrush(Color.FromArgb(selected ? 48 : 28, accent));
+        using var badgePath = CreateRoundedRectangle(badgeBounds, 9);
+        e.Graphics.FillPath(badgeFill, badgePath);
+        TextRenderer.DrawText(
+            e.Graphics,
+            badgeText,
+            badgeFont,
+            badgeBounds,
+            selected ? StorageHubTheme.Text : accent,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+
+        var textRight = Math.Max(cardBounds.Left + 70, badgeBounds.Left - 10);
+        TextRenderer.DrawText(
+            e.Graphics,
+            card.Name,
+            e.Font ?? Font,
+            Rectangle.FromLTRB(cardBounds.Left + 29, cardBounds.Top + 5, textRight, cardBounds.Top + 24),
+            StorageHubTheme.Text,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        using var detailFont = new Font(e.Font ?? Font, FontStyle.Regular);
+        TextRenderer.DrawText(
+            e.Graphics,
+            card.Endpoint,
+            detailFont,
+            Rectangle.FromLTRB(cardBounds.Left + 29, cardBounds.Top + 23, textRight, cardBounds.Bottom - 3),
+            StorageHubTheme.TextMuted,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    private static void DrawCompactConnectionItem(
+        Graphics graphics,
+        Rectangle bounds,
+        ConnectionCardModel card,
+        Font font)
+    {
+        var accent = StorageHubTheme.ParseAccent(card.AccentHex);
+        using var accentBrush = new SolidBrush(accent);
+        graphics.FillEllipse(accentBrush, bounds.Left + 7, bounds.Top + Math.Max(2, (bounds.Height - 9) / 2), 9, 9);
+        var type = card.Type == ConnectionProfileType.Client
+            ? "CLIENT"
+            : card.Provider == StorageProviderKind.Local ? "LOCAL" : "STORAGE";
+        var typeWidth = TextRenderer.MeasureText(type, font).Width + 10;
+        var typeBounds = new Rectangle(bounds.Right - typeWidth - 5, bounds.Top + 3, typeWidth, Math.Max(18, bounds.Height - 6));
+        TextRenderer.DrawText(
+            graphics,
+            type,
+            font,
+            typeBounds,
+            accent,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        TextRenderer.DrawText(
+            graphics,
+            card.Name,
+            font,
+            Rectangle.FromLTRB(bounds.Left + 23, bounds.Top, typeBounds.Left - 5, bounds.Bottom),
+            StorageHubTheme.Text,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    private bool IsFirstConnectionInGroup(int index) => index == 0 ||
+        _connectionSelector.Items[index - 1] is not ConnectionCardModel previous ||
+        _connectionSelector.Items[index] is not ConnectionCardModel current ||
+        !string.Equals(
+            GetConnectionGroupLabel(previous),
+            GetConnectionGroupLabel(current),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string ConnectionGroupSortKey(ConnectionCardModel card) =>
+        $"{(card.IsEnabled ? card.IsFavorite ? 0 : card.Type == ConnectionProfileType.Storage ? 1 : 2 : 3)}|" +
+        GetConnectionGroupLabel(card);
+
+    private static string GetConnectionGroupLabel(ConnectionCardModel card)
+    {
+        if (card.ConnectionId is null)
+        {
+            return "On this device";
+        }
+
+        if (!card.IsEnabled)
+        {
+            return "Disabled";
+        }
+
+        if (card.IsFavorite)
+        {
+            return "Favorites";
+        }
+
+        if (!string.IsNullOrWhiteSpace(card.FolderPath))
+        {
+            return card.FolderPath.Trim();
+        }
+
+        return card.Type == ConnectionProfileType.Client
+            ? $"Clients · {card.Descriptor.DisplayName}"
+            : $"Storage · {card.Descriptor.DisplayName}";
+    }
+
+    private static System.Drawing.Drawing2D.GraphicsPath CreateRoundedRectangle(Rectangle bounds, int radius)
+    {
+        var path = new System.Drawing.Drawing2D.GraphicsPath();
+        var diameter = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
+        var arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
+        path.AddArc(arc, 180, 90);
+        arc.X = bounds.Right - diameter;
+        path.AddArc(arc, 270, 90);
+        arc.Y = bounds.Bottom - diameter;
+        path.AddArc(arc, 0, 90);
+        arc.X = bounds.Left;
+        path.AddArc(arc, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     private void ConnectionSelectionChanged(object? sender, EventArgs e)
@@ -2022,13 +2851,23 @@ public sealed class BrowserPaneControl : UserControl
         _remoteBrowser?.CancelCurrentOperation();
         SetNavigationBusy(false);
         UpdateConnectionPresentation();
-        if (IsLocalConnectionSelected)
+        if (IsSshClientSelected &&
+            _connectionSelector.SelectedItem is ConnectionCardModel
+            {
+                ConnectionId: { } clientId
+            } client)
         {
+            ShowSshClientSurface(clientId, client.Name);
+        }
+        else if (IsLocalConnectionSelected)
+        {
+            ShowBrowserSurface();
             _addressBox.Text = _localBrowser!.CurrentLocation.DisplayText;
             _ = NavigateLocalAsync(LocalBrowserNavigationKind.Refresh);
         }
         else if (IsAnyConnectionsHomeSelected)
         {
+            ShowBrowserSurface();
             HideError();
             _filterBox.Text = string.Empty;
             _addressBox.Text = "Connections";
@@ -2042,6 +2881,7 @@ public sealed class BrowserPaneControl : UserControl
         }
         else if (_connectionSelector.SelectedItem is ConnectionCardModel { ConnectionId: { } connectionId })
         {
+            ShowBrowserSurface();
             _filterBox.Text = string.Empty;
             _ = SelectRemoteConnectionAsync(connectionId);
         }
@@ -2055,10 +2895,20 @@ public sealed class BrowserPaneControl : UserControl
         }
 
         _accentBar.BackColor = StorageHubTheme.ParseAccent(card.AccentHex);
+        _connectionNameLabel.Text = card.Name;
+        _connectionNameLabel.AccessibleDescription = $"Active connection: {card.Name}";
+        _connectionTypeBadge.Text = card.Type == ConnectionProfileType.Client ? "CLIENT" : "STORAGE";
+        _connectionTypeBadge.ForeColor = StorageHubTheme.ParseAccent(card.AccentHex);
+        _providerBadge.Text = card.Provider.ToString().ToUpperInvariant();
         var localActive = IsLocalConnectionSelected;
         var remoteActive = IsRemoteSnapshotSelected;
-        _connectionState.Text = localActive || remoteActive ? "● Ready" : "○ Choose a saved connection";
-        _connectionState.ForeColor = localActive || remoteActive
+        var clientActive = IsSshClientSelected;
+        _connectionState.Text = clientActive
+            ? "● SSH terminal"
+            : localActive || remoteActive
+                ? "● Ready"
+                : "○ Choose a saved connection";
+        _connectionState.ForeColor = localActive || remoteActive || clientActive
             ? StorageHubTheme.Success
             : StorageHubTheme.TextMuted;
         _connectionState.AccessibleDescription = card.State;
@@ -2066,8 +2916,56 @@ public sealed class BrowserPaneControl : UserControl
             ? _localBrowser!.CurrentLocation.DisplayText
             : remoteActive
                 ? _remoteBrowser!.CurrentSnapshot!.DisplayPath
-                : "Connections";
+                : clientActive
+                    ? "SSH terminal"
+                    : "Connections";
         UpdateNavigationButtons();
+        RefreshCommandState();
+    }
+
+    private void ShowSshClientSurface(Guid connectionId, string displayName)
+    {
+        if (_embeddedTerminalConnectionId == connectionId && _embeddedTerminal is not null)
+        {
+            _browserSurface.Visible = false;
+            _embeddedTerminal.Visible = true;
+            return;
+        }
+
+        DisposeEmbeddedTerminal();
+        _browserSurface.Visible = false;
+        var terminal = _sshTerminalFactory(connectionId, displayName);
+        terminal.TopLevel = false;
+        terminal.FormBorderStyle = FormBorderStyle.None;
+        terminal.Dock = DockStyle.Fill;
+        terminal.ShowInTaskbar = false;
+        _embeddedTerminal = terminal;
+        _embeddedTerminalConnectionId = connectionId;
+        _contentHost.Controls.Add(terminal);
+        terminal.BringToFront();
+        terminal.Show();
+        _ = terminal.StartSessionAsync();
+    }
+
+    private void ShowBrowserSurface()
+    {
+        DisposeEmbeddedTerminal();
+        _browserSurface.Visible = true;
+        _browserSurface.BringToFront();
+    }
+
+    private void DisposeEmbeddedTerminal()
+    {
+        var terminal = _embeddedTerminal;
+        _embeddedTerminal = null;
+        _embeddedTerminalConnectionId = null;
+        if (terminal is null)
+        {
+            return;
+        }
+
+        _contentHost.Controls.Remove(terminal);
+        terminal.Dispose();
     }
 
     private void ManageConnectionsClicked(object? sender, EventArgs e)
@@ -2075,15 +2973,6 @@ public sealed class BrowserPaneControl : UserControl
         using var dialog = new ConnectionManagerForm();
         _ = dialog.ShowDialog(FindForm());
         _ = LoadRemoteConnectionsAsync(preserveCurrentSurface: !IsAnyConnectionsHomeSelected);
-    }
-
-    private enum BrowserSortColumn
-    {
-        Name,
-        Size,
-        Type,
-        Modified,
-        Status
     }
 
     private sealed record RemoteTreeRoot(Guid ConnectionId);
@@ -2106,9 +2995,16 @@ public sealed class BrowserPaneControl : UserControl
             IReadOnlyList<CachedRemoteDirectory> children,
             bool isComplete,
             long sequence,
-            int maximumListings)
+            int maximumListings,
+            bool append)
         {
             LastAccess = sequence;
+            if (append && Listings.TryGetValue(path, out var existing))
+            {
+                children = existing.Children.Concat(children)
+                    .DistinctBy(static child => child.Path, StringComparer.Ordinal)
+                    .ToArray();
+            }
             Listings[path] = new CachedRemoteListing(children, isComplete, sequence);
             while (Listings.Count > maximumListings)
             {
@@ -2165,6 +3061,12 @@ public sealed class PaneTransferDropRequestedEventArgs(
     public TransferQueueOperation Operation { get; } = operation;
 }
 
+public sealed class ShellImportDropRequestedEventArgs(string[] sourcePaths, TransferQueueAddress destination) : EventArgs
+{
+    public string[] SourcePaths { get; } = sourcePaths;
+    public TransferQueueAddress Destination { get; } = destination;
+}
+
 public sealed class PaneSelectionStagedEventArgs(
     PaneSelectionSnapshot selection,
     TransferQueueOperation operation) : EventArgs
@@ -2175,6 +3077,15 @@ public sealed class PaneSelectionStagedEventArgs(
 }
 
 internal sealed record PaneDragPayload(BrowserPaneControl SourcePane, PaneSelectionSnapshot Selection);
+
+internal enum BrowserSortColumn
+{
+    Name,
+    Size,
+    Type,
+    Modified,
+    Status
+}
 
 public sealed record BrowserListItem(
     string Name,
@@ -2189,7 +3100,8 @@ public sealed record BrowserListItem(
     string? NativeItemId = null,
     string? VersionId = null,
     string? EntityTag = null,
-    DateTimeOffset? ModifiedUtc = null);
+    DateTimeOffset? ModifiedUtc = null,
+    bool IsParentNavigation = false);
 
 public sealed class PaneTransferRequestedEventArgs : EventArgs
 {

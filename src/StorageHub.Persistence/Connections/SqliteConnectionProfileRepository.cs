@@ -347,9 +347,9 @@ public sealed class SqliteConnectionProfileRepository : IConnectionProfileReposi
     private static ConnectionProfile ReadProfile(SqliteDataReader reader)
     {
         var id = ConnectionProfileId.Parse(reader.GetString(0));
-        var provider = ProviderFromStorage(reader.GetString(1));
         var metadata = DeserializeMetadata(reader.GetString(2));
         var endpoint = DeserializeEndpoint(reader.GetString(3));
+        var provider = endpoint.Provider;
         var authentication = DeserializeAuthentication(reader.GetString(4));
         var options = DeserializeOptions(reader.GetString(5));
         var enabled = reader.GetInt64(6) == 1;
@@ -446,6 +446,8 @@ public sealed class SqliteConnectionProfileRepository : IConnectionProfileReposi
                 RootPath: ftps.RootPath),
             SftpEndpoint sftp => new PersistedEndpoint(
                 "sftp", RootPath: sftp.RootPath, Host: sftp.Host, Port: sftp.Port, HostKeyPolicy: sftp.HostKeyPolicy),
+            SshClientEndpoint ssh => new PersistedEndpoint(
+                "ssh", Host: ssh.Host, Port: ssh.Port, HostKeyPolicy: ssh.HostKeyPolicy),
             _ => throw new NotSupportedException($"Endpoint type {endpoint.GetType().Name} is not supported.")
         };
         return JsonSerializer.Serialize(value, JsonOptions);
@@ -481,6 +483,10 @@ public sealed class SqliteConnectionProfileRepository : IConnectionProfileReposi
                 Required(value.Port, "SFTP port"),
                 value.HostKeyPolicy ?? SshHostKeyPolicy.Unspecified,
                 value.RootPath),
+            "ssh" => new SshClientEndpoint(
+                Required(value.Host, "SSH host"),
+                Required(value.Port, "SSH port"),
+                value.HostKeyPolicy ?? SshHostKeyPolicy.Unspecified),
             _ => throw new InvalidDataException("The stored connection endpoint kind is unknown.")
         };
     }
@@ -592,6 +598,9 @@ public sealed class SqliteConnectionProfileRepository : IConnectionProfileReposi
         ConnectionProviderKind.Ftp => "ftp",
         ConnectionProviderKind.Ftps => "ftps",
         ConnectionProviderKind.Sftp => "sftp",
+        // The original schema constrains this legacy storage-provider column. The endpoint JSON
+        // carries the authoritative SSH client discriminator and restores ConnectionProviderKind.Ssh.
+        ConnectionProviderKind.Ssh => "sftp",
         _ => throw new ArgumentOutOfRangeException(nameof(provider))
     };
 

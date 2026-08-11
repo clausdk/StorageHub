@@ -31,7 +31,7 @@ public sealed class AgentStatusMonitor : IAsyncDisposable
         TimeSpan? connectTimeout = null)
     {
         _pollInterval = pollInterval ?? TimeSpan.FromSeconds(8);
-        _connectTimeout = connectTimeout ?? TimeSpan.FromMilliseconds(450);
+        _connectTimeout = connectTimeout ?? TimeSpan.FromSeconds(1);
         if (_pollInterval < TimeSpan.FromSeconds(1))
         {
             throw new ArgumentOutOfRangeException(nameof(pollInterval), "The poll interval must be at least one second.");
@@ -97,9 +97,9 @@ public sealed class AgentStatusMonitor : IAsyncDisposable
                 ClientName = "StorageHub.Desktop",
                 ClientVersion = typeof(AgentStatusMonitor).Assembly.GetName().Version?.ToString() ?? "0.1.0",
                 ConnectTimeout = _connectTimeout,
-                MaxConnectAttempts = 1,
-                InitialReconnectDelay = TimeSpan.Zero,
-                MaximumReconnectDelay = TimeSpan.Zero
+                MaxConnectAttempts = 3,
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
+                MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
             });
             _ = await client.ConnectAsync(cancellationToken).ConfigureAwait(false);
             var requestId = Guid.NewGuid();

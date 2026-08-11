@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import hmac
+import logging
 import os
 from pathlib import Path
 
@@ -48,7 +49,28 @@ class FixtureSshServer(asyncssh.SSHServer):
         )
 
 
+async def terminal_process(process) -> None:
+    """Small PTY fixture used by the SSH client integration test."""
+    process.stdout.write("StorageHub SSH fixture ready\r\n")
+    while True:
+        try:
+            data = await process.stdin.read(32768)
+        except asyncssh.TerminalSizeChanged:
+            continue
+        if not data:
+            break
+        process.stdout.write(data)
+        if "exit" in data.lower():
+            break
+    process.exit(0)
+
+
 async def serve(args) -> None:
+    logging.basicConfig(
+        filename=str(Path(args.ready_file).resolve()) + ".log",
+        level=logging.DEBUG,
+        format="%(levelname)s %(name)s %(message)s",
+    )
     root = Path(args.root).resolve()
     if not root.is_dir():
         raise RuntimeError("The SFTP fixture root does not exist.")
@@ -74,7 +96,7 @@ async def serve(args) -> None:
         ),
         server_host_keys=[host_key],
         sftp_factory=lambda channel: asyncssh.SFTPServer(channel, chroot=str(root)),
-        encoding=None,
+        process_factory=terminal_process,
     )
     Path(args.ready_file).resolve().write_text("ready", encoding="ascii")
     await server.wait_closed()

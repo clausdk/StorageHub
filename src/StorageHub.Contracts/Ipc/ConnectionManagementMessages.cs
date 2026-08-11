@@ -35,6 +35,13 @@ public static class ConnectionProfileIpcLimits
     public const int MaximumEncodingNameLength = 64;
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<ConnectionProfileType>))]
+public enum ConnectionProfileType
+{
+    Storage = 0,
+    Client = 1
+}
+
 [JsonConverter(typeof(JsonStringEnumConverter<ConnectionTlsCertificatePolicy>))]
 public enum ConnectionTlsCertificatePolicy
 {
@@ -195,6 +202,12 @@ public sealed record ConnectionEndpointDocument(
             Empty(ClientCertificatePfxReference) && Empty(ClientCertificatePasswordReference) &&
             TlsPolicy == ConnectionTlsCertificatePolicy.SystemTrust &&
             FtpsTlsMode == ConnectionFtpsTlsMode.Explicit,
+        StorageConnectionProvider.Ssh =>
+            Present(Host) && Port is not null && Empty(RootPath) && Empty(Bucket) && Empty(Region) &&
+            Empty(ServiceEndpoint) && !ForcePathStyle && !AllowInsecureTransport &&
+            Empty(ClientCertificatePfxReference) && Empty(ClientCertificatePasswordReference) &&
+            TlsPolicy == ConnectionTlsCertificatePolicy.SystemTrust &&
+            FtpsTlsMode == ConnectionFtpsTlsMode.Explicit,
         _ => false
     };
 
@@ -307,14 +320,19 @@ public sealed record ConnectionProfileDraft(
     ConnectionEndpointDocument Endpoint,
     ConnectionAuthenticationDocument Authentication,
     ConnectionOperationalOptionsDocument OperationalOptions,
-    bool IsEnabled = true)
+    bool IsEnabled = true,
+    ConnectionProfileType Type = ConnectionProfileType.Storage)
 {
     public bool HasValidBounds =>
+        Enum.IsDefined(Type) &&
         Metadata is { HasValidBounds: true } &&
         Endpoint is { HasValidBounds: true } &&
         Authentication is { HasValidBounds: true } &&
         OperationalOptions is { HasValidBounds: true } &&
-        HasCompatibleAuthentication();
+        HasCompatibleAuthentication() &&
+        (Type == ConnectionProfileType.Client
+            ? Endpoint.Provider == StorageConnectionProvider.Ssh
+            : Endpoint.Provider != StorageConnectionProvider.Ssh);
 
     private bool HasCompatibleAuthentication() => Endpoint.Provider switch
     {
@@ -326,6 +344,8 @@ public sealed record ConnectionProfileDraft(
         StorageConnectionProvider.Ftp or StorageConnectionProvider.Ftps => Authentication.Kind is
             ConnectionAuthenticationKind.None or ConnectionAuthenticationKind.UsernamePassword,
         StorageConnectionProvider.Sftp => Authentication.Kind is
+            ConnectionAuthenticationKind.UsernamePassword or ConnectionAuthenticationKind.SftpPrivateKey,
+        StorageConnectionProvider.Ssh => Authentication.Kind is
             ConnectionAuthenticationKind.UsernamePassword or ConnectionAuthenticationKind.SftpPrivateKey,
         _ => false
     };

@@ -75,6 +75,75 @@ public sealed class WindowsPackagedAgentProcessMonitor : IPackagedAgentProcessMo
         return false;
     }
 
+    public async ValueTask<bool> TryTerminateAsync(
+        string executablePath,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromSeconds(12))
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        }
+
+        var expectedPath = RequireAbsolutePath(executablePath);
+        var processName = Path.GetFileNameWithoutExtension(expectedPath);
+        var matchingProcesses = new List<Process>();
+        try
+        {
+            foreach (var process in Process.GetProcessesByName(processName))
+            {
+                try
+                {
+                    if (!process.HasExited && IsExpectedExecutable(process, expectedPath))
+                    {
+                        matchingProcesses.Add(process);
+                    }
+                    else
+                    {
+                        process.Dispose();
+                    }
+                }
+                catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+                {
+                    process.Dispose();
+                }
+            }
+
+            foreach (var process in matchingProcesses)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            using var timeoutCancellation = new CancellationTokenSource(timeout);
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeoutCancellation.Token);
+            try
+            {
+                await Task.WhenAll(matchingProcesses.Select(process =>
+                    process.WaitForExitAsync(lifetime.Token))).ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (
+                timeoutCancellation.IsCancellationRequested &&
+                !cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+        {
+            return false;
+        }
+        finally
+        {
+            foreach (var process in matchingProcesses)
+            {
+                process.Dispose();
+            }
+        }
+    }
+
     public async ValueTask<bool> WaitForExitAsync(
         int processId,
         string executablePath,

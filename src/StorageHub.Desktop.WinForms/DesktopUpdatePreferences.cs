@@ -3,11 +3,24 @@ using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
+public enum DesktopAppearance
+{
+    Light = 1,
+    Dark = 2,
+    System = 3
+}
+
 public enum SshHostKeyDiscoveryMode
 {
     Manual = 1,
     AskBeforeFetching = 2,
     Automatic = 3
+}
+
+public enum WorkspaceLayout
+{
+    SideBySide = 1,
+    TopAndBottom = 2
 }
 
 internal sealed record DesktopUpdatePreferences(
@@ -22,9 +35,13 @@ internal sealed record DesktopUpdatePreferences(
     int MinimumConcurrency = 1,
     int MaximumTransferConcurrency = 4,
     int PerConnectionConcurrency = 2,
-    int MaximumSyncConcurrency = 2)
+    int MaximumSyncConcurrency = 2,
+    DesktopAppearance Appearance = DesktopAppearance.System,
+    bool WarnBeforeUnsafeExternalEdit = true,
+    IReadOnlyDictionary<string, string>? ConnectionDefaults = null,
+    WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide)
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 7;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
@@ -114,7 +131,18 @@ internal sealed class DesktopUpdatePreferencesStore
                     concurrencyIsValid ? document.MinimumConcurrency : DesktopUpdatePreferences.Defaults.MinimumConcurrency,
                     concurrencyIsValid ? document.MaximumTransferConcurrency : DesktopUpdatePreferences.Defaults.MaximumTransferConcurrency,
                     concurrencyIsValid ? document.PerConnectionConcurrency : DesktopUpdatePreferences.Defaults.PerConnectionConcurrency,
-                    concurrencyIsValid ? document.MaximumSyncConcurrency : DesktopUpdatePreferences.Defaults.MaximumSyncConcurrency)
+                    concurrencyIsValid ? document.MaximumSyncConcurrency : DesktopUpdatePreferences.Defaults.MaximumSyncConcurrency,
+                    document.SchemaVersion >= 5 && Enum.IsDefined(document.Appearance)
+                        ? document.Appearance : DesktopAppearance.System,
+                    document.WarnBeforeUnsafeExternalEdit,
+                    document.SchemaVersion >= 6
+                        ? document.ConnectionDefaults is null
+                            ? null
+                            : ConnectionDefaultSettings.Normalize(document.ConnectionDefaults)
+                        : null,
+                    document.SchemaVersion >= 7 && Enum.IsDefined(document.DefaultWorkspaceLayout)
+                        ? document.DefaultWorkspaceLayout
+                        : WorkspaceLayout.SideBySide)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -137,7 +165,8 @@ internal sealed class DesktopUpdatePreferencesStore
             preferences.MinimumConcurrency > preferences.MaximumTransferConcurrency ||
             preferences.PerConnectionConcurrency is < 1 or > 16 ||
             preferences.MaximumSyncConcurrency is < 1 or > 8 ||
-            preferences.MinimumConcurrency > preferences.MaximumSyncConcurrency)
+            preferences.MinimumConcurrency > preferences.MaximumSyncConcurrency ||
+            !Enum.IsDefined(preferences.Appearance))
         {
             throw new ArgumentException("External editor preferences exceed the permitted bounds.", nameof(preferences));
         }
@@ -165,7 +194,13 @@ internal sealed class DesktopUpdatePreferencesStore
                 preferences.MinimumConcurrency,
                 preferences.MaximumTransferConcurrency,
                 preferences.PerConnectionConcurrency,
-                preferences.MaximumSyncConcurrency);
+                preferences.MaximumSyncConcurrency,
+                preferences.Appearance,
+                preferences.WarnBeforeUnsafeExternalEdit,
+                preferences.ConnectionDefaults is null
+                    ? null
+                    : ConnectionDefaultSettings.Normalize(preferences.ConnectionDefaults),
+                preferences.DefaultWorkspaceLayout);
             using (var stream = new FileStream(
                 temporaryPath,
                 FileMode.CreateNew,
@@ -232,5 +267,9 @@ internal sealed class DesktopUpdatePreferencesStore
         int MinimumConcurrency = 1,
         int MaximumTransferConcurrency = 4,
         int PerConnectionConcurrency = 2,
-        int MaximumSyncConcurrency = 2);
+        int MaximumSyncConcurrency = 2,
+        DesktopAppearance Appearance = DesktopAppearance.System,
+        bool WarnBeforeUnsafeExternalEdit = true,
+        Dictionary<string, string>? ConnectionDefaults = null,
+        WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide);
 }

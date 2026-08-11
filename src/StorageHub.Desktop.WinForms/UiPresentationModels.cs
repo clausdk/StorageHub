@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
@@ -9,7 +10,8 @@ public enum StorageProviderKind
     S3,
     Ftp,
     Ftps,
-    Sftp
+    Sftp,
+    Ssh
 }
 
 public enum ConnectionFieldKind
@@ -46,7 +48,8 @@ public sealed record ConnectionProviderDescriptor(
     string TrustNotice,
     IReadOnlyList<ConnectionFieldDescriptor> GeneralFields,
     IReadOnlyList<ConnectionFieldDescriptor> AuthenticationFields,
-    IReadOnlyList<ConnectionFieldDescriptor> SecurityFields)
+    IReadOnlyList<ConnectionFieldDescriptor> SecurityFields,
+    ConnectionProfileType Type = ConnectionProfileType.Storage)
 {
     public override string ToString() => DisplayName;
 }
@@ -187,7 +190,32 @@ public static class ConnectionProviderCatalog
             ],
             [
                 Field("hostKeyFingerprint", "SSH host-key SHA-256 fingerprint", ConnectionFieldKind.Fingerprint, required: true, placeholder: "SHA256:...")
-            ])
+            ]),
+        new(
+            StorageProviderKind.Ssh,
+            "SSH Terminal",
+            "SSH",
+            "#06B6D4",
+            22,
+            true,
+            "Interactive Secure Shell terminal using managed SSH.NET; no PuTTY dependency.",
+            "ssh.example.com",
+            "SSH host keys are never accepted silently. Verify and pin the SHA-256 fingerprint before connecting.",
+            [
+                Field("host", "Host", ConnectionFieldKind.Text, required: true, placeholder: "ssh.example.com"),
+                Field("port", "Port", ConnectionFieldKind.Number, required: true, defaultValue: "22")
+            ],
+            [
+                Field("username", "Username", ConnectionFieldKind.Text, required: true),
+                Field("authenticationMode", "Authentication", ConnectionFieldKind.Choice, defaultValue: SshAuthenticationModes[0], choices: SshAuthenticationModes),
+                Field("passwordReference", "Password reference", ConnectionFieldKind.SecretReference, placeholder: "Optional vault entry"),
+                Field("privateKeyReference", "OpenSSH / PEM private-key reference", ConnectionFieldKind.SecretReference, placeholder: "Select a vault entry"),
+                Field("privateKeyPassphraseReference", "Private-key passphrase reference", ConnectionFieldKind.SecretReference, required: true, placeholder: "Required vault entry")
+            ],
+            [
+                Field("hostKeyFingerprint", "SSH host-key SHA-256 fingerprint", ConnectionFieldKind.Fingerprint, required: true, placeholder: "SHA256:...")
+            ],
+            ConnectionProfileType.Client)
     });
 
     public static IReadOnlyList<ConnectionProviderDescriptor> All => Providers;
@@ -259,6 +287,8 @@ public sealed record ConnectionCardModel(
     string[]? Tags = null)
 {
     public ConnectionProviderDescriptor Descriptor => ConnectionProviderCatalog.Get(Provider);
+
+    public ConnectionProfileType Type => Descriptor.Type;
 
     public string AccentHex => string.IsNullOrWhiteSpace(AccentColor)
         ? Descriptor.AccentHex

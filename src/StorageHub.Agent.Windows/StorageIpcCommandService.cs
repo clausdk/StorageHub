@@ -368,6 +368,7 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
         StorageConnectionProvider.Ftp => ConnectionProviderKind.Ftp,
         StorageConnectionProvider.Ftps => ConnectionProviderKind.Ftps,
         StorageConnectionProvider.Sftp => ConnectionProviderKind.Sftp,
+        StorageConnectionProvider.Ssh => ConnectionProviderKind.Ssh,
         _ => throw new InvalidDataException("The connection provider is invalid.")
     };
 
@@ -378,6 +379,7 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
         ConnectionProviderKind.Ftp => StorageConnectionProvider.Ftp,
         ConnectionProviderKind.Ftps => StorageConnectionProvider.Ftps,
         ConnectionProviderKind.Sftp => StorageConnectionProvider.Sftp,
+        ConnectionProviderKind.Ssh => StorageConnectionProvider.Ssh,
         _ => throw new InvalidDataException("The saved connection provider is invalid.")
     };
 
@@ -391,7 +393,10 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
         profile.IsEnabled,
         profile.Metadata.IconKey,
         profile.Metadata.AccentColor,
-        profile.Version);
+        profile.Version,
+        profile.Type == StorageHub.Application.Connections.ConnectionProfileType.Client
+            ? StorageHub.Contracts.Ipc.ConnectionProfileType.Client
+            : StorageHub.Contracts.Ipc.ConnectionProfileType.Storage);
 
     private static StorageListItem MapEntry(StorageEntry entry, bool includeStableIdentities) => new(
         entry.Name,

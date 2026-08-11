@@ -19,11 +19,14 @@ public sealed class SyncProfileTests
             deletionSafety: new DeletionSafetyPolicy(3, 1m));
         var differentTransfer = Create(
             transferOptions: new TransferExecutionOptions(Overwrite: true));
+        var nonAtomicCompatibility = Create(
+            transferOptions: new TransferExecutionOptions(AllowNonAtomicDestinationWrites: true));
 
         Assert.Equal(baseline.PolicySha256, renamed.PolicySha256);
         Assert.NotEqual(baseline.PolicySha256, differentRoot.PolicySha256);
         Assert.NotEqual(baseline.PolicySha256, differentSafety.PolicySha256);
         Assert.NotEqual(baseline.PolicySha256, differentTransfer.PolicySha256);
+        Assert.NotEqual(baseline.PolicySha256, nonAtomicCompatibility.PolicySha256);
         Assert.Equal(64, baseline.PolicySha256.Length);
     }
 

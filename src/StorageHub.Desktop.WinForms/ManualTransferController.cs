@@ -282,7 +282,9 @@ public sealed class PaneSelectionSnapshot
 
 public sealed class PaneDestinationSnapshot
 {
-    public const int MaximumVisibleEntries = RemoteBrowserController.MaximumAccumulatedEntries;
+    // Conflict-review snapshots remain bounded even though the browser's disk-backed index
+    // can display much larger folders. A future provider-side conflict query can lift this.
+    public const int MaximumVisibleEntries = 10_000;
 
     private PaneDestinationSnapshot(
         PaneTransferContext context,

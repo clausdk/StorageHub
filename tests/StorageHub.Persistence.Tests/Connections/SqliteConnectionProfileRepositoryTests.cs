@@ -64,7 +64,10 @@ public sealed class SqliteConnectionProfileRepositoryTests : IDisposable
             ConnectionProfile.Create(ConnectionProfileId.New(), new ConnectionProfileMetadata("SFTP provider"),
                 new SftpEndpoint("sftp.example.test", 22, SshHostKeyPolicy.TrustOnFirstUse),
                 new SftpPrivateKeyAuthentication("sftp-user", SecretReference.Create(), SecretReference.Create(),
-                    SftpPrivateKeyFormat.Pkcs8), OptionsForConnection(), now)
+                    SftpPrivateKeyFormat.Pkcs8), OptionsForConnection(), now),
+            ConnectionProfile.Create(ConnectionProfileId.New(), new ConnectionProfileMetadata("SSH client"),
+                new SshClientEndpoint("ssh.example.test", 22, SshHostKeyPolicy.Pinned),
+                new UsernamePasswordAuthentication("ssh-user", password), OptionsForConnection(), now)
         };
 
         foreach (var profile in profiles)
@@ -73,6 +76,7 @@ public sealed class SqliteConnectionProfileRepositoryTests : IDisposable
             var loaded = await repository.GetAsync(profile.Id);
             Assert.NotNull(loaded);
             Assert.Equal(profile.Provider, loaded.Provider);
+            Assert.Equal(profile.Type, loaded.Type);
             Assert.Equal(profile.Endpoint, loaded.Endpoint);
             Assert.Equal(profile.Authentication, loaded.Authentication);
             Assert.Equal(profile.OperationalOptions, loaded.OperationalOptions);

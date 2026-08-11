@@ -58,13 +58,16 @@ an installation.
   user-space FTP fixtures cover plaintext FTP, explicit and implicit FTPS,
   generated certificate pins, and client-PFX authentication. A hash-locked
   AsyncSSH fixture covers SFTP password and encrypted-private-key authentication,
-  host-key rotation, authentication substitution, and malformed pins. Opaque
+  plus managed SSH terminal open/write/read/resize/close on the same loopback
+  server, host-key rotation, authentication substitution, and malformed pins. Opaque
   provider ETags are never treated as content hashes.
-- Validated connection profiles for local storage, S3, FTP, FTPS, and SFTP,
-  including favorites, folders, tags, per-connection options, PFX references,
+- Typed connection profiles split into **Storage** (Local, S3, FTP, FTPS, SFTP)
+  and **Clients** (SSH), with a discriminator designed for future client types
+  such as VNC. Profiles include independent folders and labels, favorites,
+  per-connection options, PFX references,
   SSH private-key references, and optimistic concurrency in SQLite.
-- A grouped Connection Manager tree that keeps each saved profile in one clear
-  section (favorites, folder, provider, or disabled), sorts profiles by name,
+- A grouped Connection Manager tree rooted at Storage and Clients, with nested
+  favorites, folders, and providers (plus disabled profiles), sorting by name,
   preserves provider badges and tag pills, and searches names, endpoints,
   folders, providers, states, and tags.
 - A fail-closed profile connector that resolves vault secrets and trust records
@@ -78,12 +81,21 @@ an installation.
   and SFTP host-key enrollment, explicit rejection, and atomic rollover. Trust
   targets are derived by the agent from the saved pinned profile; no certificate
   or host key is accepted on first contact.
-- A structured Settings center groups all current desktop preferences under
-  General, Connections & trust, Updates, and About. SFTP host-key discovery can
+- A structured Settings center includes catalog-driven Connections navigation
+  for Storage, Clients, and an individual page for Local/UNC, S3, FTP, FTPS,
+  SFTP, and SSH. Each provider page documents its endpoint, authentication,
+  security fields, defaults, and trust behavior and opens Connection Manager
+  preselected to that provider. SFTP/SSH host-key discovery can
   be manual, ask-before-fetch, or automatic; Connection Manager also exposes a
   direct **Fetch from host** action. Discovery performs no authentication and
   never stores trust—the presented SHA-256 fingerprint still requires explicit
   verification through a separate trusted channel.
+- A managed SSH.NET terminal client launched from Connection Manager, with no
+  PuTTY dependency. Sessions live in the background agent, use vault-backed
+  authentication and verified host-key records, and expose bounded IPC for
+  input, output, resize, and close. Its stateful VT renderer supports cursor
+  addressing, clearing/editing commands, scroll regions, bold text, ANSI,
+  256-color and true-color output, and bounded scrollback.
 - A Windows DPAPI current-user vault with versioned envelopes, atomic updates,
   rotation, corruption detection, and zeroed secret leases.
 - A WAL-mode SQLite foundation with cross-process-serialized migrations, foreign
@@ -125,7 +137,8 @@ an installation.
   controls, integrity-checked silent update/restart, graceful update/uninstall
   shutdown, portable and installer artifacts, checksums, provenance attestation,
   and disposable-runner install/uninstall smoke tests.
-- A modern high-DPI WinForms/Krypton shell with top menus, dual browser panes,
+- A modern high-DPI stock WinForms shell with StorageHub-owned Light, Dark, and
+  System themes, top menus, dual browser panes,
   functional asynchronous local and remote browsing with history, filtering and
   bounded paging, saved-pane file transfer actions, durable queue/sync/schedule
   surfaces, a read-only paged object inspector for versions/metadata/tags,
@@ -149,6 +162,7 @@ library.
 | Amazon S3 and S3-compatible services | Yes | Yes | Hermetic MinIO interoperability and hostile-input test |
 | FTP, explicit FTPS, implicit FTPS | Yes | Yes | Hermetic interoperability, pin/downgrade, and client-PFX tests |
 | SFTP | Yes, via SSH.NET | Yes | Hermetic password/key interoperability and hostile host-key tests |
+| SSH terminal client | Managed SSH.NET client | Yes | Hermetic open/write/read/resize/close test beside SFTP |
 | WebDAV | Yes | Not yet | Pending |
 | Azure Blob Storage | Yes | Not yet | Pending |
 | Google Cloud Storage | Yes | Not yet | Pending |
@@ -161,46 +175,16 @@ library.
   `global.json`
 - Git
 - CPython 3.12 when running the local FTP/FTPS or SFTP fixtures; CI pins 3.12.10
-- A checkout of [Media2A/CodeLogic.Libs](https://github.com/Media2A/CodeLogic.Libs)
-  containing `CL.Storage`
 
-The full solution currently references `CL.Storage.csproj` directly while the
-all-in-one library is developed alongside StorageHub. By default, the adapter
-looks here:
-
-```text
-%USERPROFILE%\Documents\GitHub\CodeLogic.Libs\CL.Storage\CL.Storage.csproj
-```
-
-StorageHub pins that source checkout to CodeLogic.Libs commit
-`c70fefe4420279af8bec45e55a37f4acd5204ee3`. Source-dependent projects run an
-MSBuild pre-build check and fail if `git rev-parse HEAD` for `CodeLogicLibsRoot`
-does not equal that revision or the `CL.Storage` subtree is dirty. For any other
-location, pass both MSBuild properties shown below. `CLStorageProjectPath`
-locates the project and `CodeLogicLibsRoot` identifies the repository whose
-revision is verified. The project path must resolve to
-`CL.Storage\CL.Storage.csproj` inside that same revision-checked root.
+The CodeLogic framework and `CL.Storage` provider library are restored from the
+centrally pinned `CodeLogic` and `CodeLogic.Storage` NuGet packages.
 
 ## Restore, build, and test
 
 ```powershell
-$clRoot = 'C:\src\CodeLogic.Libs'
-$clProject = Join-Path $clRoot 'CL.Storage\CL.Storage.csproj'
-
-dotnet restore StorageHub.slnx --locked-mode `
-  -p:CLStorageProjectPath="$clProject" `
-  -p:CodeLogicLibsRoot="$clRoot"
-
-dotnet build StorageHub.slnx --configuration Release --no-restore `
-  -p:CLStorageProjectPath="$clProject" `
-  -p:CodeLogicLibsRoot="$clRoot"
-
-dotnet test StorageHub.slnx --configuration Release --no-build --no-restore `
-  -p:CLStorageProjectPath="$clProject" `
-  -p:CodeLogicLibsRoot="$clRoot"
-
-$env:CLStorageProjectPath = $clProject
-$env:CodeLogicLibsRoot = $clRoot
+dotnet restore StorageHub.slnx --locked-mode
+dotnet build StorageHub.slnx --configuration Release --no-restore
+dotnet test StorageHub.slnx --configuration Release --no-build --no-restore
 dotnet list StorageHub.slnx package --vulnerable --include-transitive --no-restore
 ```
 
@@ -208,14 +192,24 @@ Warnings are errors, package versions are centrally managed, and StorageHub
 projects restore from committed lock files. CI runs the same Release build,
 test, and NuGet vulnerability-audit path on Windows.
 
+Run every disposable self-hosted provider fixture with one command:
+
+```powershell
+.\eng\run-provider-smoke.ps1
+```
+
+This starts pinned loopback MinIO, FTP/FTPS, and SFTP services, exercises their
+real health/read/write behavior, and runs provider-neutral transfers between
+each supported remote direction and Local storage. S3 is verified in both
+directions. FTP/SFTP outbound create is verified to fail closed because those
+protocols cannot provide StorageHub's required atomic create-if-absent guarantee.
+
 ## Run the current milestone
 
 Start the background agent first:
 
 ```powershell
-$clRoot = 'C:\src\CodeLogic.Libs'
-dotnet run --project src\StorageHub.Agent.Windows --configuration Release `
-  -p:CodeLogicLibsRoot="$clRoot"
+dotnet run --project src\StorageHub.Agent.Windows --configuration Release
 ```
 
 Then start the desktop shell in another terminal:

@@ -29,7 +29,9 @@ public sealed class StorageHubDatabaseInitializer
                 new SyncOrchestrationSchemaMigration(),
                 new SyncExecutionSchemaMigration(),
                 new PortableChecksumEvidenceSchemaMigration(),
-                new SymmetricSyncSchemaMigration()
+                new SymmetricSyncSchemaMigration(),
+                new SyncDestinationExistenceSchemaMigration(),
+                new NonAtomicSyncWritesSchemaMigration()
             ],
             timeProvider);
     }

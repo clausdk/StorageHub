@@ -155,7 +155,8 @@ public sealed class SqliteSyncDurabilityStoresTests : IAsyncLifetime, IDisposabl
         Assert.Equal("right-etag", loaded.Plan.Operations[0].Destination!.EntityTag);
         Assert.Equal(new string('a', 64), loaded.Plan.Operations[0].SourceDigest!.Value);
         Assert.Equal(new string('b', 64), loaded.Plan.Operations[0].DestinationDigest!.Value);
-        Assert.Equal(3, loaded.Plan.DigestSchemaVersion);
+        Assert.True(loaded.Plan.Operations[0].DestinationExisted);
+        Assert.Equal(4, loaded.Plan.DigestSchemaVersion);
 
         await using var writer = await _database.AcquireWriterAsync();
         await using var command = writer.Connection.CreateCommand();
@@ -501,7 +502,8 @@ public sealed class SqliteSyncDurabilityStoresTests : IAsyncLifetime, IDisposabl
                 destination,
                 12,
                 new PortableContentDigest(PortableChecksumAlgorithm.Sha256, new string('a', 64)),
-                new PortableContentDigest(PortableChecksumAlgorithm.Sha256, new string('b', 64)))],
+                new PortableContentDigest(PortableChecksumAlgorithm.Sha256, new string('b', 64)),
+                destinationExisted: true)],
             Now);
     }
 
@@ -586,7 +588,7 @@ public sealed class SyncDurabilityMigrationTests : IDisposable
         var upgraded = await new StorageHubDatabaseInitializer(options).InitializeAsync();
 
         Assert.True(upgraded.IsReady, upgraded.Message);
-        Assert.Equal(SymmetricSyncSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
+        Assert.Equal(NonAtomicSyncWritesSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
         await using var read = new SqliteConnection($"Data Source={options.DatabasePath};Mode=ReadOnly;Pooling=False");
         await read.OpenAsync();
         await using var count = read.CreateCommand();

@@ -1271,6 +1271,11 @@ public sealed class CodeLogicStorageEndpointSession :
     {
         var expectedEntityTag = expected.Address.EntityTag ?? expected.ETag;
         var currentEntityTag = current.Address.EntityTag ?? current.ETag;
+        var identityMatches = expected.Address.VersionId is not null
+            ? StringComparer.Ordinal.Equals(expected.Address.VersionId, current.Address.VersionId)
+            : expectedEntityTag is not null
+                ? StringComparer.Ordinal.Equals(expectedEntityTag, currentEntityTag)
+                : expected.LastModifiedUtc is null || expected.LastModifiedUtc == current.LastModifiedUtc;
         return expected.Kind == StorageEntryKind.File &&
                current.Kind == StorageEntryKind.File &&
                expected.Address.ProfileId == current.Address.ProfileId &&
@@ -1279,11 +1284,7 @@ public sealed class CodeLogicStorageEndpointSession :
                    expected.Address.CanonicalRelativePath,
                    current.Address.CanonicalRelativePath) &&
                expected.Size == current.Size &&
-               (expected.LastModifiedUtc is null || expected.LastModifiedUtc == current.LastModifiedUtc) &&
-               (expected.Address.VersionId is null || StringComparer.Ordinal.Equals(
-                   expected.Address.VersionId,
-                   current.Address.VersionId)) &&
-               (expectedEntityTag is null || StringComparer.Ordinal.Equals(expectedEntityTag, currentEntityTag));
+               identityMatches;
     }
 
     private static StorageResult<PortableChecksumResult> ChecksumChanged() =>
