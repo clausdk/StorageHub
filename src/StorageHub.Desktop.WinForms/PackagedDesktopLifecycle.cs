@@ -353,10 +353,19 @@ public sealed class PackagedDesktopLifecycle : IDisposable
                 return new AgentEnsureResult(AgentEnsureStatus.LaunchFailed);
             }
 
-            return await _agentClient
+            var becameAvailable = await _agentClient
                 .WaitUntilAvailableAsync(_options.StartupTimeout, cancellationToken)
-                .ConfigureAwait(false)
-                ? new AgentEnsureResult(AgentEnsureStatus.Started)
+                .ConfigureAwait(false);
+            if (becameAvailable)
+            {
+                return new AgentEnsureResult(AgentEnsureStatus.Started);
+            }
+
+            // A child which exits during startup is a launch failure, not a slow
+            // but otherwise healthy Agent. This also gives the desktop actionable
+            // wording for rejected data directories and other fail-fast errors.
+            return _processMonitor is not null && !_processMonitor.IsRunning(_agentExecutablePath)
+                ? new AgentEnsureResult(AgentEnsureStatus.LaunchFailed)
                 : new AgentEnsureResult(AgentEnsureStatus.StartupTimedOut);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

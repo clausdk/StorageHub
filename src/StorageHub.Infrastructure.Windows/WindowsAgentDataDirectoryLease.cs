@@ -4,7 +4,7 @@ using System.Security.Principal;
 namespace StorageHub.Infrastructure.Windows;
 
 /// <summary>
-/// Owns the per-user agent instance lock and protects the complete StorageHub data tree.
+/// Owns the per-user agent instance lock and protects agent-owned durable state.
 /// </summary>
 public sealed class WindowsAgentDataDirectoryLease : IDisposable, IAsyncDisposable
 {
@@ -86,7 +86,8 @@ public sealed class WindowsAgentDataDirectoryLease : IDisposable, IAsyncDisposab
     }
 
     /// <summary>
-    /// Acquires the one-agent-per-Windows-user lock and protects the selected data root. The
+    /// Acquires the one-agent-per-Windows-user lock and protects the shared root plus the
+    /// complete agent-owned subtree. The
     /// optional lock directory exists for isolated tests; production callers must use the fixed
     /// per-user location so different data-root overrides cannot start competing pipe servers.
     /// </summary>
@@ -106,13 +107,15 @@ public sealed class WindowsAgentDataDirectoryLease : IDisposable, IAsyncDisposab
 
             RejectReparsePointsInPath(fullRootPath, "agent data directory");
             Directory.CreateDirectory(fullRootPath);
-            ProtectOwnedTree(fullRootPath, currentUser);
-
+            ProtectDirectory(fullRootPath, currentUser);
             var agentDirectory = Path.Combine(fullRootPath, "Agent");
             var frameworkDirectory = Path.Combine(agentDirectory, "CodeLogic");
             Directory.CreateDirectory(frameworkDirectory);
-            ProtectDirectory(agentDirectory, currentUser);
-            ProtectDirectory(frameworkDirectory, currentUser);
+            // The shared root also contains Desktop caches and developer VM fixtures.
+            // They can be open or governed by their own ACL requirements and must not
+            // prevent the background Agent from starting. Recursively harden only the
+            // Agent subtree, which owns the database, vault, and runtime secrets.
+            ProtectOwnedTree(agentDirectory, currentUser);
 
             var result = new WindowsAgentDataDirectoryLease(fullRootPath, instanceLock);
             instanceLock = null;

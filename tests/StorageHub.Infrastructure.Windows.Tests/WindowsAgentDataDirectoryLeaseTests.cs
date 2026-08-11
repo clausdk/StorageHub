@@ -11,14 +11,19 @@ public sealed class WindowsAgentDataDirectoryLeaseTests : IDisposable
         $"storagehub-agent-root-{Guid.NewGuid():N}");
 
     [Fact]
-    public void Acquire_protects_complete_tree_and_holds_per_user_lock()
+    public void Acquire_protects_agent_tree_without_rewriting_siblings_and_holds_per_user_lock()
     {
         var dataRoot = Path.Combine(_testRoot, "data");
         var lockRoot = Path.Combine(_testRoot, "instance");
-        var existingDirectory = Path.Combine(dataRoot, "existing");
+        var existingDirectory = Path.Combine(dataRoot, "Agent", "existing");
         var existingFile = Path.Combine(existingDirectory, "state.bin");
+        var desktopCache = Path.Combine(dataRoot, "Desktop", "listing-cache.db");
         Directory.CreateDirectory(existingDirectory);
         File.WriteAllBytes(existingFile, [1, 2, 3]);
+        Directory.CreateDirectory(Path.GetDirectoryName(desktopCache)!);
+        File.WriteAllBytes(desktopCache, [4, 5, 6]);
+        var siblingSecurityBefore = new FileInfo(desktopCache).GetAccessControl(
+            AccessControlSections.Owner | AccessControlSections.Access);
 
         using var first = WindowsAgentDataDirectoryLease.Acquire(dataRoot, lockRoot);
 
@@ -31,6 +36,9 @@ public sealed class WindowsAgentDataDirectoryLeaseTests : IDisposable
             AccessControlSections.Owner | AccessControlSections.Access));
         AssertProtectedForCurrentUser(new FileInfo(existingFile).GetAccessControl(
             AccessControlSections.Owner | AccessControlSections.Access));
+        var siblingSecurityAfter = new FileInfo(desktopCache).GetAccessControl(
+            AccessControlSections.Owner | AccessControlSections.Access);
+        Assert.Equal(siblingSecurityBefore.AreAccessRulesProtected, siblingSecurityAfter.AreAccessRulesProtected);
 
         var error = Assert.Throws<WindowsAgentDataDirectoryException>(
             () => WindowsAgentDataDirectoryLease.Acquire(dataRoot, lockRoot));
@@ -201,6 +209,34 @@ public sealed class WindowsAgentDataDirectoryLeaseTests : IDisposable
                     dataRoot,
                     Path.Combine(_testRoot, "instance")));
             Assert.Equal(WindowsAgentDataDirectoryFailure.ReparsePoint, error.Failure);
+        }
+        finally
+        {
+            if (Directory.Exists(junction))
+            {
+                Directory.Delete(junction);
+            }
+        }
+    }
+
+    [Fact]
+    public void Reparse_point_below_sibling_data_does_not_block_agent_lease()
+    {
+        Directory.CreateDirectory(_testRoot);
+        var dataRoot = Path.Combine(_testRoot, "data");
+        var target = Path.Combine(_testRoot, "target");
+        var junction = Path.Combine(dataRoot, "Desktop", "external-cache");
+        Directory.CreateDirectory(Path.GetDirectoryName(junction)!);
+        Directory.CreateDirectory(target);
+        CreateJunction(junction, target);
+
+        try
+        {
+            using var lease = WindowsAgentDataDirectoryLease.Acquire(
+                dataRoot,
+                Path.Combine(_testRoot, "instance"));
+
+            Assert.True(Directory.Exists(lease.FrameworkDirectory));
         }
         finally
         {

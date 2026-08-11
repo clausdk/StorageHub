@@ -19,7 +19,7 @@ Run the complete lab and leave it available for manual UI testing:
 Connection ports and the VMware guest address are written to:
 
 ```text
-%LOCALAPPDATA%\StorageHub\VmLab\Debian13\connection-info.json
+%LOCALAPPDATA%\StorageHub.VmLab\Debian13\connection-info.json
 ```
 
 Lab-only credentials, keys, certificates, disks, and logs remain under the same user-profile directory and are not stored in Git. The VM uses VMware NAT rather than bridged networking. The local SSH tunnel exposes provider ports only while it is running.

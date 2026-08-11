@@ -121,6 +121,22 @@ public sealed class PackagedDesktopLifecycleTests
         Assert.Equal(2, fixture.AgentClient.WaitCalls);
     }
 
+    [Fact]
+    public async Task EnsureAgentReportsLaunchFailureWhenNewProcessExitsBeforeReadiness()
+    {
+        var fixture = CreateFixture(
+            agentAvailable: false,
+            waitResult: false,
+            enforceExpectedProcess: true,
+            expectedProcessRunning: false);
+
+        var result = await fixture.Lifecycle.EnsureAgentAsync();
+
+        Assert.Equal(AgentEnsureStatus.LaunchFailed, result.Status);
+        Assert.Single(fixture.Launcher.Launches);
+        Assert.Equal(1, fixture.AgentClient.WaitCalls);
+    }
+
     [Theory]
     [InlineData(AgentEnsureStatus.MissingExecutable, "missing")]
     [InlineData(AgentEnsureStatus.LaunchFailed, "could not be started")]
