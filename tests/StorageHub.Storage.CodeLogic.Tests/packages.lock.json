@@ -401,6 +401,21 @@
           "StorageHub.Storage": "[0.1.0, )"
         }
       },
+      "storagehub.sync": {
+        "type": "Project",
+        "dependencies": {
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Storage": "[0.1.0, )",
+          "StorageHub.Transfers": "[0.1.0, )"
+        }
+      },
+      "storagehub.transfers": {
+        "type": "Project",
+        "dependencies": {
+          "StorageHub.Domain": "[0.1.0, )",
+          "StorageHub.Storage": "[0.1.0, )"
+        }
+      },
       "CodeLogic": {
         "type": "CentralTransitive",
         "requested": "[4.1.0, )",
