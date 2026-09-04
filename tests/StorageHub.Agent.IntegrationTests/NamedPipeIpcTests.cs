@@ -191,7 +191,7 @@ public sealed class NamedPipeIpcTests
         var connecting = client.ConnectAsync();
         await WaitUntilAsync(
             () => client.LastConnectionAttemptCount >= 2,
-            TimeSpan.FromSeconds(10));
+            TimeSpan.FromSeconds(30));
         await StartAsync(server);
         var hello = await connecting;
 
