@@ -29,6 +29,8 @@ public sealed class TransferQueueControlTests
             Assert.Equal(1, client.ListCount);
             Assert.Contains(TransferQueueState.Preparing, client.LastStates!);
             Assert.Contains(TransferQueueState.Transferring, client.LastStates!);
+            Assert.Equal("Active (3)", Assert.IsType<TabPage>(tabs.TabPages["Active"]).Text);
+            Assert.Equal("Completed (5)", Assert.IsType<TabPage>(tabs.TabPages["Completed"]).Text);
         });
     }
 
@@ -105,6 +107,23 @@ public sealed class TransferQueueControlTests
         });
     }
 
+    [Fact]
+    public void EveryJobListExposesSelectedAndAllHistoryClearingCommands()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var control = new TransferQueueControl(new FakeQueueClient());
+            var tabs = Assert.Single(control.Controls.OfType<TabControl>());
+            foreach (var grid in tabs.TabPages.Cast<TabPage>()
+                .SelectMany(page => page.Controls.OfType<DataGridView>()))
+            {
+                var menu = Assert.IsType<ContextMenuStrip>(grid.ContextMenuStrip);
+                Assert.Contains(menu.Items.Cast<ToolStripItem>(), item => item.Text == "Clear selected history");
+                Assert.Contains(menu.Items.Cast<ToolStripItem>(), item => item.Text == "Clear all history...");
+            }
+        });
+    }
+
     private sealed class FakeQueueClient : ITransferQueueAgentClient
     {
         public int ListCount { get; private set; }
@@ -144,7 +163,13 @@ public sealed class TransferQueueControlTests
                     CanCancel: true,
                     CanRetry: false,
                     NeedsReconciliation: false)],
-                ContinuationToken: null));
+                ContinuationToken: null,
+                StateCounts: new Dictionary<TransferQueueState, int>
+                {
+                    [TransferQueueState.Preparing] = 3,
+                    [TransferQueueState.Completed] = 4,
+                    [TransferQueueState.Cancelled] = 1
+                }));
         }
 
         public Task<TransferStatusResponse> GetStatusAsync(

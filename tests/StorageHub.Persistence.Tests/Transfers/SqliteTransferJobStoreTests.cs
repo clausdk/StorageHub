@@ -120,6 +120,30 @@ public sealed class SqliteTransferJobStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Clearing_history_deletes_only_terminal_jobs_and_updates_counts()
+    {
+        var fixture = await CreateFixtureAsync();
+        var pending = await CreateIntentAsync(fixture);
+        var cancelled = await CreateIntentAsync(fixture);
+        Assert.True(await fixture.Store.TryEnqueueAsync(pending));
+        Assert.True(await fixture.Store.TryEnqueueAsync(cancelled));
+        var transition = await fixture.Store.TryTransitionControlStateAsync(
+            new TransferControlStateTransitionRequest(
+                cancelled.TransferJobId, 0, TransferState.Cancelled, Now.AddSeconds(1)));
+        Assert.Equal(TransferStoreMutationStatus.Applied, transition.Status);
+
+        var before = await fixture.Store.CountByStateAsync();
+        var cleared = await fixture.Store.ClearTerminalHistoryAsync();
+        var after = await fixture.Store.CountByStateAsync();
+
+        Assert.Equal(1, before[TransferState.Cancelled]);
+        Assert.Equal(1, cleared);
+        Assert.False(after.ContainsKey(TransferState.Cancelled));
+        Assert.NotNull(await fixture.Store.FindAsync(pending.TransferJobId));
+        Assert.Null(await fixture.Store.FindAsync(cancelled.TransferJobId));
+    }
+
+    [Fact]
     public async Task Version_two_in_flight_job_is_preserved_but_fail_closed_for_reconciliation()
     {
         var options = new SqliteDatabaseOptions(

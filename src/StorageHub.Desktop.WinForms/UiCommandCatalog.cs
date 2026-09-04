@@ -12,7 +12,7 @@ public static class UiCommandCatalog
 {
     public static IReadOnlyList<string> TopMenus { get; } =
     [
-        "File",
+        "Workspace",
         "Edit",
         "View",
         "Go",
@@ -26,12 +26,12 @@ public static class UiCommandCatalog
     public static IReadOnlyDictionary<string, IReadOnlyList<string>> Commands { get; } =
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
-            ["File"] = ["New Workspace Tab", "Close Tab", "Import Profiles...", "Export Profiles...", "Exit"],
+            ["Workspace"] = ["New Workspace...", "Open Workspace...", "Save Workspace", "Save Workspace As...", "Rename Workspace...", "Close Workspace", "Exit"],
             ["Edit"] = ["Cut", "Copy", "Paste", "Rename", "Batch Rename...", "Select All", "Invert Selection", "Properties"],
             ["View"] = ["Refresh", "Directory Tree", "Transfer Queue", "Session Log", "Hidden Files", "Theme"],
             ["Go"] = ["Back", "Forward", "Up", "Home", "History", "Favorites"],
             ["Connections"] = ["Connection Manager...", "Quick Connect...", "Reconnect", "Disconnect", "Test Connection"],
-            ["Transfer"] = ["Enqueue", "Start Queue", "Pause All", "Resume All", "Cancel Selected", "Speed Limits..."],
+            ["Transfer"] = ["Start Queue", "Pause All", "Resume All", "Cancel Selected", "Speed Limits..."],
             ["Sync"] = ["Compare Panes", "Review & Run...", "Sync Profiles...", "Schedules..."],
             ["Tools"] = ["Search...", "Checksums...", "Settings...", "Logs...", "Diagnostics..."],
             ["Help"] = ["Check for Updates...", "Keyboard Shortcuts", "Documentation", "Report Issue", "About StorageHub"]
@@ -40,10 +40,14 @@ public static class UiCommandCatalog
     private static readonly IReadOnlyDictionary<string, (Keys Shortcut, UiGlyph? Glyph, string Description)> Metadata =
         new Dictionary<string, (Keys, UiGlyph?, string)>(StringComparer.Ordinal)
         {
-            ["New Workspace Tab"] = (Keys.Control | Keys.T, UiGlyph.Add, "Open another independent dual-pane workspace."),
-            ["Close Tab"] = (Keys.Control | Keys.W, UiGlyph.Delete, "Close the active workspace tab."),
-            ["Cut"] = (Keys.Control | Keys.X, UiGlyph.Forward, "Queue selected files for a fenced move to the opposite pane."),
-            ["Copy"] = (Keys.Control | Keys.C, UiGlyph.File, "Queue selected files for a fenced copy to the opposite pane."),
+            ["New Workspace..."] = (Keys.Control | Keys.T, UiGlyph.Add, "Choose a one- to four-pane workspace."),
+            ["Open Workspace..."] = (Keys.Control | Keys.O, UiGlyph.Folder, "Open a saved StorageHub workspace file."),
+            ["Save Workspace"] = (Keys.Control | Keys.S, UiGlyph.Save, "Save the active workspace."),
+            ["Save Workspace As..."] = (Keys.Control | Keys.Shift | Keys.S, UiGlyph.Save, "Save the active workspace to a new file."),
+            ["Rename Workspace..."] = (Keys.None, null, "Rename the active workspace tab."),
+            ["Close Workspace"] = (Keys.Control | Keys.W, UiGlyph.Delete, "Close the active workspace tab."),
+            ["Cut"] = (Keys.Control | Keys.X, UiGlyph.Forward, "Stage selected files for moving to another pane."),
+            ["Copy"] = (Keys.Control | Keys.C, UiGlyph.File, "Stage selected files for copying to another pane."),
             ["Paste"] = (Keys.Control | Keys.V, UiGlyph.Save, "Enqueue the staged operation in this pane."),
             ["Rename"] = (Keys.F2, null, "Rename the focused item."),
             ["Properties"] = (Keys.Alt | Keys.Enter, null, "Inspect read-only versions, metadata, and tags for one saved-connection file."),
@@ -54,7 +58,6 @@ public static class UiCommandCatalog
             ["Up"] = (Keys.Alt | Keys.Up, UiGlyph.Up, "Open the parent location."),
             ["Connection Manager..."] = (Keys.Control | Keys.Shift | Keys.M, UiGlyph.Connections, "Create, organize, and test connection profiles."),
             ["Quick Connect..."] = (Keys.Control | Keys.K, UiGlyph.Connections, "Open a temporary connection without saving credentials in the profile."),
-            ["Enqueue"] = (Keys.F6, UiGlyph.Run, "Queue selected files for a fenced copy to the opposite pane."),
             ["Start Queue"] = (Keys.F7, UiGlyph.Run, "Start queued transfers."),
             ["Pause All"] = (Keys.F8, UiGlyph.Pause, "Pause active transfers at safe checkpoints."),
             ["Compare Panes"] = (Keys.Control | Keys.D, UiGlyph.Compare, "Compare the visible source and destination."),

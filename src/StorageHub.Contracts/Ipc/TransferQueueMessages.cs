@@ -34,6 +34,8 @@ public static class TransferQueueIpcMessageTypes
     public const string RetryResponse = "transfer.retry.response";
     public const string ReconcileRequest = "transfer.reconcile.request";
     public const string ReconcileResponse = "transfer.reconcile.response";
+    public const string ClearHistoryRequest = "transfer.history.clear.request";
+    public const string ClearHistoryResponse = "transfer.history.clear.response";
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<TransferQueueOperation>))]
@@ -180,6 +182,26 @@ public sealed record TransferListResponse(
     int ContractVersion,
     TransferQueueSummary[] Transfers,
     string? ContinuationToken,
+    StorageIpcFailure? Failure = null,
+    Dictionary<TransferQueueState, int>? StateCounts = null);
+
+public sealed record TransferHistoryClearRequest(
+    int ContractVersion,
+    Guid[] TransferIds,
+    bool ClearAll)
+{
+    public bool HasValidBounds =>
+        ContractVersion > 0 &&
+        TransferIds is not null &&
+        TransferIds.Length <= TransferQueueIpcLimits.MaximumPageSize &&
+        TransferIds.All(id => id != Guid.Empty) &&
+        TransferIds.Distinct().Count() == TransferIds.Length &&
+        ClearAll == (TransferIds.Length == 0);
+}
+
+public sealed record TransferHistoryClearResponse(
+    int ContractVersion,
+    int ClearedCount,
     StorageIpcFailure? Failure = null);
 
 public sealed record TransferStatusRequest(int ContractVersion, Guid TransferId)

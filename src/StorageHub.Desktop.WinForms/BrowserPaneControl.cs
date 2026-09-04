@@ -73,6 +73,8 @@ public sealed class BrowserPaneControl : UserControl
     private Guid? _lastReportedConnectionId;
     private SshTerminalForm? _embeddedTerminal;
     private Guid? _embeddedTerminalConnectionId;
+    private bool _suppressStateChanged;
+    private bool _remoteReconnectPending;
 
     public BrowserPaneControl(
         string title,
@@ -81,8 +83,10 @@ public sealed class BrowserPaneControl : UserControl
         Func<Guid, string, SshTerminalForm>? sshTerminalFactory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
-        _localBrowsingEnabled = showLocalDefault;
-        _localBrowser = showLocalDefault ? new LocalBrowserController() : null;
+        // Every workspace pane has equal capabilities. The argument now controls only
+        // the initial surface (This PC versus Connections Home).
+        _localBrowsingEnabled = true;
+        _localBrowser = new LocalBrowserController();
         _remoteBrowser = remoteBrowser ?? new RemoteBrowserController();
         _listingIndex = new PagedListingIndex();
         _sshTerminalFactory = sshTerminalFactory ?? ((connectionId, displayName) =>
@@ -169,24 +173,13 @@ public sealed class BrowserPaneControl : UserControl
             AccessibleName = $"{title} connection",
             AccessibleDescription = "Select the local or remote connection displayed in this pane."
         };
-        if (showLocalDefault)
-        {
-            _connectionSelector.Items.AddRange(
-            [
-                new ConnectionCardModel("This PC", StorageProviderKind.Local, "Local drives", "Ready", true),
-                new ConnectionCardModel("Connections Home", StorageProviderKind.Local, "Saved connections", "Browse")
-            ]);
-        }
-        else
-        {
-            _connectionSelector.Items.Add(new ConnectionCardModel(
-                "Connections Home",
-                StorageProviderKind.Local,
-                "Saved connections",
-                "Browse"));
-        }
+        _connectionSelector.Items.AddRange(
+        [
+            new ConnectionCardModel("This PC", StorageProviderKind.Local, "Local drives", "Ready", true),
+            new ConnectionCardModel("Connections Home", StorageProviderKind.Local, "Saved connections", "Browse")
+        ]);
 
-        _connectionSelector.SelectedIndex = 0;
+        _connectionSelector.SelectedIndex = showLocalDefault ? 0 : 1;
         _connectionSelector.DropDown += ConnectionSelectorDropDown;
         _connectionSelector.MeasureItem += MeasureConnectionItem;
         _connectionSelector.DrawItem += DrawConnectionItem;
@@ -237,6 +230,15 @@ public sealed class BrowserPaneControl : UserControl
         header.Controls.Add(identityFrame, 0, 0);
         header.Controls.Add(selectorFrame, 1, 0);
         header.Controls.Add(manageFrame, 2, 0);
+        header.Layout += (_, _) =>
+        {
+            var compact = header.ClientSize.Width < 680;
+            var veryCompact = header.ClientSize.Width < 500;
+            header.ColumnStyles[0].Width = veryCompact ? 105 : compact ? 150 : 220;
+            header.ColumnStyles[2].Width = compact ? 0 : 116;
+            manageFrame.Visible = !compact;
+            badges.Visible = !veryCompact;
+        };
 
         _navigation = new ToolStrip
         {
@@ -398,8 +400,6 @@ public sealed class BrowserPaneControl : UserControl
         var copy = CreateContextMenuItem("Copy", UiGlyph.File, "Ctrl+C");
         var cut = CreateContextMenuItem("Cut", UiGlyph.Forward, "Ctrl+X");
         var paste = CreateContextMenuItem("Paste", UiGlyph.Save, "Ctrl+V");
-        var copyToOtherPane = CreateContextMenuItem("Copy to other pane", UiGlyph.Forward);
-        var moveToOtherPane = CreateContextMenuItem("Move to other pane", UiGlyph.Run);
         var refresh = CreateContextMenuItem("Refresh", UiGlyph.Refresh, "F5");
         var selectAll = CreateContextMenuItem("Select all", UiGlyph.Test, "Ctrl+A");
         var inspectObject = CreateContextMenuItem("Properties...", UiGlyph.Info);
@@ -409,8 +409,6 @@ public sealed class BrowserPaneControl : UserControl
         copy.Click += (_, _) => StageSelection(TransferQueueOperation.Copy);
         cut.Click += (_, _) => StageSelection(TransferQueueOperation.Move);
         paste.Click += (_, _) => PasteRequested?.Invoke(this, EventArgs.Empty);
-        copyToOtherPane.Click += (_, _) => RaiseTransferRequested(TransferQueueOperation.Copy);
-        moveToOtherPane.Click += (_, _) => RaiseTransferRequested(TransferQueueOperation.Move);
         refresh.Click += (_, _) => Reload();
         selectAll.Click += (_, _) => SelectAllVisibleItems();
         inspectObject.Click += (_, _) => ObjectInspectionRequested?.Invoke(this, EventArgs.Empty);
@@ -420,9 +418,6 @@ public sealed class BrowserPaneControl : UserControl
         _fileContextMenu.Items.Add(copy);
         _fileContextMenu.Items.Add(cut);
         _fileContextMenu.Items.Add(paste);
-        _fileContextMenu.Items.Add(new ToolStripSeparator());
-        _fileContextMenu.Items.Add(copyToOtherPane);
-        _fileContextMenu.Items.Add(moveToOtherPane);
         _fileContextMenu.Items.Add(new ToolStripSeparator());
         _fileContextMenu.Items.Add(refresh);
         _fileContextMenu.Items.Add(selectAll);
@@ -445,8 +440,6 @@ public sealed class BrowserPaneControl : UserControl
             copy.Enabled = hasSelection;
             cut.Enabled = hasSelection;
             paste.Enabled = CanPaste?.Invoke() == true;
-            copyToOtherPane.Enabled = hasSelection;
-            moveToOtherPane.Enabled = hasSelection;
             selectAll.Enabled = _items.Any(static item => !item.IsParentNavigation);
             inspectObject.Enabled = singleSelection && !selectedParent;
         };
@@ -574,6 +567,141 @@ public sealed class BrowserPaneControl : UserControl
     public event EventHandler? ObjectInspectionRequested;
 
     public event EventHandler<ConnectionOpenedEventArgs>? ConnectionOpened;
+
+    /// <summary>Raised when persistent pane state (surface, location, filter, or sorting) changes.</summary>
+    public event EventHandler? StateChanged;
+
+    public BrowserPaneState CaptureState()
+    {
+        var selected = _connectionSelector.SelectedItem as ConnectionCardModel;
+        var kind = IsLocalConnectionSelected
+            ? PaneContentKind.ThisPc
+            : IsAnyConnectionsHomeSelected
+                ? PaneContentKind.ConnectionsHome
+                : IsSshClientSelected
+                    ? PaneContentKind.SshClient
+                    : IsRemoteSnapshotSelected
+                        ? PaneContentKind.SavedStorage
+                        : PaneContentKind.Unresolved;
+        var folder = kind switch
+        {
+            PaneContentKind.ThisPc => _localBrowser?.CurrentLocation.DirectoryPath,
+            PaneContentKind.SavedStorage => _remoteBrowser?.CurrentSnapshot?.RelativePath,
+            _ => null
+        };
+        _errorBanner.Click += (_, _) => ConnectPendingRemotePane();
+        return new BrowserPaneState(
+            kind,
+            selected?.ConnectionId,
+            selected?.Name ?? _connectionNameLabel.Text,
+            folder,
+            _filterBox.Text,
+            _sortColumn,
+            _sortAscending);
+    }
+
+    public async Task RestoreStateAsync(
+        BrowserPaneState state,
+        bool reconnectRemote,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        _suppressStateChanged = true;
+        try
+        {
+            _sortColumn = Enum.IsDefined(state.SortColumn) ? state.SortColumn : BrowserSortColumn.Name;
+            _sortAscending = state.SortAscending;
+            _filterBox.Text = state.Filter ?? string.Empty;
+            UpdateSortColumnHeaders();
+            if (state.ContentKind == PaneContentKind.ThisPc)
+            {
+                SelectChoice("This PC");
+                if (!string.IsNullOrWhiteSpace(state.FolderPath) && TryCreateLocation(state.FolderPath, out var location))
+                    await NavigateLocalAsync(LocalBrowserNavigationKind.Navigate, location).ConfigureAwait(true);
+                else
+                    await NavigateLocalAsync(LocalBrowserNavigationKind.Refresh).ConfigureAwait(true);
+                return;
+            }
+            if (state.ContentKind == PaneContentKind.ConnectionsHome || state.ProfileId is null)
+            {
+                SelectChoice("Connections Home");
+                await LoadRemoteConnectionsAsync().ConfigureAwait(true);
+                return;
+            }
+
+            await LoadRemoteConnectionsAsync(preserveCurrentSurface: true).ConfigureAwait(true);
+            var index = FindConnectionChoice(state.ProfileId.Value);
+            if (index < 0)
+            {
+                SelectChoice("Connections Home");
+                PresentConnectionsHome(_remoteBrowser?.Connections ?? []);
+                ShowError($"Saved profile '{state.DisplayNameHint ?? state.ProfileId.Value.ToString("D")}' is unavailable. Select another profile.");
+                return;
+            }
+            _updatingConnectionChoices = true;
+            try { _connectionSelector.SelectedIndex = index; }
+            finally { _updatingConnectionChoices = false; }
+            UpdateConnectionPresentation();
+            if (!reconnectRemote)
+            {
+                ShowBrowserSurface();
+                SetItems([new BrowserListItem("Disconnected", string.Empty, "Status", string.Empty, "Select the profile to connect")]);
+                _remoteReconnectPending = true;
+                _errorBanner.Cursor = Cursors.Hand;
+                ShowNotice("Automatic reconnect is disabled. Click here to Connect.");
+                return;
+            }
+            if (state.ContentKind == PaneContentKind.SshClient)
+            {
+                ShowSshClientSurface(state.ProfileId.Value, state.DisplayNameHint ?? "SSH client");
+                return;
+            }
+            ShowBrowserSurface();
+            await SelectRemoteConnectionAsync(state.ProfileId.Value).ConfigureAwait(true);
+            if (!string.IsNullOrEmpty(state.FolderPath) && IsRemoteSnapshotSelected)
+                await NavigateRemoteAsync(RemoteBrowserNavigationKind.Navigate, state.FolderPath).ConfigureAwait(true);
+        }
+        finally
+        {
+            _suppressStateChanged = false;
+        }
+    }
+
+    private void SelectChoice(string name)
+    {
+        for (var index = 0; index < _connectionSelector.Items.Count; index++)
+        {
+            if (_connectionSelector.Items[index] is ConnectionCardModel card && string.Equals(card.Name, name, StringComparison.Ordinal))
+            {
+                _connectionSelector.SelectedIndex = index;
+                return;
+            }
+        }
+    }
+
+    private int FindConnectionChoice(Guid connectionId)
+    {
+        for (var index = 0; index < _connectionSelector.Items.Count; index++)
+            if (_connectionSelector.Items[index] is ConnectionCardModel { ConnectionId: { } id } && id == connectionId) return index;
+        return -1;
+    }
+
+    private void RaiseStateChanged()
+    {
+        if (!_suppressStateChanged) StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ConnectPendingRemotePane()
+    {
+        if (!_remoteReconnectPending || _connectionSelector.SelectedItem is not ConnectionCardModel { ConnectionId: { } id } card) return;
+        _remoteReconnectPending = false;
+        _errorBanner.Cursor = Cursors.Default;
+        if (card.Type == ConnectionProfileType.Client && card.Provider == StorageProviderKind.Ssh)
+            ShowSshClientSurface(id, card.Name);
+        else
+            _ = SelectRemoteConnectionAsync(id);
+        RaiseStateChanged();
+    }
 
     public StorageResult<PaneSelectionSnapshot> CaptureSelectionSnapshot()
     {
@@ -752,15 +880,10 @@ public sealed class BrowserPaneControl : UserControl
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        if (_localBrowsingEnabled && !_initialLoadStarted)
+        if (!_initialLoadStarted)
         {
             _initialLoadStarted = true;
-            _ = InitializeLocalPaneAsync();
-        }
-        else if (!_localBrowsingEnabled && !_initialLoadStarted)
-        {
-            _initialLoadStarted = true;
-            _ = LoadRemoteConnectionsAsync();
+            _ = IsLocalConnectionSelected ? InitializeLocalPaneAsync() : LoadRemoteConnectionsAsync();
         }
     }
 
@@ -866,6 +989,7 @@ public sealed class BrowserPaneControl : UserControl
         SortItems();
         UpdateSortColumnHeaders();
         ApplyFilter();
+        RaiseStateChanged();
     }
 
     private void FileSelectionChanged(object? sender, EventArgs e) => RefreshCommandState();
@@ -1283,6 +1407,7 @@ public sealed class BrowserPaneControl : UserControl
             _lastReportedConnectionId = snapshot.Connection.ConnectionId;
             ConnectionOpened?.Invoke(this, new ConnectionOpenedEventArgs(snapshot.Connection));
         }
+        if (!appendPage) RaiseStateChanged();
     }
 
     private void ReplaceRemoteConnectionChoices(IReadOnlyList<ConnectionSummary> connections)
@@ -1585,6 +1710,7 @@ public sealed class BrowserPaneControl : UserControl
         _connectionState.AccessibleDescription = $"Showing {snapshot.Location.DisplayText}";
         if (!appendPage) UpdateDirectoryTree(snapshot);
         if (snapshot.HasMore) BeginInvoke(new Action(RequestAutomaticPrefetch));
+        if (!appendPage) RaiseStateChanged();
     }
 
     private void ApplyFilter()
@@ -1970,7 +2096,11 @@ public sealed class BrowserPaneControl : UserControl
         _ = NavigateRemoteAsync(RemoteBrowserNavigationKind.Navigate, remotePath);
     }
 
-    private void FilterTextChanged(object? sender, EventArgs e) => ApplyFilter();
+    private void FilterTextChanged(object? sender, EventArgs e)
+    {
+        ApplyFilter();
+        RaiseStateChanged();
+    }
 
     private void FileListDoubleClick(object? sender, EventArgs e)
     {
@@ -2511,8 +2641,6 @@ public sealed class BrowserPaneControl : UserControl
         var move = CreateContextMenuItem("Move", UiGlyph.Forward, "Ctrl+X");
         var paste = CreateContextMenuItem("Paste", UiGlyph.Save, "Ctrl+V");
         var delete = CreateContextMenuItem("Delete", UiGlyph.Delete, "Delete");
-        var copyToOtherPane = CreateContextMenuItem("Copy to other pane", UiGlyph.Forward);
-        var moveToOtherPane = CreateContextMenuItem("Move to other pane", UiGlyph.Run);
         var refresh = CreateContextMenuItem("Refresh", UiGlyph.Refresh, "F5");
         var selectAll = CreateContextMenuItem("Select all", UiGlyph.Test, "Ctrl+A");
         var properties = CreateContextMenuItem("Properties...", UiGlyph.Info);
@@ -2524,8 +2652,6 @@ public sealed class BrowserPaneControl : UserControl
         move.Click += (_, _) => StageSelection(TransferQueueOperation.Move);
         paste.Click += (_, _) => PasteRequested?.Invoke(this, EventArgs.Empty);
         delete.Click += (_, _) => DeleteRequested?.Invoke(this, EventArgs.Empty);
-        copyToOtherPane.Click += (_, _) => RaiseTransferRequested(TransferQueueOperation.Copy);
-        moveToOtherPane.Click += (_, _) => RaiseTransferRequested(TransferQueueOperation.Move);
         refresh.Click += (_, _) => Reload();
         selectAll.Click += (_, _) => SelectAllVisibleItems();
         properties.Click += (_, _) => ObjectInspectionRequested?.Invoke(this, EventArgs.Empty);
@@ -2537,9 +2663,6 @@ public sealed class BrowserPaneControl : UserControl
         button.DropDownItems.Add(move);
         button.DropDownItems.Add(paste);
         button.DropDownItems.Add(delete);
-        button.DropDownItems.Add(new ToolStripSeparator());
-        button.DropDownItems.Add(copyToOtherPane);
-        button.DropDownItems.Add(moveToOtherPane);
         button.DropDownItems.Add(new ToolStripSeparator());
         button.DropDownItems.Add(refresh);
         button.DropDownItems.Add(selectAll);
@@ -2564,8 +2687,6 @@ public sealed class BrowserPaneControl : UserControl
             move.Enabled = hasSelection;
             paste.Enabled = CanPaste?.Invoke() == true;
             delete.Enabled = hasSelection;
-            copyToOtherPane.Enabled = hasSelection;
-            moveToOtherPane.Enabled = hasSelection;
             selectAll.Enabled = _items.Any(static item => !item.IsParentNavigation);
             properties.Enabled = singleSelection && !selectedParent;
         };
@@ -2976,7 +3097,10 @@ public sealed class BrowserPaneControl : UserControl
                 "Status",
                 string.Empty,
                 string.Empty)]);
-            _ = LoadRemoteConnectionsAsync();
+            if (_remoteBrowser?.Connections.Count > 0)
+                PresentConnectionsHome(_remoteBrowser.Connections);
+            else
+                _ = LoadRemoteConnectionsAsync();
         }
         else if (_connectionSelector.SelectedItem is ConnectionCardModel { ConnectionId: { } connectionId })
         {
@@ -2984,6 +3108,7 @@ public sealed class BrowserPaneControl : UserControl
             _filterBox.Text = string.Empty;
             _ = SelectRemoteConnectionAsync(connectionId);
         }
+        RaiseStateChanged();
     }
 
     private void UpdateConnectionPresentation()
@@ -3182,7 +3307,7 @@ internal sealed class PaneDragPayload(BrowserPaneControl sourcePane, PaneSelecti
     public bool InternalDropHandled { get; set; }
 }
 
-internal enum BrowserSortColumn
+public enum BrowserSortColumn
 {
     Name,
     Size,

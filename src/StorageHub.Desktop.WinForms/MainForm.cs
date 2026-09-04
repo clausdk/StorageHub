@@ -41,6 +41,7 @@ public sealed class MainForm : Form
     private bool _updaterStarted;
     private bool _agentRestartPending;
     private bool _agentRecoveryInProgress;
+    private int _nextWorkspaceNumber = 1;
 
     public MainForm()
         : this(DesktopUpdatePreferencesStore.CreateDefault())
@@ -67,7 +68,7 @@ public sealed class MainForm : Form
             Icon = _windowIcon;
         }
         AccessibleName = "StorageHub file manager";
-        AccessibleDescription = "A secure dual-pane file manager for local and remote storage.";
+        AccessibleDescription = "A secure multi-pane file manager for local and remote storage.";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(1120, 720);
         Size = new Size(1500, 920);
@@ -85,7 +86,7 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Workspace tabs",
-            AccessibleDescription = "Each tab contains independent source and destination browser panes.",
+            AccessibleDescription = "Named workspaces contain one to four equal-capability browser panes.",
             HotTrack = true,
             ShowToolTips = true
         };
@@ -93,7 +94,7 @@ public sealed class MainForm : Form
         _workspaceTabs.DrawItem += WorkspaceTabsDrawItem;
         _workspaceTabs.MouseDown += WorkspaceTabsMouseDown;
         _overview = new OverviewDashboardControl();
-        _overview.NewWorkspaceRequested += (_, _) => AddWorkspace();
+        _overview.NewWorkspaceRequested += (_, _) => ChooseAndAddWorkspace();
         _overview.ConnectionsRequested += (_, _) => ShowConnectionManager();
         _overview.SyncTasksRequested += (_, _) => _workspaceTabs.SelectedIndex = 1;
         _syncTasks = new SyncTasksOverviewControl();
@@ -101,13 +102,13 @@ public sealed class MainForm : Form
         _syncTasks.SchedulesRequested += (_, _) => ShowSchedules();
         _workspaceTabs.TabPages.Add(CreateFixedTab("Welcome", UiGlyph.Home, _overview));
         _workspaceTabs.TabPages.Add(CreateFixedTab("Sync tasks", UiGlyph.Compare, _syncTasks));
-        _workspaceTabs.TabPages.Add(CreateWorkspace("Local ↔ Connections"));
         _workspaceTabs.TabPages.Add(new TabPage("+")
         {
             ToolTipText = "New workspace",
             AccessibleName = "New workspace tab"
         });
         _workspaceTabs.Selecting += WorkspaceTabsSelecting;
+        _workspaceTabs.SelectedIndexChanged += (_, _) => UpdateWorkspaceCommandState();
 
         var mainSplit = new SplitContainer
         {
@@ -122,7 +123,7 @@ public sealed class MainForm : Form
         mainSplit.Panel1.BackColor = StorageHubTheme.Canvas;
         mainSplit.Panel2.BackColor = StorageHubTheme.Surface;
         mainSplit.Panel1.Controls.Add(_workspaceTabs);
-        _transferQueue = new TransferQueueControl();
+        _transferQueue = new TransferQueueControl(_updatePreferencesStore);
         _manualTransfers.TransfersEnqueued += ManualTransfersEnqueued;
         mainSplit.Panel2.Controls.Add(_transferQueue);
 
@@ -138,6 +139,7 @@ public sealed class MainForm : Form
         _updater.RestartRequested += UpdaterRestartRequested;
         _updateStatus.Click += UpdateStatusClicked;
         ApplyUpdateStatus(_updater.Snapshot);
+        UpdateWorkspaceCommandState();
     }
 
     protected override void OnShown(EventArgs e)
@@ -157,6 +159,25 @@ public sealed class MainForm : Form
         }
 
         _ = _overview.RefreshAsync(_lifetime.Token);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (!e.Cancel && Visible)
+        {
+            foreach (var page in _workspaceTabs.TabPages.Cast<TabPage>().ToArray())
+            {
+                if (page.Controls.OfType<WorkspaceControl>().SingleOrDefault() is not { IsDirty: true } workspace) continue;
+                var choice = MessageBox.Show(this, $"Save changes to {workspace.WorkspaceName}?",
+                    "Exit StorageHub", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (choice == DialogResult.Cancel || choice == DialogResult.Yes && !SaveWorkspace(workspace, page))
+                {
+                    e.Cancel = true;
+                    break;
+                }
+            }
+        }
+        base.OnFormClosing(e);
     }
 
     protected override void Dispose(bool disposing)
@@ -266,7 +287,7 @@ public sealed class MainForm : Form
             Padding = new Padding(5, 4, 5, 4),
             AutoSize = true
         };
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Add, "New tab", (_, _) => AddWorkspace()));
+        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Add, "New workspace", (_, _) => ChooseAndAddWorkspace()));
         toolbar.Items.Add(CreateToolbarButton(UiGlyph.Connections, "Connection Manager", (_, _) => ShowConnectionManager()));
         return toolbar;
     }
@@ -579,10 +600,22 @@ public sealed class MainForm : Form
         {
             switch (command)
             {
-                case "New Workspace Tab":
-                    AddWorkspace();
+                case "New Workspace...":
+                    ChooseAndAddWorkspace();
                     break;
-                case "Close Tab":
+                case "Open Workspace...":
+                    await OpenWorkspaceAsync();
+                    break;
+                case "Save Workspace":
+                    SaveActiveWorkspace(saveAs: false);
+                    break;
+                case "Save Workspace As...":
+                    SaveActiveWorkspace(saveAs: true);
+                    break;
+                case "Rename Workspace...":
+                    RenameActiveWorkspace();
+                    break;
+                case "Close Workspace":
                     CloseActiveWorkspace();
                     break;
                 case "Connection Manager...":
@@ -603,9 +636,6 @@ public sealed class MainForm : Form
                     {
                         PasteIntoPane(pasteDestination);
                     }
-                    break;
-                case "Enqueue":
-                    EnqueueFromFocusedPane(TransferQueueOperation.Copy);
                     break;
                 case "Properties":
                     ShowObjectInspectorFromFocusedPane();
@@ -680,7 +710,7 @@ public sealed class MainForm : Form
                 _workspaceAddPending = false;
                 if (!_workspaceTabs.IsDisposed)
                 {
-                    AddWorkspace();
+                    ChooseAndAddWorkspace();
                 }
             });
         }
@@ -747,15 +777,203 @@ public sealed class MainForm : Form
             closeSize);
     }
 
-    private void AddWorkspace()
+    private void ChooseAndAddWorkspace()
+    {
+        using var chooser = new NewWorkspaceForm(_updatePreferencesStore.Load().DefaultWorkspaceLayout);
+        if (chooser.ShowDialog(this) == DialogResult.OK)
+        {
+            AddWorkspace(chooser.PaneCount);
+        }
+    }
+
+    internal TabPage AddWorkspace(int paneCount = 2)
     {
         var insertAt = _workspaceTabs.TabPages.Count - 1;
-        var workspaceNumber = _workspaceTabs.TabPages
-            .Cast<TabPage>()
-            .Count(static page => page.Tag is WorkspaceTabMetadata { Closable: true }) + 1;
-        var page = CreateWorkspace($"Workspace {workspaceNumber}");
+        var workspaceNumber = _nextWorkspaceNumber++;
+        while (_workspaceTabs.TabPages.Cast<TabPage>()
+            .SelectMany(page => page.Controls.OfType<WorkspaceControl>())
+            .Any(workspace => string.Equals(workspace.WorkspaceName, $"Workspace {workspaceNumber}", StringComparison.OrdinalIgnoreCase)))
+        {
+            workspaceNumber = _nextWorkspaceNumber++;
+        }
+        var name = $"Workspace {workspaceNumber}";
+        var page = CreateCustomWorkspace(
+            name,
+            WorkspaceLayoutModel.CreatePreset(paneCount, _updatePreferencesStore.Load().DefaultWorkspaceLayout));
         _workspaceTabs.TabPages.Insert(insertAt, page);
         _workspaceTabs.SelectedTab = page;
+        return page;
+    }
+
+    private TabPage CreateCustomWorkspace(
+        string name,
+        WorkspaceLayoutModel layout,
+        IReadOnlyDictionary<Guid, BrowserPaneState>? states = null)
+    {
+        var page = new TabPage(name)
+        {
+            AccessibleName = $"{name} workspace",
+            ToolTipText = name,
+            Tag = CreateTabMetadata(UiGlyph.Folder, closable: true)
+        };
+        WorkspaceControl? workspace = null;
+        workspace = new WorkspaceControl(name, layout, pane => ConfigureWorkspacePane(page, pane), states);
+        workspace.WorkspaceChanged += (_, _) => UpdateWorkspaceTab(page, workspace);
+        workspace.ActivePaneChanged += (_, _) => _activePane = workspace.ActivePane;
+        var toolbar = workspace.Controls.OfType<ToolStrip>().Single();
+        if (toolbar.Items["WorkspaceClipboardPaste"] is ToolStripButton paste)
+            paste.Click += (_, _) => { if (workspace.ActivePane is { } pane) PasteIntoPane(pane); };
+        if (toolbar.Items["WorkspaceClipboardClear"] is ToolStripButton clear)
+            clear.Click += (_, _) => ClearPaneClipboard();
+        page.Controls.Add(workspace);
+        UpdateWorkspaceTab(page, workspace);
+        RefreshPaneClipboardPresentation();
+        return page;
+    }
+
+    private void ConfigureWorkspacePane(TabPage page, BrowserPaneControl pane)
+    {
+        pane.Enter += ActivePaneEntered;
+        pane.TransferDropRequested += (_, args) => EnqueuePaneDrop(page, pane, args);
+        pane.ShellImportDropRequested += (_, args) => _ = ReviewShellImportAsync(args);
+        if (_explorerDropBrokerAvailable)
+        {
+            pane.BeginExplorerDropAsync = BeginExplorerDropAsync;
+            pane.CommitExplorerDropAsync = CommitExplorerDropAsync;
+        }
+        else
+        {
+            pane.ExplorerDropUnavailableReason =
+                "Drag to File Explorer is unavailable because the StorageHub Explorer integration could not be registered. Repair the installation or restart StorageHub.";
+        }
+        pane.SelectionStaged += (_, args) => StagePaneSelection(pane, args);
+        pane.CanPaste = () => _paneClipboard is not null;
+        pane.PasteRequested += (_, _) => PasteIntoPane(pane);
+        pane.DeleteRequested += (_, _) => _ = ReviewDeleteAsync(pane);
+        pane.EditRequested += (_, _) => EditSelectedFile(pane);
+        pane.ObjectInspectionRequested += (_, _) => ShowObjectInspector(pane);
+        pane.ConnectionOpened += (_, args) => _overview.RecordRecentConnection(args.Connection);
+    }
+
+    private static void UpdateWorkspaceTab(TabPage page, WorkspaceControl workspace)
+    {
+        page.Text = workspace.WorkspaceName + (workspace.IsDirty ? " *" : string.Empty);
+        page.ToolTipText = workspace.FilePath ?? workspace.WorkspaceName;
+        page.AccessibleName = $"{workspace.WorkspaceName} workspace";
+    }
+
+    private WorkspaceControl? GetActiveWorkspace() =>
+        _workspaceTabs.SelectedTab?.Controls.OfType<WorkspaceControl>().SingleOrDefault();
+
+    private async Task OpenWorkspaceAsync()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Open Workspace",
+            Filter = WorkspaceFileStore.Filter,
+            DefaultExt = "shw",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        var normalized = Path.GetFullPath(dialog.FileName);
+        var existing = _workspaceTabs.TabPages.Cast<TabPage>()
+            .FirstOrDefault(page => page.Controls.OfType<WorkspaceControl>().SingleOrDefault() is { FilePath: { } path } &&
+                string.Equals(Path.GetFullPath(path), normalized, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null) { _workspaceTabs.SelectedTab = existing; return; }
+        try
+        {
+            var document = WorkspaceFileStore.Load(normalized);
+            var layout = new WorkspaceLayoutModel(WorkspaceFileStore.ToLayout(document.Layout));
+            var page = CreateCustomWorkspace(document.Name, layout, document.Panes);
+            _workspaceTabs.TabPages.Insert(_workspaceTabs.TabPages.Count - 1, page);
+            _workspaceTabs.SelectedTab = page;
+            var workspace = page.Controls.OfType<WorkspaceControl>().Single();
+            await workspace.HydrateAsync(
+                document.Panes,
+                document.ActivePaneId,
+                _updatePreferencesStore.Load().ReconnectRemotePanesAutomatically,
+                _lifetime.Token).ConfigureAwait(true);
+            workspace.AssociateFile(normalized);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
+        {
+            _ = MessageBox.Show(this,
+                $"StorageHub could not open this workspace. {error.Message}",
+                "Open Workspace", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private bool SaveActiveWorkspace(bool saveAs)
+    {
+        var workspace = GetActiveWorkspace();
+        if (workspace is null) return false;
+        var path = saveAs ? null : workspace.FilePath;
+        if (path is null)
+        {
+            using var dialog = new SaveFileDialog
+            {
+                Title = "Save Workspace",
+                Filter = WorkspaceFileStore.Filter,
+                DefaultExt = "shw",
+                AddExtension = true,
+                FileName = SanitizeWorkspaceFileName(workspace.WorkspaceName) + ".shw"
+            };
+            if (dialog.ShowDialog(this) != DialogResult.OK) return false;
+            path = dialog.FileName;
+        }
+        try
+        {
+            workspace.Save(path);
+            if (_workspaceTabs.SelectedTab is { } page) UpdateWorkspaceTab(page, workspace);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
+        {
+            _ = MessageBox.Show(this, $"StorageHub could not save this workspace. {error.Message}",
+                "Save Workspace", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+    }
+
+    private void RenameActiveWorkspace()
+    {
+        var workspace = GetActiveWorkspace();
+        if (workspace is null) return;
+        using var dialog = new Form
+        {
+            Text = "Rename Workspace",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            ClientSize = new Size(420, 120),
+            MinimizeBox = false,
+            MaximizeBox = false
+        };
+        var name = new TextBox { Text = workspace.WorkspaceName, Left = 14, Top = 16, Width = 390, MaxLength = 128 };
+        var accept = new Button { Text = "Rename", DialogResult = DialogResult.OK, Left = 230, Top = 62, Width = 82 };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Left = 322, Top = 62, Width = 82 };
+        dialog.Controls.AddRange([name, accept, cancel]);
+        dialog.AcceptButton = accept; dialog.CancelButton = cancel;
+        if (dialog.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(name.Text))
+            workspace.WorkspaceName = name.Text;
+    }
+
+    private static string SanitizeWorkspaceFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var value = new string(name.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
+        return string.IsNullOrWhiteSpace(value) ? "Workspace" : value;
+    }
+
+    private void UpdateWorkspaceCommandState()
+    {
+        var active = GetActiveWorkspace() is not null;
+        var root = _menu.Items.OfType<ToolStripMenuItem>().FirstOrDefault(item => item.Text == "Workspace");
+        if (root is null) return;
+        foreach (ToolStripItem item in root.DropDownItems)
+        {
+            item.Enabled = item.Text is "New Workspace..." or "Open Workspace..." or "Exit" || active;
+        }
     }
 
     private void CloseActiveWorkspace()
@@ -778,6 +996,13 @@ public sealed class MainForm : Form
         }
 
         var page = _workspaceTabs.TabPages[index];
+        if (page.Controls.OfType<WorkspaceControl>().SingleOrDefault() is { IsDirty: true } workspace && Visible)
+        {
+            var choice = MessageBox.Show(this,
+                $"Save changes to {workspace.WorkspaceName}?",
+                "Close Workspace", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (choice == DialogResult.Cancel || choice == DialogResult.Yes && !SaveWorkspace(workspace, page)) return;
+        }
         _changingWorkspaceTabs = true;
         try
         {
@@ -798,6 +1023,15 @@ public sealed class MainForm : Form
         }
 
         page.Dispose();
+    }
+
+    private bool SaveWorkspace(WorkspaceControl workspace, TabPage page)
+    {
+        var previous = _workspaceTabs.SelectedTab;
+        _workspaceTabs.SelectedTab = page;
+        var saved = SaveActiveWorkspace(saveAs: false);
+        if (previous is not null && _workspaceTabs.TabPages.Contains(previous)) _workspaceTabs.SelectedTab = previous;
+        return saved;
     }
 
     private void ShowConnectionManager()
@@ -832,14 +1066,11 @@ public sealed class MainForm : Form
 
     private BrowserPaneControl? GetActivePane()
     {
-        if (!TryGetActiveWorkspacePanes(out var source, out var destination))
-        {
-            return null;
-        }
-
-        return _activePane == destination || destination.ContainsFocus
-            ? destination
-            : source;
+        var workspace = GetActiveWorkspace();
+        if (workspace is null) return null;
+        return _activePane is not null && workspace.Contains(_activePane)
+            ? _activePane
+            : workspace.ActivePane;
     }
 
     private void NavigateActivePane(PaneNavigation navigation)
@@ -863,8 +1094,12 @@ public sealed class MainForm : Form
     }
 
     private static bool IsAvailableCommand(string command) => command is
-        "New Workspace Tab" or
-        "Close Tab" or
+        "New Workspace..." or
+        "Open Workspace..." or
+        "Save Workspace" or
+        "Save Workspace As..." or
+        "Rename Workspace..." or
+        "Close Workspace" or
         "Exit" or
         "Cut" or
         "Copy" or
@@ -876,7 +1111,6 @@ public sealed class MainForm : Form
         "Forward" or
         "Up" or
         "Connection Manager..." or
-        "Enqueue" or
         "Review & Run..." or
         "Sync Profiles..." or
         "Schedules..." or
@@ -927,12 +1161,7 @@ public sealed class MainForm : Form
 
     private void ShowObjectInspectorFromFocusedPane()
     {
-        if (!TryGetActiveWorkspacePanes(out var source, out var destination))
-        {
-            return;
-        }
-
-        ShowObjectInspector(destination.ContainsFocus ? destination : source);
+        if (GetActivePane() is { } pane) ShowObjectInspector(pane);
     }
 
     private void ShowObjectInspector(BrowserPaneControl pane)

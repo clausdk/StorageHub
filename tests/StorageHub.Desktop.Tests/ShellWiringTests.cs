@@ -6,7 +6,7 @@ namespace StorageHub.Desktop.Tests;
 public sealed class ShellWiringTests
 {
     [Fact]
-    public void WorkspaceTabsExposeAWorkingCloseTargetIncludingForTheLastWorkspace()
+    public void StartsOnWelcomeAndWorkspaceTabsExposeAWorkingCloseTarget()
     {
         SyncRunReviewControlTests.RunOnSta(() =>
         {
@@ -18,13 +18,19 @@ public sealed class ShellWiringTests
             tabs.PerformLayout();
 
             Assert.Equal(TabDrawMode.OwnerDrawFixed, tabs.DrawMode);
-            Assert.Equal(4, tabs.TabPages.Count);
+            Assert.Equal(3, tabs.TabPages.Count);
             Assert.Equal("Welcome", tabs.TabPages[0].AccessibleName);
             Assert.Equal("Sync tasks", tabs.TabPages[1].AccessibleName);
             Assert.Equal("Welcome", tabs.TabPages[0].Text);
             Assert.Equal("Sync tasks", tabs.TabPages[1].Text);
-            Assert.Equal("Local ↔ Connections", tabs.TabPages[2].Text);
+            Assert.Equal("+", tabs.TabPages[2].Text);
             Assert.Equal(new Point(39, 5), tabs.Padding);
+
+            var created = main.AddWorkspace(4);
+            tabs.PerformLayout();
+            Assert.Equal(4, tabs.TabPages.Count);
+            Assert.Equal("Workspace 1 *", created.Text);
+            Assert.Equal(4, Assert.Single(created.Controls.OfType<WorkspaceControl>()).Panes.Count);
 
             var workspaceTab = tabs.GetTabRect(2);
             RaiseMouseDown(tabs, new Point(
@@ -36,13 +42,6 @@ public sealed class ShellWiringTests
             Assert.Equal(0, tabs.SelectedIndex);
             Assert.Equal("Welcome", tabs.SelectedTab!.AccessibleName);
 
-            tabs.SelectedIndex = tabs.TabPages.Count - 1;
-
-            Assert.Equal(3, tabs.TabPages.Count);
-            Assert.NotEqual("+", tabs.SelectedTab!.Text);
-            System.Windows.Forms.Application.DoEvents();
-            Assert.Equal(4, tabs.TabPages.Count);
-            Assert.NotEqual("+", tabs.SelectedTab!.Text);
         });
     }
 
@@ -79,46 +78,26 @@ public sealed class ShellWiringTests
                 .Select(name => name!)
                 .ToArray();
             Assert.Equal(
-                ["New tab", "Connection Manager"],
+                ["New workspace", "Connection Manager"],
                 toolbarActions);
         });
     }
 
     [Fact]
-    public void WorkspaceCanSwitchBetweenSideBySideAndTopAndBottom()
+    public void WorkspacePresetHonorsDefaultOrientation()
     {
         SyncRunReviewControlTests.RunOnSta(() =>
         {
             var settingsPath = Path.Combine(
                 Path.GetTempPath(),
                 $"storagehub-layout-test-{Guid.NewGuid():N}.json");
-            using var main = new MainForm(new DesktopUpdatePreferencesStore(settingsPath));
-            main.CreateControl();
-            var tabs = GetField<TabControl>(main, "_workspaceTabs");
-            var workspace = tabs.TabPages[2];
-            var split = Assert.Single(workspace.Controls.OfType<SplitContainer>());
-            var toolbar = Assert.Single(
-                workspace.Controls.OfType<ToolStrip>(),
-                candidate => candidate.AccessibleName!.EndsWith("workspace layout", StringComparison.Ordinal));
-            var layout = Assert.IsType<ToolStripDropDownButton>(toolbar.Items[0]);
-            Assert.Equal("Empty", toolbar.Items["WorkspaceClipboardStatus"]!.Text);
-            var sideBySide = Assert.IsType<ToolStripMenuItem>(layout.DropDownItems[0]);
-            var topAndBottom = Assert.IsType<ToolStripMenuItem>(layout.DropDownItems[1]);
-
-            Assert.Equal(Orientation.Vertical, split.Orientation);
-            topAndBottom.PerformClick();
-
-            Assert.Equal(Orientation.Horizontal, split.Orientation);
-            Assert.True(topAndBottom.Checked);
-            Assert.Equal("Layout: Top and bottom", layout.Text);
-            Assert.IsType<BrowserPaneControl>(Assert.Single(split.Panel1.Controls.Cast<Control>()));
-            Assert.IsType<BrowserPaneControl>(Assert.Single(split.Panel2.Controls.Cast<Control>()));
-
-            sideBySide.PerformClick();
-
-            Assert.Equal(Orientation.Vertical, split.Orientation);
-            Assert.True(sideBySide.Checked);
-            Assert.Equal("Layout: Side by side", layout.Text);
+            var store = new DesktopUpdatePreferencesStore(settingsPath);
+            store.Save(DesktopUpdatePreferences.Defaults with { DefaultWorkspaceLayout = WorkspaceLayout.TopAndBottom });
+            using var main = new MainForm(store);
+            var page = main.AddWorkspace(2);
+            var workspace = Assert.Single(page.Controls.OfType<WorkspaceControl>());
+            var split = Assert.IsType<WorkspaceSplitNode>(workspace.LayoutModel.Root);
+            Assert.Equal(WorkspaceSplitOrientation.Horizontal, split.Orientation);
         });
     }
 
@@ -303,14 +282,10 @@ public sealed class ShellWiringTests
             using var main = new MainForm(
                 new DesktopUpdatePreferencesStore(settingsPath),
                 explorerDropBrokerAvailable: false);
-            var tabs = GetField<TabControl>(main, "_workspaceTabs");
-            var panes = tabs.TabPages[2].Controls.OfType<SplitContainer>()
-                .SelectMany(split => split.Panel1.Controls.Cast<Control>()
-                    .Concat(split.Panel2.Controls.Cast<Control>()))
-                .OfType<BrowserPaneControl>()
-                .ToArray();
+            var workspace = Assert.Single(main.AddWorkspace(2).Controls.OfType<WorkspaceControl>());
+            var panes = workspace.Panes;
 
-            Assert.Equal(2, panes.Length);
+            Assert.Equal(2, panes.Count);
             Assert.All(panes, pane =>
             {
                 Assert.Null(pane.BeginExplorerDropAsync);
