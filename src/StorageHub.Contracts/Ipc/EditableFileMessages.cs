@@ -16,6 +16,12 @@ public static class EditableFileIpcMessageTypes
     public const string UploadResponse = "editable-file.upload.response";
     public const string DirectoryEnsureRequest = "storage-directory.ensure.request";
     public const string DirectoryEnsureResponse = "storage-directory.ensure.response";
+    public const string DirectoryCreateRequest = "storage-directory.create.request";
+    public const string DirectoryCreateResponse = "storage-directory.create.response";
+    public const string FileCreateRequest = "storage-file.create.request";
+    public const string FileCreateResponse = "storage-file.create.response";
+    public const string RenameRequest = "storage-item.rename.request";
+    public const string RenameResponse = "storage-item.rename.response";
     public const string DeleteRequest = "storage-item.delete.request";
     public const string DeleteResponse = "storage-item.delete.response";
 }
@@ -77,6 +83,60 @@ public sealed record StorageDirectoryEnsureResponse(
     int ContractVersion,
     ObjectInspectorAddress Address,
     bool Created,
+    StorageIpcFailure? Failure = null);
+
+public sealed record StorageDirectoryCreateRequest(
+    int ContractVersion,
+    ObjectInspectorAddress Address)
+{
+    public bool HasValidBounds => IsNewAddress(ContractVersion, Address);
+
+    internal static bool IsNewAddress(int contractVersion, ObjectInspectorAddress? address) =>
+        EditableFileIpcContract.IsSupported(contractVersion) &&
+        address?.HasValidBounds == true &&
+        address.NativeItemId is null &&
+        address.VersionId is null &&
+        address.EntityTag is null;
+}
+
+public sealed record StorageDirectoryCreateResponse(
+    int ContractVersion,
+    ObjectInspectorAddress Address,
+    bool Created,
+    StorageIpcFailure? Failure = null);
+
+public sealed record StorageFileCreateRequest(
+    int ContractVersion,
+    ObjectInspectorAddress Address)
+{
+    public bool HasValidBounds => StorageDirectoryCreateRequest.IsNewAddress(ContractVersion, Address);
+}
+
+public sealed record StorageFileCreateResponse(
+    int ContractVersion,
+    ObjectInspectorAddress Address,
+    bool Created,
+    StorageIpcFailure? Failure = null);
+
+public sealed record StorageItemRenameRequest(
+    int ContractVersion,
+    ObjectInspectorAddress Source,
+    ObjectInspectorAddress Destination)
+{
+    public bool HasValidBounds =>
+        EditableFileIpcContract.IsSupported(ContractVersion) &&
+        Source?.HasValidBounds == true &&
+        StorageDirectoryCreateRequest.IsNewAddress(ContractVersion, Destination) &&
+        Source.ConnectionId == Destination.ConnectionId &&
+        string.Equals(Source.RootIdentity, Destination.RootIdentity, StringComparison.Ordinal) &&
+        !string.Equals(Source.RelativePath, Destination.RelativePath, StringComparison.Ordinal);
+}
+
+public sealed record StorageItemRenameResponse(
+    int ContractVersion,
+    ObjectInspectorAddress Source,
+    ObjectInspectorAddress Destination,
+    bool Renamed,
     StorageIpcFailure? Failure = null);
 
 public sealed record StorageItemDeleteRequest(

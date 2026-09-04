@@ -27,7 +27,7 @@ public static class UiCommandCatalog
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
             ["Workspace"] = ["New Workspace...", "Open Workspace...", "Save Workspace", "Save Workspace As...", "Rename Workspace...", "Close Workspace", "Exit"],
-            ["Edit"] = ["Cut", "Copy", "Paste", "Rename", "Batch Rename...", "Select All", "Invert Selection", "Properties"],
+            ["Edit"] = ["New Folder", "New Empty File...", "Cut", "Copy", "Paste", "Rename", "Batch Rename...", "Delete", "Select All", "Invert Selection", "Properties"],
             ["View"] = ["Refresh", "Directory Tree", "Transfer Queue", "Session Log", "Hidden Files", "Theme"],
             ["Go"] = ["Back", "Forward", "Up", "Home", "History", "Favorites"],
             ["Connections"] = ["Connection Manager...", "Quick Connect...", "Reconnect", "Disconnect", "Test Connection"],
@@ -49,7 +49,12 @@ public static class UiCommandCatalog
             ["Cut"] = (Keys.Control | Keys.X, UiGlyph.Forward, "Stage selected files for moving to another pane."),
             ["Copy"] = (Keys.Control | Keys.C, UiGlyph.File, "Stage selected files for copying to another pane."),
             ["Paste"] = (Keys.Control | Keys.V, UiGlyph.Save, "Enqueue the staged operation in this pane."),
+            ["New Folder"] = (Keys.Control | Keys.Shift | Keys.N, UiGlyph.Folder, "Create a folder in the active pane."),
+            ["New Empty File..."] = (Keys.None, UiGlyph.File, "Create an empty file in the active pane."),
             ["Rename"] = (Keys.F2, null, "Rename the focused item."),
+            ["Batch Rename..."] = (Keys.None, null, "Preview and rename several selected items."),
+            ["Delete"] = (Keys.Delete, UiGlyph.Delete, "Review and delete the selected items."),
+            ["Invert Selection"] = (Keys.Control | Keys.I, UiGlyph.Test, "Invert the visible selection in the active pane."),
             ["Properties"] = (Keys.Alt | Keys.Enter, null, "Inspect read-only versions, metadata, and tags for one saved-connection file."),
             ["Select All"] = (Keys.Control | Keys.A, UiGlyph.Test, "Select every visible item."),
             ["Refresh"] = (Keys.F5, UiGlyph.Refresh, "Refresh the focused pane."),

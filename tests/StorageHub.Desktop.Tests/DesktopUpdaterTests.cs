@@ -88,7 +88,7 @@ public sealed class DesktopUpdaterTests
         fixture.Store.Save(DesktopUpdatePreferences.Defaults with { Appearance = appearance });
 
         Assert.Equal(appearance, fixture.Store.Load().Appearance);
-        Assert.Contains("\"schemaVersion\": 10", File.ReadAllText(fixture.Path), StringComparison.Ordinal);
+        Assert.Contains("\"schemaVersion\": 11", File.ReadAllText(fixture.Path), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -128,6 +128,17 @@ public sealed class DesktopUpdaterTests
         });
 
         Assert.Equal(enabled, fixture.Store.Load().ConfirmBeforeClearingTransferHistory);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DeleteWarningPreferenceRoundTrips(bool enabled)
+    {
+        using var fixture = new SettingsFixture();
+        fixture.Store.Save(DesktopUpdatePreferences.Defaults with { ConfirmBeforeDeletingItems = enabled });
+
+        Assert.Equal(enabled, fixture.Store.Load().ConfirmBeforeDeletingItems);
     }
 
     [Fact]

@@ -184,6 +184,56 @@ public sealed class ObjectInspectorAgentClientTests
         Assert.Null(response.Failure);
     }
 
+    [Fact]
+    public async Task RenameRequiresCorrelatedSourceDestinationAndSuccessOutcome()
+    {
+        var source = CreateAddress();
+        var destination = source with
+        {
+            RelativePath = "folder/renamed.bin",
+            NativeItemId = null,
+            VersionId = null,
+            EntityTag = null
+        };
+        var transport = new FakeTransport(request => IpcEnvelope.Create(
+            EditableFileIpcMessageTypes.RenameResponse,
+            request.RequestId,
+            1,
+            new StorageItemRenameResponse(
+                EditableFileIpcContract.CurrentVersion,
+                source,
+                destination,
+                Renamed: true)));
+        await using var client = CreateClient(transport);
+
+        var response = await client.RenameItemAsync(new StorageItemRenameRequest(
+            EditableFileIpcContract.CurrentVersion, source, destination));
+
+        Assert.True(response.Renamed);
+        Assert.Null(response.Failure);
+    }
+
+    [Fact]
+    public async Task EmptyFileCreationUsesDedicatedCreateNewExchange()
+    {
+        var address = CreateAddress() with { NativeItemId = null, VersionId = null, EntityTag = null };
+        var transport = new FakeTransport(request => IpcEnvelope.Create(
+            EditableFileIpcMessageTypes.FileCreateResponse,
+            request.RequestId,
+            1,
+            new StorageFileCreateResponse(
+                EditableFileIpcContract.CurrentVersion,
+                address,
+                Created: true)));
+        await using var client = CreateClient(transport);
+
+        var response = await client.CreateFileAsync(new StorageFileCreateRequest(
+            EditableFileIpcContract.CurrentVersion, address));
+
+        Assert.True(response.Created);
+        Assert.Null(response.Failure);
+    }
+
     private static ObjectInspectorAddress CreateAddress() => new(
         Guid.NewGuid(),
         "s3:root",

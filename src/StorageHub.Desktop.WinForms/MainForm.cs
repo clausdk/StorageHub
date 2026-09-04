@@ -373,6 +373,14 @@ public sealed class MainForm : Form
         destination.PasteRequested += (_, _) => PasteIntoPane(destination);
         source.DeleteRequested += (_, _) => _ = ReviewDeleteAsync(source);
         destination.DeleteRequested += (_, _) => _ = ReviewDeleteAsync(destination);
+        source.NewFolderRequested += (_, _) => _ = CreatePaneItemAsync(source, createFolder: true);
+        destination.NewFolderRequested += (_, _) => _ = CreatePaneItemAsync(destination, createFolder: true);
+        source.NewFileRequested += (_, _) => _ = CreatePaneItemAsync(source, createFolder: false);
+        destination.NewFileRequested += (_, _) => _ = CreatePaneItemAsync(destination, createFolder: false);
+        source.RenameRequested += (_, _) => _ = RenamePaneSelectionAsync(source);
+        destination.RenameRequested += (_, _) => _ = RenamePaneSelectionAsync(destination);
+        source.BatchRenameRequested += (_, _) => _ = BatchRenamePaneSelectionAsync(source);
+        destination.BatchRenameRequested += (_, _) => _ = BatchRenamePaneSelectionAsync(destination);
         source.EditRequested += (_, _) => EditSelectedFile(source);
         destination.EditRequested += (_, _) => EditSelectedFile(destination);
         source.ObjectInspectionRequested += (_, _) => ShowObjectInspector(source);
@@ -637,6 +645,24 @@ public sealed class MainForm : Form
                         PasteIntoPane(pasteDestination);
                     }
                     break;
+                case "New Folder":
+                    if (GetActivePane() is { } folderPane) await CreatePaneItemAsync(folderPane, createFolder: true);
+                    break;
+                case "New Empty File...":
+                    if (GetActivePane() is { } filePane) await CreatePaneItemAsync(filePane, createFolder: false);
+                    break;
+                case "Rename":
+                    if (GetActivePane() is { } renamePane) await RenamePaneSelectionAsync(renamePane);
+                    break;
+                case "Batch Rename...":
+                    if (GetActivePane() is { } batchPane) await BatchRenamePaneSelectionAsync(batchPane);
+                    break;
+                case "Delete":
+                    if (GetActivePane() is { } deletePane) await ReviewDeleteAsync(deletePane);
+                    break;
+                case "Invert Selection":
+                    GetActivePane()?.InvertVisibleSelection();
+                    break;
                 case "Properties":
                     ShowObjectInspectorFromFocusedPane();
                     break;
@@ -850,6 +876,10 @@ public sealed class MainForm : Form
         pane.CanPaste = () => _paneClipboard is not null;
         pane.PasteRequested += (_, _) => PasteIntoPane(pane);
         pane.DeleteRequested += (_, _) => _ = ReviewDeleteAsync(pane);
+        pane.NewFolderRequested += (_, _) => _ = CreatePaneItemAsync(pane, createFolder: true);
+        pane.NewFileRequested += (_, _) => _ = CreatePaneItemAsync(pane, createFolder: false);
+        pane.RenameRequested += (_, _) => _ = RenamePaneSelectionAsync(pane);
+        pane.BatchRenameRequested += (_, _) => _ = BatchRenamePaneSelectionAsync(pane);
         pane.EditRequested += (_, _) => EditSelectedFile(pane);
         pane.ObjectInspectionRequested += (_, _) => ShowObjectInspector(pane);
         pane.ConnectionOpened += (_, args) => _overview.RecordRecentConnection(args.Connection);
@@ -1104,7 +1134,13 @@ public sealed class MainForm : Form
         "Cut" or
         "Copy" or
         "Paste" or
+        "New Folder" or
+        "New Empty File..." or
+        "Rename" or
+        "Batch Rename..." or
+        "Delete" or
         "Select All" or
+        "Invert Selection" or
         "Properties" or
         "Refresh" or
         "Back" or
@@ -1461,6 +1497,236 @@ public sealed class MainForm : Form
         _ => string.IsNullOrEmpty(context.RelativePath) ? "storage pane" : context.RelativePath
     };
 
+    private async Task CreatePaneItemAsync(BrowserPaneControl pane, bool createFolder)
+    {
+        var captured = pane.CaptureCurrentLocation();
+        if (captured.IsFailure || captured.Value.Kind is not (PaneTransferContextKind.ThisPc or PaneTransferContextKind.SavedConnection))
+        {
+            ShowManualTransferFailure(captured.IsFailure
+                ? captured.Error.Message
+                : "Open a local or remote folder before creating an item.");
+            return;
+        }
+
+        using var dialog = new PaneItemNameDialog(
+            createFolder ? "New folder" : "New empty file",
+            createFolder ? "Folder name" : "File name",
+            createFolder ? "New folder" : "New file.txt",
+            "Create");
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        var context = captured.Value;
+        try
+        {
+            if (context.Kind == PaneTransferContextKind.ThisPc)
+            {
+                var target = CombineLocalChild(context.RelativePath, dialog.ItemName);
+                if (createFolder)
+                {
+                    if (Directory.Exists(target) || File.Exists(target))
+                        throw new IOException("An item with that name already exists.");
+                    Directory.CreateDirectory(target);
+                }
+                else
+                {
+                    await using var stream = new FileStream(
+                        target, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 4096, FileOptions.Asynchronous);
+                    await stream.FlushAsync(_lifetime.Token).ConfigureAwait(true);
+                }
+            }
+            else
+            {
+                var address = CreateRemoteChildAddress(context, dialog.ItemName);
+                await using var client = new NamedPipeObjectInspectorAgentClient();
+                StorageIpcFailure? failure;
+                if (createFolder)
+                {
+                    var response = await client.CreateDirectoryAsync(
+                        new StorageDirectoryCreateRequest(EditableFileIpcContract.CurrentVersion, address),
+                        _lifetime.Token).ConfigureAwait(true);
+                    failure = response.Failure;
+                }
+                else
+                {
+                    var response = await client.CreateFileAsync(
+                        new StorageFileCreateRequest(EditableFileIpcContract.CurrentVersion, address),
+                        _lifetime.Token).ConfigureAwait(true);
+                    failure = response.Failure;
+                }
+                if (failure is not null) throw new InvalidOperationException(failure.Message);
+            }
+
+            pane.Reload();
+            _locationStatus.Text = $"Created {(createFolder ? "folder" : "empty file")} ‘{dialog.ItemName}’.";
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (IsPaneMutationFailure(error))
+        {
+            ShowManualTransferFailure($"The item could not be created. {error.Message}");
+        }
+    }
+
+    private async Task RenamePaneSelectionAsync(BrowserPaneControl pane)
+    {
+        var captured = pane.CaptureSelectionSnapshot();
+        if (captured.IsFailure || captured.Value.Items.Count != 1)
+        {
+            ShowManualTransferFailure(captured.IsFailure ? captured.Error.Message : "Select exactly one item to rename.");
+            return;
+        }
+        var selection = captured.Value;
+        var item = selection.Items[0];
+        using var dialog = new PaneItemNameDialog("Rename item", "New name", item.Name, "Rename");
+        if (dialog.ShowDialog(this) != DialogResult.OK || string.Equals(dialog.ItemName, item.Name, StringComparison.Ordinal)) return;
+
+        var result = await RenameItemAsync(selection.Context, item, dialog.ItemName, client: null).ConfigureAwait(true);
+        if (result is not null)
+        {
+            ShowManualTransferFailure($"The item could not be renamed. {result}");
+            return;
+        }
+        pane.Reload();
+        _locationStatus.Text = $"Renamed ‘{item.Name}’ to ‘{dialog.ItemName}’.";
+    }
+
+    private async Task BatchRenamePaneSelectionAsync(BrowserPaneControl pane)
+    {
+        var captured = pane.CaptureSelectionSnapshot();
+        if (captured.IsFailure || captured.Value.Items.Count < 2)
+        {
+            ShowManualTransferFailure(captured.IsFailure ? captured.Error.Message : "Select at least two items to batch rename.");
+            return;
+        }
+        if (!await pane.EnsureListingCompleteAsync(_lifetime.Token).ConfigureAwait(true)) return;
+        var destination = pane.CaptureDestinationSnapshot();
+        if (destination.IsFailure)
+        {
+            ShowManualTransferFailure(destination.Error.Message);
+            return;
+        }
+
+        var selection = captured.Value;
+        using var dialog = new BatchRenameDialog(
+            selection.Items.Select(static item => item.Name).ToArray(),
+            destination.Value.Entries.Select(static item => item.Name));
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        NamedPipeObjectInspectorAgentClient? client = selection.Context.Kind == PaneTransferContextKind.SavedConnection
+            ? new NamedPipeObjectInspectorAgentClient()
+            : null;
+        var renamed = 0;
+        try
+        {
+            foreach (var item in selection.Items.Where(item => dialog.RenameMap.ContainsKey(item.Name)))
+            {
+                var error = await RenameItemAsync(selection.Context, item, dialog.RenameMap[item.Name], client)
+                    .ConfigureAwait(true);
+                if (error is not null)
+                {
+                    ShowManualTransferFailure($"Renamed {renamed:N0} item(s), then stopped at ‘{item.Name}’. {error}");
+                    pane.Reload();
+                    return;
+                }
+                renamed++;
+            }
+        }
+        finally
+        {
+            if (client is not null) await client.DisposeAsync().ConfigureAwait(true);
+        }
+        pane.Reload();
+        _locationStatus.Text = $"Renamed {renamed:N0} item(s).";
+    }
+
+    private async Task<string?> RenameItemAsync(
+        PaneTransferContext context,
+        PaneTransferItem item,
+        string newName,
+        NamedPipeObjectInspectorAgentClient? client)
+    {
+        try
+        {
+            if (context.Kind == PaneTransferContextKind.ThisPc)
+            {
+                var source = Path.GetFullPath(item.RelativePath);
+                var parent = Path.GetDirectoryName(source) ?? throw new IOException("The parent folder is unavailable.");
+                var destination = CombineLocalChild(parent, newName);
+                var caseOnlyRename = string.Equals(source, destination, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(source, destination, StringComparison.Ordinal);
+                if (!caseOnlyRename && (File.Exists(destination) || Directory.Exists(destination)))
+                    return "An item with that name already exists.";
+                if (caseOnlyRename)
+                {
+                    var temporary = CombineLocalChild(parent, $".storagehub-rename-{Guid.NewGuid():N}.tmp");
+                    if (item.IsContainer) Directory.Move(source, temporary);
+                    else File.Move(source, temporary, overwrite: false);
+                    try
+                    {
+                        if (item.IsContainer) Directory.Move(temporary, destination);
+                        else File.Move(temporary, destination, overwrite: false);
+                    }
+                    catch
+                    {
+                        if (item.IsContainer) Directory.Move(temporary, source);
+                        else File.Move(temporary, source, overwrite: false);
+                        throw;
+                    }
+                }
+                else if (item.IsContainer) Directory.Move(source, destination);
+                else File.Move(source, destination, overwrite: false);
+                return null;
+            }
+            if (context.Kind != PaneTransferContextKind.SavedConnection ||
+                context.ConnectionId is not { } connectionId || string.IsNullOrWhiteSpace(context.RootIdentity))
+                return "Open a local or saved remote folder before renaming items.";
+
+            var sourceAddress = new ObjectInspectorAddress(
+                connectionId, context.RootIdentity, item.RelativePath,
+                item.NativeItemId, item.VersionId, item.EntityTag);
+            var destinationAddress = CreateRemoteChildAddress(context, newName);
+            var ownsClient = client is null;
+            client ??= new NamedPipeObjectInspectorAgentClient();
+            try
+            {
+                var response = await client.RenameItemAsync(
+                    new StorageItemRenameRequest(
+                        EditableFileIpcContract.CurrentVersion, sourceAddress, destinationAddress),
+                    _lifetime.Token).ConfigureAwait(true);
+                return response.Failure?.Message;
+            }
+            finally
+            {
+                if (ownsClient) await client.DisposeAsync().ConfigureAwait(true);
+            }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { return "The operation was cancelled."; }
+        catch (Exception error) when (IsPaneMutationFailure(error)) { return error.Message; }
+    }
+
+    private static string CombineLocalChild(string parent, string name)
+    {
+        var fullParent = Path.GetFullPath(parent);
+        var target = Path.GetFullPath(Path.Combine(fullParent, name));
+        if (!string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(target) ?? string.Empty),
+                Path.TrimEndingDirectorySeparator(fullParent),
+                StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The name must identify a direct child of the current folder.");
+        return target;
+    }
+
+    private static ObjectInspectorAddress CreateRemoteChildAddress(PaneTransferContext context, string name)
+    {
+        if (context.ConnectionId is not { } connectionId || string.IsNullOrWhiteSpace(context.RootIdentity))
+            throw new ArgumentException("The remote pane does not have a verified saved-connection identity.");
+        var path = string.IsNullOrEmpty(context.RelativePath) ? name : $"{context.RelativePath}/{name}";
+        return new ObjectInspectorAddress(connectionId, context.RootIdentity, path);
+    }
+
+    private static bool IsPaneMutationFailure(Exception error) => error is
+        IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException or
+        InvalidOperationException or TimeoutException or NotSupportedException;
+
     private async Task ReviewDeleteAsync(BrowserPaneControl pane)
     {
         var captured = pane.CaptureSelectionSnapshot();
@@ -1471,28 +1737,21 @@ public sealed class MainForm : Form
         }
 
         var selection = captured.Value;
-        var preview = string.Join(
-            Environment.NewLine,
-            selection.Items.Take(5).Select(static item => $"  • {item.Name}"));
-        if (selection.Items.Count > 5)
-        {
-            preview += $"{Environment.NewLine}  • …and {selection.Items.Count - 5:N0} more";
-        }
-
         var local = selection.Context.Kind == PaneTransferContextKind.ThisPc;
-        var decision = MessageBox.Show(
-            this,
-            $"You are about to DELETE {selection.Items.Count:N0} item(s):\n\n{preview}\n\n" +
-            (local
-                ? "These items will be sent to the Windows Recycle Bin."
-                : "Remote items will be deleted through the saved connection. This may be permanent."),
-            "Review delete",
-            MessageBoxButtons.OKCancel,
-            MessageBoxIcon.Warning,
-            MessageBoxDefaultButton.Button2);
-        if (decision != DialogResult.OK)
+        var preferences = _updatePreferencesStore.Load();
+        if (preferences.ConfirmBeforeDeletingItems)
         {
-            return;
+            using var confirmation = new DeleteItemsConfirmationForm(selection.Items, local);
+            if (confirmation.ShowDialog(this) != DialogResult.OK) return;
+            if (confirmation.DoNotShowAgain)
+            {
+                try { _updatePreferencesStore.Save(preferences with { ConfirmBeforeDeletingItems = false }); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+                {
+                    ShowManualTransferFailure($"The delete warning preference could not be saved. {error.Message}");
+                    return;
+                }
+            }
         }
 
         if (!local)
