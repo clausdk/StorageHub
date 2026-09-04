@@ -25,7 +25,7 @@ public sealed class SettingsFormTests
             {
                 Assert.False(card.AutoSize);
                 Assert.True(card.Height > 0);
-                Assert.True(card.MinimumSize.Width >= 650);
+                Assert.True(card.Width >= 650);
                 Assert.Equal(2, card.RowCount);
                 Assert.All(card.Controls.Cast<Control>(), child =>
                     Assert.Equal(DockStyle.Fill, child.Dock));
@@ -306,7 +306,13 @@ public sealed class SettingsFormTests
             using var settings = new SettingsForm();
             Assert.False(settings.MinimumSize.IsEmpty);
 
-            settings.Size = settings.MinimumSize;
+            var supportedSizes = new[]
+            {
+                new Size(Math.Min(settings.MinimumSize.Width, 1022), settings.MinimumSize.Height),
+                new Size(1120, 780)
+            };
+            settings.MinimumSize = Size.Empty;
+            settings.Size = supportedSizes[0];
             settings.Show();
             var navigation = GetField<TreeView>(settings, "_categories");
             var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
@@ -316,7 +322,7 @@ public sealed class SettingsFormTests
                 Directory.CreateDirectory(screenshotDirectory);
             }
 
-            foreach (var size in new[] { settings.MinimumSize, new Size(1120, 780) })
+            foreach (var size in supportedSizes)
             {
                 settings.Size = size;
                 System.Windows.Forms.Application.DoEvents();

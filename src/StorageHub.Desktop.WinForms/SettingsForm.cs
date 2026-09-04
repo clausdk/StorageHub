@@ -633,13 +633,14 @@ public sealed class SettingsForm : Form
 
     private static void FitSettingsPageContent(FlowLayoutPanel page)
     {
-        if (page.ClientSize.Width <= 0)
+        if (!page.Visible || !page.IsHandleCreated ||
+            page.ClientSize.Width <= SystemInformation.VerticalScrollBarWidth + 1)
         {
             return;
         }
 
         var scrollbarWidth = page.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0;
-        var availableWidth = Math.Max(ContentWidth, page.ClientSize.Width - scrollbarWidth - 1);
+        var availableWidth = Math.Max(1, page.ClientSize.Width - scrollbarWidth - 1);
         foreach (Control control in page.Controls)
         {
             if (control is Button or CheckBox || control.Width == availableWidth)
@@ -647,6 +648,11 @@ public sealed class SettingsForm : Form
                 continue;
             }
 
+            control.MinimumSize = new Size(0, control.MinimumSize.Height);
+            if (control is Label && control.MaximumSize.Width > 0)
+            {
+                control.MaximumSize = new Size(availableWidth, control.MaximumSize.Height);
+            }
             control.Width = availableWidth;
         }
     }
