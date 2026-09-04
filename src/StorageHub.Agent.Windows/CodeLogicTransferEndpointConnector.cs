@@ -86,6 +86,8 @@ internal sealed class CodeLogicTransferEndpointConnector(
         CancellationToken cancellationToken = default) =>
         LocalFilesystemTransferEndpoint.IsLocalSource(address)
             ? ValueTask.FromResult(LocalFilesystemTransferEndpoint.Open(address))
+            : LocalStagingTransferEndpoint.IsLocalDestination(address)
+                ? ValueTask.FromResult(LocalStagingTransferEndpoint.Open(address))
             : OpenAsync(address.ProfileId, cancellationToken);
 
     private static StorageResult<ITransferEndpointConnection> Fail(

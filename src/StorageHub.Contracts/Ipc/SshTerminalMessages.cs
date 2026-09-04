@@ -2,7 +2,7 @@ namespace StorageHub.Contracts.Ipc;
 
 public static class SshTerminalIpcContract
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
     public const int MaximumChunkBytes = 32 * 1024;
     public const int MaximumTerminalNameLength = 64;
     public const int MinimumColumns = 20;
@@ -32,7 +32,9 @@ public sealed record SshTerminalOpenRequest(
     Guid ConnectionId,
     int Columns = 120,
     int Rows = 30,
-    string TerminalName = "xterm-256color")
+    string TerminalName = "xterm-256color",
+    string? StartupCommand = null,
+    int KeepAliveSeconds = 30)
 {
     public bool HasValidBounds =>
         SshTerminalIpcContract.IsSupported(ContractVersion) &&
@@ -40,7 +42,11 @@ public sealed record SshTerminalOpenRequest(
         ValidSize(Columns, Rows) &&
         !string.IsNullOrWhiteSpace(TerminalName) &&
         TerminalName.Length <= SshTerminalIpcContract.MaximumTerminalNameLength &&
-        !TerminalName.Any(static character => char.IsControl(character) || char.IsWhiteSpace(character));
+        !TerminalName.Any(static character => char.IsControl(character) || char.IsWhiteSpace(character)) &&
+        (StartupCommand is null ||
+            StartupCommand.Length <= 512 &&
+            !StartupCommand.Any(char.IsControl)) &&
+        KeepAliveSeconds is >= 0 and <= 3_600;
 
     internal static bool ValidSize(int columns, int rows) =>
         columns is >= SshTerminalIpcContract.MinimumColumns and <= SshTerminalIpcContract.MaximumColumns &&

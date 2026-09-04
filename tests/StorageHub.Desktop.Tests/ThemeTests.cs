@@ -2,6 +2,52 @@ namespace StorageHub.Desktop.Tests;
 
 public sealed class ThemeTests
 {
+    private static readonly string[] MajorWindowNames =
+        ["Main", "Connections", "Settings", "Sync profiles", "Schedules"];
+
+    [Theory]
+    [InlineData(DesktopAppearance.Light)]
+    [InlineData(DesktopAppearance.Dark)]
+    public void Disabled_primary_buttons_have_an_unambiguous_disabled_surface(DesktopAppearance appearance)
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            var previous = DesktopAppearanceService.EffectiveAppearance;
+            DesktopAppearanceService.SetAppearance(appearance);
+            using var button = new Button { Enabled = false };
+
+            StorageHubTheme.StylePrimaryButton(button);
+
+            Assert.Equal(StorageHubTheme.CurrentPalette.SurfaceMuted, button.BackColor);
+            Assert.Equal(StorageHubTheme.CurrentPalette.DisabledText, button.ForeColor);
+
+            button.Enabled = true;
+            Assert.Equal(StorageHubTheme.CurrentPalette.Primary, button.BackColor);
+            Assert.Equal(Color.White, button.ForeColor);
+            Assert.Equal(Cursors.Hand, button.Cursor);
+
+            button.Enabled = false;
+            Assert.Equal(StorageHubTheme.CurrentPalette.SurfaceMuted, button.BackColor);
+            Assert.Equal(Cursors.Default, button.Cursor);
+            DesktopAppearanceService.SetAppearance(previous);
+        });
+    }
+
+    [Fact]
+    public void Disabled_secondary_buttons_use_the_disabled_palette()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var button = new Button { Enabled = false };
+
+            StorageHubTheme.StyleSecondaryButton(button);
+
+            Assert.Equal(StorageHubTheme.CurrentPalette.SurfaceMuted, button.BackColor);
+            Assert.Equal(StorageHubTheme.CurrentPalette.DisabledText, button.ForeColor);
+            Assert.Equal(Cursors.Default, button.Cursor);
+        });
+    }
+
     [Theory]
     [InlineData(DesktopAppearance.Light)]
     [InlineData(DesktopAppearance.Dark)]
@@ -78,6 +124,59 @@ public sealed class ThemeTests
             form.Close();
             DesktopAppearanceService.SetSystemDarkModeReaderForTests(null);
             DesktopAppearanceService.SetAppearance(DesktopAppearance.System);
+        });
+    }
+
+    [Theory]
+    [InlineData(DesktopAppearance.Light, 1.0f)]
+    [InlineData(DesktopAppearance.Light, 1.5f)]
+    [InlineData(DesktopAppearance.Dark, 1.0f)]
+    [InlineData(DesktopAppearance.Dark, 1.5f)]
+    public void Major_windows_render_at_supported_themes_and_dpi_scales(
+        DesktopAppearance appearance,
+        float scale)
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            var previous = DesktopAppearanceService.EffectiveAppearance;
+            try
+            {
+                DesktopAppearanceService.SetAppearance(appearance);
+                foreach (var windowName in MajorWindowNames)
+                {
+                    using Form form = windowName switch
+                    {
+                        "Main" => new MainForm(),
+                        "Connections" => new ConnectionManagerForm(),
+                        "Settings" => new SettingsForm(),
+                        "Sync profiles" => new SyncProfileEditorForm(),
+                        "Schedules" => new ScheduleManagerForm(),
+                        _ => throw new InvalidOperationException()
+                    };
+                    form.CreateControl();
+                    if (scale != 1.0f)
+                    {
+                        form.Scale(new SizeF(scale, scale));
+                    }
+
+                    StorageHubTheme.Apply(form, previous);
+                    form.PerformLayout();
+                    Assert.Equal(AutoScaleMode.Dpi, form.AutoScaleMode);
+                    Assert.Equal(StorageHubTheme.Canvas, form.BackColor);
+                    Assert.All(form.Controls.Cast<Control>().Where(static control => control.Visible), control =>
+                        Assert.True(
+                            form.ClientRectangle.Contains(control.Bounds),
+                            $"{windowName}: {control.Name} ({control.GetType().Name}) is outside {form.ClientRectangle}: {control.Bounds}"));
+
+                    using var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height);
+                    form.DrawToBitmap(bitmap, form.ClientRectangle);
+                    Assert.Equal(form.ClientSize, bitmap.Size);
+                }
+            }
+            finally
+            {
+                DesktopAppearanceService.SetAppearance(previous);
+            }
         });
     }
 

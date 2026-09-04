@@ -21,10 +21,14 @@ public sealed class SshTerminalIntegrationTests : IDisposable
         var password = Environment.GetEnvironmentVariable("STORAGEHUB_SFTP_PASSWORD");
         var username = Environment.GetEnvironmentVariable("STORAGEHUB_SFTP_USERNAME");
         var fingerprintHex = Environment.GetEnvironmentVariable("STORAGEHUB_SFTP_HOST_SHA256");
+        var privateKeyPath = Environment.GetEnvironmentVariable("STORAGEHUB_SFTP_CLIENT_KEY_PATH");
+        var privateKeyPassphrase = Environment.GetEnvironmentVariable("STORAGEHUB_SFTP_CLIENT_KEY_PASSPHRASE");
         var required = string.Equals(
             Environment.GetEnvironmentVariable("STORAGEHUB_REQUIRE_SFTP"), "1", StringComparison.Ordinal);
         if (!int.TryParse(portValue, out var port) || string.IsNullOrEmpty(password) ||
-            string.IsNullOrEmpty(username) || string.IsNullOrEmpty(fingerprintHex))
+            string.IsNullOrEmpty(username) || string.IsNullOrEmpty(fingerprintHex) ||
+            string.IsNullOrEmpty(privateKeyPath) || !File.Exists(privateKeyPath) ||
+            string.IsNullOrEmpty(privateKeyPassphrase))
         {
             if (required)
             {
@@ -37,11 +41,18 @@ public sealed class SshTerminalIntegrationTests : IDisposable
         using var vault = new VersionedFileSecretVault(
             Path.Combine(_directory, "vault"), new TestSecretProtector());
         var passwordReference = await vault.CreateAsync(Encoding.UTF8.GetBytes(password));
+        var privateKeyReference = await vault.CreateAsync(await File.ReadAllBytesAsync(privateKeyPath));
+        var passphraseReference = await vault.CreateAsync(Encoding.UTF8.GetBytes(privateKeyPassphrase));
         var profile = ConnectionProfile.Create(
             ConnectionProfileId.New(),
             new ConnectionProfileMetadata("Loopback SSH"),
             new SshClientEndpoint("127.0.0.1", port, SshHostKeyPolicy.Pinned),
-            new UsernamePasswordAuthentication(username, passwordReference.Reference),
+            new SshPrivateKeyPasswordAuthentication(
+                username,
+                passwordReference.Reference,
+                privateKeyReference.Reference,
+                passphraseReference.Reference,
+                SftpPrivateKeyFormat.OpenSsh),
             Options(),
             DateTimeOffset.UtcNow);
         var fingerprint = "SHA256:" + Convert.ToBase64String(
@@ -63,12 +74,23 @@ public sealed class SshTerminalIntegrationTests : IDisposable
         await using var service = new SshTerminalIpcCommandService(
             new StaticProfileRepository(profile), () => vault, trust);
 
+        var startupMarker = $"startup-{Guid.NewGuid():N}";
         var opened = await SendAsync<SshTerminalOpenRequest, SshTerminalOpenResponse>(
             service,
             SshTerminalIpcMessageTypes.OpenRequest,
-            new SshTerminalOpenRequest(SshTerminalIpcContract.CurrentVersion, profile.Id.Value, 100, 30));
+            new SshTerminalOpenRequest(
+                SshTerminalIpcContract.CurrentVersion,
+                profile.Id.Value,
+                100,
+                30,
+                "screen-256color",
+                $"printf '{startupMarker}\\n'",
+                KeepAliveSeconds: 1));
         Assert.Null(opened.Failure);
         Assert.NotEqual(Guid.Empty, opened.SessionId);
+
+        var startupOutput = await ReadUntilAsync(service, opened.SessionId, startupMarker);
+        Assert.Contains(startupMarker, startupOutput, StringComparison.Ordinal);
 
         var resized = await SendAsync<SshTerminalResizeRequest, SshTerminalResizeResponse>(
             service,
@@ -87,6 +109,21 @@ public sealed class SshTerminalIntegrationTests : IDisposable
         Assert.Null(written.Failure);
         Assert.Equal(marker.Length + 1, written.AcceptedBytes);
 
+        var output = await ReadUntilAsync(service, opened.SessionId, marker);
+        Assert.Contains(marker, output, StringComparison.Ordinal);
+
+        var closed = await SendAsync<SshTerminalCloseRequest, SshTerminalCloseResponse>(
+            service,
+            SshTerminalIpcMessageTypes.CloseRequest,
+            new SshTerminalCloseRequest(SshTerminalIpcContract.CurrentVersion, opened.SessionId));
+        Assert.True(closed.Closed);
+    }
+
+    private static async Task<string> ReadUntilAsync(
+        SshTerminalIpcCommandService service,
+        Guid sessionId,
+        string marker)
+    {
         var output = new StringBuilder();
         for (var attempt = 0; attempt < 100 && !output.ToString().Contains(marker, StringComparison.Ordinal); attempt++)
         {
@@ -95,7 +132,7 @@ public sealed class SshTerminalIntegrationTests : IDisposable
                 SshTerminalIpcMessageTypes.ReadRequest,
                 new SshTerminalReadRequest(
                     SshTerminalIpcContract.CurrentVersion,
-                    opened.SessionId,
+                    sessionId,
                     SshTerminalIpcContract.MaximumChunkBytes));
             Assert.Null(read.Failure);
             output.Append(Encoding.UTF8.GetString(read.Content));
@@ -104,13 +141,8 @@ public sealed class SshTerminalIntegrationTests : IDisposable
                 await Task.Delay(20);
             }
         }
-        Assert.Contains(marker, output.ToString(), StringComparison.Ordinal);
 
-        var closed = await SendAsync<SshTerminalCloseRequest, SshTerminalCloseResponse>(
-            service,
-            SshTerminalIpcMessageTypes.CloseRequest,
-            new SshTerminalCloseRequest(SshTerminalIpcContract.CurrentVersion, opened.SessionId));
-        Assert.True(closed.Closed);
+        return output.ToString();
     }
 
     private static async Task<TResponse> SendAsync<TRequest, TResponse>(

@@ -5,7 +5,6 @@ namespace StorageHub.Desktop;
 
 internal sealed class VtTerminalBuffer
 {
-    private const int MaximumScrollbackLines = 2_000;
     private static readonly Color DefaultForeground = Color.FromArgb(226, 232, 240);
     private static readonly Color DefaultBackground = Color.FromArgb(12, 18, 28);
     private static readonly Color[] AnsiColors =
@@ -22,6 +21,7 @@ internal sealed class VtTerminalBuffer
 
     private readonly List<TerminalCell[]> _history = [];
     private readonly StringBuilder _sequence = new();
+    private readonly int _maximumScrollbackLines;
     private TerminalCell[][] _screen;
     private ParserState _state;
     private int _row;
@@ -34,10 +34,11 @@ internal sealed class VtTerminalBuffer
     private int _scrollTop;
     private int _scrollBottom;
 
-    internal VtTerminalBuffer(int columns, int rows)
+    internal VtTerminalBuffer(int columns, int rows, int maximumScrollbackLines = 2_000)
     {
         Columns = Math.Max(1, columns);
         Rows = Math.Max(1, rows);
+        _maximumScrollbackLines = Math.Clamp(maximumScrollbackLines, 100, 20_000);
         _scrollBottom = Rows - 1;
         _screen = Enumerable.Range(0, Rows).Select(_ => BlankLine()).ToArray();
     }
@@ -271,9 +272,9 @@ internal sealed class VtTerminalBuffer
             }
             _screen[_scrollBottom] = BlankLine();
         }
-        if (_history.Count > MaximumScrollbackLines)
+        if (_history.Count > _maximumScrollbackLines)
         {
-            _history.RemoveRange(0, _history.Count - MaximumScrollbackLines);
+            _history.RemoveRange(0, _history.Count - _maximumScrollbackLines);
         }
     }
 

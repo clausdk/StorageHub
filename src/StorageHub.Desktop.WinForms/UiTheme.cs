@@ -40,7 +40,16 @@ public static class StorageHubTheme
         FillListHeader(list);
     }
 
-    private static void DrawListItem(object? sender, DrawListViewItemEventArgs e) => e.DrawDefault = true;
+    private static void DrawListItem(object? sender, DrawListViewItemEventArgs e)
+    {
+        // In Details view each cell is painted by DrawSubItem. Asking the native control to
+        // paint the complete row here as well can abort the first paint pass for virtual lists,
+        // leaving rows blank until selection invalidates them individually.
+        if (e.Item.ListView?.View != View.Details)
+        {
+            e.DrawDefault = true;
+        }
+    }
 
     private static void DrawListSubItem(object? sender, DrawListViewSubItemEventArgs e) => e.DrawDefault = true;
 
@@ -85,11 +94,11 @@ public static class StorageHubTheme
         button.AutoSize = true;
         button.FlatStyle = FlatStyle.Flat;
         button.FlatAppearance.BorderSize = 0;
-        button.BackColor = Primary;
-        button.ForeColor = Color.White;
         button.Padding = new Padding(12, 5, 12, 5);
         button.MinimumSize = new Size(90, 34);
-        button.Cursor = Cursors.Hand;
+        button.EnabledChanged -= PrimaryButtonEnabledChanged;
+        button.EnabledChanged += PrimaryButtonEnabledChanged;
+        ApplyPrimaryButtonState(button);
     }
 
     public static void StyleSecondaryButton(Button button)
@@ -98,11 +107,41 @@ public static class StorageHubTheme
         button.AutoSize = true;
         button.FlatStyle = FlatStyle.Flat;
         button.FlatAppearance.BorderColor = Border;
-        button.BackColor = Surface;
-        button.ForeColor = Text;
         button.Padding = new Padding(10, 4, 10, 4);
         button.MinimumSize = new Size(84, 34);
-        button.Cursor = Cursors.Hand;
+        button.EnabledChanged -= SecondaryButtonEnabledChanged;
+        button.EnabledChanged += SecondaryButtonEnabledChanged;
+        ApplySecondaryButtonState(button);
+    }
+
+    private static void PrimaryButtonEnabledChanged(object? sender, EventArgs e)
+    {
+        if (sender is Button button)
+        {
+            ApplyPrimaryButtonState(button);
+        }
+    }
+
+    private static void SecondaryButtonEnabledChanged(object? sender, EventArgs e)
+    {
+        if (sender is Button button)
+        {
+            ApplySecondaryButtonState(button);
+        }
+    }
+
+    private static void ApplyPrimaryButtonState(Button button)
+    {
+        button.BackColor = button.Enabled ? Primary : SurfaceMuted;
+        button.ForeColor = button.Enabled ? Color.White : CurrentPalette.DisabledText;
+        button.Cursor = button.Enabled ? Cursors.Hand : Cursors.Default;
+    }
+
+    private static void ApplySecondaryButtonState(Button button)
+    {
+        button.BackColor = button.Enabled ? Surface : SurfaceMuted;
+        button.ForeColor = button.Enabled ? Text : CurrentPalette.DisabledText;
+        button.Cursor = button.Enabled ? Cursors.Hand : Cursors.Default;
     }
 
     public static void ConfigureTabs(TabControl tabs)
@@ -265,13 +304,51 @@ public static class StorageHubTheme
         using var border = new Pen(Border);
         e.Graphics.FillRectangle(background, e.Bounds);
         e.Graphics.DrawRectangle(border, Rectangle.Inflate(e.Bounds, -1, -1));
+        var page = tabs.TabPages[e.Index];
+        var image = ResolveTabImage(tabs, page);
+        var textSize = TextRenderer.MeasureText(
+            page.Text,
+            tabs.Font,
+            Size.Empty,
+            TextFormatFlags.NoPadding);
+        var gap = image is null ? 0 : 7;
+        var contentWidth = textSize.Width + gap + (image?.Width ?? 0);
+        var contentLeft = e.Bounds.Left + Math.Max(8, (e.Bounds.Width - contentWidth) / 2);
+        if (image is not null)
+        {
+            e.Graphics.DrawImage(
+                image,
+                contentLeft,
+                e.Bounds.Top + (e.Bounds.Height - image.Height) / 2,
+                image.Width,
+                image.Height);
+            contentLeft += image.Width + gap;
+        }
         TextRenderer.DrawText(
             e.Graphics,
-            tabs.TabPages[e.Index].Text,
+            page.Text,
             tabs.Font,
-            Rectangle.Inflate(e.Bounds, -8, 0),
+            new Rectangle(contentLeft, e.Bounds.Top, Math.Max(1, e.Bounds.Right - contentLeft - 6), e.Bounds.Height),
             Text,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+    }
+
+    private static Image? ResolveTabImage(TabControl tabs, TabPage page)
+    {
+        if (tabs.ImageList is not { } images)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrEmpty(page.ImageKey))
+        {
+            var index = images.Images.IndexOfKey(page.ImageKey);
+            return index >= 0 ? images.Images[index] : null;
+        }
+
+        return page.ImageIndex >= 0 && page.ImageIndex < images.Images.Count
+            ? images.Images[page.ImageIndex]
+            : null;
     }
 
     private static StorageHubPalette PaletteFor(DesktopAppearance appearance) =>

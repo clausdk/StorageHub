@@ -48,12 +48,95 @@ public sealed class RecursiveTransferControllerTests
             request.Destination.RelativePath == "destination/folder/nested/child.bin");
     }
 
+    [Fact]
+    public async Task Repeated_recursive_page_token_fails_before_destination_mutation()
+    {
+        var sourceId = Guid.NewGuid();
+        var destinationId = Guid.NewGuid();
+        var storage = new FakeStorageClient(
+            sourceId,
+            destinationId,
+            "source-root",
+            "destination-root",
+            repeatSourcePageToken: true);
+        var mutations = new FakeMutationClient();
+        var queue = new FakeTransferClient();
+        await using var transfers = new ManualTransferController(queue);
+        await using var controller = new RecursiveTransferController(transfers, storage, mutations);
+
+        var result = await controller.EnqueueAsync(
+            CreateFolderSelection(sourceId, "source-root"),
+            CreateDestination(destinationId, "destination-root"),
+            TransferQueueOperation.Copy,
+            CancellationToken.None);
+
+        Assert.Equal("manual_transfer.repeated_page_token", result.Failure?.Code);
+        Assert.Equal(2, storage.SourceListCount);
+        Assert.Empty(mutations.EnsuredPaths);
+        Assert.Empty(queue.Requests);
+    }
+
+    [Fact]
+    public async Task File_and_directory_path_collision_fails_before_destination_mutation()
+    {
+        var sourceId = Guid.NewGuid();
+        var destinationId = Guid.NewGuid();
+        var storage = new FakeStorageClient(
+            sourceId,
+            destinationId,
+            "source-root",
+            "destination-root",
+            sourceKindCollision: true);
+        var mutations = new FakeMutationClient();
+        var queue = new FakeTransferClient();
+        await using var transfers = new ManualTransferController(queue);
+        await using var controller = new RecursiveTransferController(transfers, storage, mutations);
+
+        var result = await controller.EnqueueAsync(
+            CreateFolderSelection(sourceId, "source-root"),
+            CreateDestination(destinationId, "destination-root"),
+            TransferQueueOperation.Copy,
+            CancellationToken.None);
+
+        Assert.Equal("manual_transfer.source_kind_collision", result.Failure?.Code);
+        Assert.Empty(mutations.EnsuredPaths);
+        Assert.Empty(queue.Requests);
+    }
+
+    private static PaneSelectionSnapshot CreateFolderSelection(Guid connectionId, string rootIdentity)
+    {
+        var context = PaneTransferContext.Create(
+            PaneTransferContextKind.SavedConnection,
+            connectionId,
+            rootIdentity,
+            "source").Value;
+        var folder = PaneTransferItem.Create(
+            "folder",
+            "source/folder",
+            StorageItemKind.Directory,
+            length: null).Value;
+        return PaneSelectionSnapshot.Create(context, [folder]).Value;
+    }
+
+    private static PaneDestinationSnapshot CreateDestination(Guid connectionId, string rootIdentity) =>
+        PaneDestinationSnapshot.Create(
+            PaneTransferContext.Create(
+                PaneTransferContextKind.SavedConnection,
+                connectionId,
+                rootIdentity,
+                "destination").Value,
+            []).Value;
+
     private sealed class FakeStorageClient(
         Guid sourceId,
         Guid destinationId,
         string sourceRoot,
-        string destinationRoot) : IRemoteStorageAgentClient
+        string destinationRoot,
+        bool repeatSourcePageToken = false,
+        bool sourceKindCollision = false) : IRemoteStorageAgentClient
     {
+        public int SourceListCount { get; private set; }
+
         public Task<ConnectionListResponse> ListConnectionsAsync(
             ConnectionListRequest request,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -69,17 +152,26 @@ public sealed class RecursiveTransferControllerTests
             cancellationToken.ThrowIfCancellationRequested();
             if (request.ConnectionId == sourceId && request.RelativePath == "source/folder")
             {
-                return Task.FromResult(new StorageListPageResponse(
-                    StorageIpcContract.CurrentVersion,
-                    sourceId,
-                    request.RelativePath,
-                    [
+                SourceListCount++;
+                var entries = sourceKindCollision
+                    ? new[]
+                    {
+                        Item("same", "source/folder/same", StorageItemKind.Directory),
+                        Item("same", "source/folder/same", StorageItemKind.File, 4, "source-same-v1")
+                    }
+                    : new[]
+                    {
                         Item("empty", "source/folder/empty", StorageItemKind.Directory),
                         Item("nested", "source/folder/nested", StorageItemKind.Directory),
                         Item("root.txt", "source/folder/root.txt", StorageItemKind.File, 4, "source-root-v1"),
                         Item("child.bin", "source/folder/nested/child.bin", StorageItemKind.File, 8, "source-child-v1")
-                    ],
-                    ContinuationToken: null,
+                    };
+                return Task.FromResult(new StorageListPageResponse(
+                    StorageIpcContract.CurrentVersion,
+                    sourceId,
+                    request.RelativePath,
+                    entries,
+                    ContinuationToken: repeatSourcePageToken ? "repeat-token" : null,
                     RootIdentity: sourceRoot));
             }
 

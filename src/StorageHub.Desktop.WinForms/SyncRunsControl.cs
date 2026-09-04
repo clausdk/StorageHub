@@ -333,7 +333,18 @@ public sealed class SyncRunsControl : UserControl
     {
         if (e.RowIndex >= 0 && _history.Rows[e.RowIndex].Tag is SyncRunSummary run)
         {
-            await LoadRunAsync(run.SyncRunId, _lifetime.Token).ConfigureAwait(true);
+            try
+            {
+                await LoadRunAsync(run.SyncRunId, _lifetime.Token).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                _status.Text = error.Message;
+                _status.ForeColor = StorageHubTheme.Danger;
+            }
         }
     }
 
@@ -349,6 +360,9 @@ public sealed class SyncRunsControl : UserControl
         try
         {
             await LoadRunAsync(runId, _lifetime.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {

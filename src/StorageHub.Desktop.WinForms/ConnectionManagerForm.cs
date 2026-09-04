@@ -429,48 +429,70 @@ public sealed class ConnectionManagerForm : Form
     {
         if (e.Node?.Tag is ConnectionCardModel card)
         {
-            _typeSelector.SelectedItem = card.Type;
-            PopulateProviderSelector(card.Type, card.Provider);
-            if (!_loadingEditor && card.ConnectionId is { } connectionId)
-            {
-                _profileLoadCancellation?.Cancel();
-                _profileLoadCancellation?.Dispose();
-                var loadCancellation = CancellationTokenSource.CreateLinkedTokenSource(_formLifetime.Token);
-                _profileLoadCancellation = loadCancellation;
-                _profileLoading = true;
-                try
-                {
-                    await LoadProfileAsync(connectionId, loadCancellation.Token);
-                }
-                finally
-                {
-                    if (ReferenceEquals(_profileLoadCancellation, loadCancellation))
-                    {
-                        _profileLoading = false;
-                    }
-                }
-            }
-            else if (!_loadingEditor)
-            {
-                _profileLoadCancellation?.Cancel();
-                _profileLoading = false;
-                _selectedProfile = null;
-            }
+            await SelectProfileCardAsync(card);
         }
     }
 
-    private void ProfileSidebarSelected(object? sender, ConnectionCardModel card)
+    private async void ProfileSidebarSelected(object? sender, ConnectionCardModel card)
     {
-        if (card.ConnectionId is not { } connectionId)
+        if (card.ConnectionId is not { } connectionId || _loadingEditor)
         {
             return;
         }
 
-        _profileTree.SelectedNode = _profileTree.Nodes
-            .Cast<TreeNode>()
-            .SelectMany(FlattenTree)
-            .FirstOrDefault(node => node.Tag is ConnectionCardModel candidate &&
-                candidate.ConnectionId == connectionId);
+        // The custom sidebar is the visible selector. The legacy owner-drawn TreeView is kept
+        // only as an internal hierarchy model and may never create a native handle, so relying
+        // on its AfterSelect event leaves card clicks focused but does not load the profile.
+        _loadingEditor = true;
+        try
+        {
+            _profileTree.SelectedNode = _profileTree.Nodes
+                .Cast<TreeNode>()
+                .SelectMany(FlattenTree)
+                .FirstOrDefault(node => node.Tag is ConnectionCardModel candidate &&
+                    candidate.ConnectionId == connectionId);
+        }
+        finally
+        {
+            _loadingEditor = false;
+        }
+
+        await SelectProfileCardAsync(card);
+    }
+
+    private async Task SelectProfileCardAsync(ConnectionCardModel card)
+    {
+        if (_loadingEditor)
+        {
+            return;
+        }
+
+        _typeSelector.SelectedItem = card.Type;
+        PopulateProviderSelector(card.Type, card.Provider);
+        if (card.ConnectionId is not { } connectionId)
+        {
+            _profileLoadCancellation?.Cancel();
+            _profileLoading = false;
+            _selectedProfile = null;
+            return;
+        }
+
+        _profileLoadCancellation?.Cancel();
+        _profileLoadCancellation?.Dispose();
+        var loadCancellation = CancellationTokenSource.CreateLinkedTokenSource(_formLifetime.Token);
+        _profileLoadCancellation = loadCancellation;
+        _profileLoading = true;
+        try
+        {
+            await LoadProfileAsync(connectionId, loadCancellation.Token);
+        }
+        finally
+        {
+            if (ReferenceEquals(_profileLoadCancellation, loadCancellation))
+            {
+                _profileLoading = false;
+            }
+        }
     }
 
     private void SearchTextChanged(object? sender, EventArgs e)
@@ -494,6 +516,10 @@ public sealed class ConnectionManagerForm : Form
         if (provider.Kind == StorageProviderKind.S3)
         {
             ConfigureS3Editor();
+        }
+        if (provider.Kind is StorageProviderKind.Sftp or StorageProviderKind.Ssh)
+        {
+            ConfigureSshAuthenticationEditor(provider.Kind == StorageProviderKind.Ssh);
         }
         ApplyConnectionDefaults(provider);
 
@@ -567,6 +593,42 @@ public sealed class ConnectionManagerForm : Form
             }
         };
         ApplyServicePreset();
+    }
+
+    private void ConfigureSshAuthenticationEditor(bool supportsMultiFactor)
+    {
+        if (!_editorFields.TryGetValue("authenticationMode", out var modeControl) ||
+            modeControl is not ComboBox mode ||
+            !_editorFields.TryGetValue("passwordReference", out var password) ||
+            !_editorFields.TryGetValue("privateKeyReference", out var privateKey) ||
+            !_editorFields.TryGetValue("privateKeyPassphraseReference", out var passphrase))
+        {
+            return;
+        }
+
+        void ApplyAuthenticationMode()
+        {
+            var selected = mode.SelectedItem as string;
+            var usesPassword = string.Equals(selected, "Password reference", StringComparison.Ordinal) ||
+                supportsMultiFactor && string.Equals(
+                    selected,
+                    "Private key + password (MFA)",
+                    StringComparison.Ordinal);
+            var usesKey = string.Equals(selected, "Private key reference", StringComparison.Ordinal) ||
+                supportsMultiFactor && string.Equals(
+                    selected,
+                    "Private key + password (MFA)",
+                    StringComparison.Ordinal);
+            password.Enabled = usesPassword;
+            privateKey.Enabled = usesKey;
+            passphrase.Enabled = usesKey;
+            mode.AccessibleDescription = selected == "Private key + password (MFA)"
+                ? "The SSH server must accept public-key authentication followed by the account password."
+                : "Select one vault-backed SSH authentication method.";
+        }
+
+        mode.SelectedIndexChanged += (_, _) => ApplyAuthenticationMode();
+        ApplyAuthenticationMode();
     }
 
     private void ApplyConnectionDefaults(ConnectionProviderDescriptor provider)
@@ -1617,6 +1679,7 @@ public sealed class ConnectionManagerForm : Form
             var response = await _storageClient.TestConnectionAsync(
                 new ConnectionTestRequest(StorageIpcContract.CurrentVersion, _selectedProfile.ConnectionId),
                 cancellationToken);
+            await ReloadProfilesAsync(cancellationToken);
             ShowStatus(
                 response.Succeeded
                     ? $"Connection succeeded in {response.ElapsedMilliseconds} ms"
@@ -2100,7 +2163,7 @@ public sealed class ConnectionManagerForm : Form
             connection.DisplayName,
             provider,
             summary,
-            connection.IsEnabled ? "Saved" : "Disabled",
+            connection.IsEnabled ? DescribeHealth(connection.Health) : "Disabled",
             connection.IsFavorite,
             connection.ConnectionId,
             connection.IsEnabled,
@@ -2108,6 +2171,16 @@ public sealed class ConnectionManagerForm : Form
             connection.FolderPath,
             connection.Tags);
     }
+
+    private static string DescribeHealth(ConnectionHealthSnapshot? health) => health switch
+    {
+        null => "Not tested",
+        { State: ConnectionHealthState.Healthy } => $"Healthy · {health.ElapsedMilliseconds:N0} ms",
+        { RequiresCredentialAction: true } => "Credentials need attention",
+        { RequiresTrustAction: true } => "Trust decision required",
+        { State: ConnectionHealthState.Unavailable } => "Unavailable",
+        _ => "Needs attention"
+    };
 
     private sealed record ProfileTreeGroupNode(string Key, string Label, int Count);
 

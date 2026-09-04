@@ -8,6 +8,12 @@ TestResults/
 *.coveragexml
 coverage/
 
+## Native Windows build output
+src/StorageHub.ShellExtension.Native/StorageH.*/
+src/StorageHub.ShellExtension.Native/x64/
+tests/StorageHub.ShellExtension.Native.Tests/StorageH.*/
+tests/StorageHub.ShellExtension.Native.Tests/x64/
+
 ## IDE state
 .vs/
 .vscode/

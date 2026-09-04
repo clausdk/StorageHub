@@ -67,7 +67,15 @@ public sealed class SqliteConnectionProfileRepositoryTests : IDisposable
                     SftpPrivateKeyFormat.Pkcs8), OptionsForConnection(), now),
             ConnectionProfile.Create(ConnectionProfileId.New(), new ConnectionProfileMetadata("SSH client"),
                 new SshClientEndpoint("ssh.example.test", 22, SshHostKeyPolicy.Pinned),
-                new UsernamePasswordAuthentication("ssh-user", password), OptionsForConnection(), now)
+                new UsernamePasswordAuthentication("ssh-user", password), OptionsForConnection(), now),
+            ConnectionProfile.Create(ConnectionProfileId.New(), new ConnectionProfileMetadata("SSH MFA client"),
+                new SshClientEndpoint("ssh-mfa.example.test", 22, SshHostKeyPolicy.Pinned),
+                new SshPrivateKeyPasswordAuthentication(
+                    "ssh-user",
+                    password,
+                    SecretReference.Create(),
+                    SecretReference.Create(),
+                    SftpPrivateKeyFormat.OpenSsh), OptionsForConnection(), now)
         };
 
         foreach (var profile in profiles)

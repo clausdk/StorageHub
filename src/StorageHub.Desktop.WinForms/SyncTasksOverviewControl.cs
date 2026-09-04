@@ -13,6 +13,9 @@ public sealed class SyncTasksOverviewControl : UserControl
     private readonly ListView _profiles;
     private readonly ListView _runs;
     private readonly Label _status;
+    private readonly TabControl _views;
+    private readonly TabPage _runReviewPage;
+    private readonly SyncRunsControl _runReview;
     private readonly List<SyncRunSummary> _sessionRuns = [];
     private int _refreshing;
     private bool _disposed;
@@ -29,6 +32,15 @@ public sealed class SyncTasksOverviewControl : UserControl
         BackColor = StorageHubTheme.Canvas;
         AccessibleName = "Synchronization task overview";
 
+        _views = new TabControl
+        {
+            Dock = DockStyle.Fill,
+            AccessibleName = "Sync task views",
+            HotTrack = true,
+            Padding = new Point(16, 4)
+        };
+        StorageHubTheme.ConfigureTabs(_views);
+
         var content = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -40,7 +52,7 @@ public sealed class SyncTasksOverviewControl : UserControl
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 104F));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -63,11 +75,19 @@ public sealed class SyncTasksOverviewControl : UserControl
         var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0, 0, 0, 18) };
         actions.Controls.Add(CreateButton("New sync profile", UiGlyph.Add, (_, _) => NewProfileRequested?.Invoke(this, EventArgs.Empty), primary: true));
         actions.Controls.Add(CreateButton("Schedules", UiGlyph.Run, (_, _) => SchedulesRequested?.Invoke(this, EventArgs.Empty)));
-        actions.Controls.Add(CreateButton("Review a run", UiGlyph.Compare, (_, _) => ReviewRunRequested?.Invoke(this, EventArgs.Empty)));
+        actions.Controls.Add(CreateButton("Run history and review", UiGlyph.Compare, ReviewRunClicked));
         actions.Controls.Add(CreateButton("Refresh", UiGlyph.Refresh, async (_, _) => await RefreshAsync()));
         content.Controls.Add(actions);
 
-        var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Margin = new Padding(0, 0, 0, 18) };
+        var metrics = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = false,
+            Height = 108,
+            MinimumSize = new Size(0, 108),
+            ColumnCount = 3,
+            Margin = new Padding(0, 0, 0, 18)
+        };
         metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
         metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
         metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34F));
@@ -101,7 +121,21 @@ public sealed class SyncTasksOverviewControl : UserControl
             Margin = new Padding(0, 10, 0, 0)
         };
         content.Controls.Add(_status);
-        Controls.Add(content);
+
+        var tasksPage = new TabPage("Tasks")
+        {
+            AccessibleName = "Synchronization tasks"
+        };
+        tasksPage.Controls.Add(content);
+        _runReview = new SyncRunsControl(_client);
+        _runReviewPage = new TabPage("Run history and review")
+        {
+            AccessibleName = "Synchronization run history and review"
+        };
+        _runReviewPage.Controls.Add(_runReview);
+        _views.TabPages.Add(tasksPage);
+        _views.TabPages.Add(_runReviewPage);
+        Controls.Add(_views);
         PopulateRuns();
     }
 
@@ -110,6 +144,14 @@ public sealed class SyncTasksOverviewControl : UserControl
     public event EventHandler? SchedulesRequested;
 
     public event EventHandler? ReviewRunRequested;
+
+    public SyncRunsControl RunReview => _runReview;
+
+    public void ShowRunReview()
+    {
+        _views.SelectedTab = _runReviewPage;
+        ReviewRunRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     public void RecordRun(SyncRunSummary run)
     {
@@ -167,6 +209,8 @@ public sealed class SyncTasksOverviewControl : UserControl
             Volatile.Write(ref _refreshing, 0);
         }
     }
+
+    private void ReviewRunClicked(object? sender, EventArgs e) => ShowRunReview();
 
     private async Task<IReadOnlyList<SyncRunSummary>> LoadRunHistoryAsync(CancellationToken cancellationToken)
     {

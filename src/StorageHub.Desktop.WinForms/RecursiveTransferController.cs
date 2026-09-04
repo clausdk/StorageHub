@@ -130,6 +130,7 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var sourceFiles = new List<(PaneTransferItem Item, string DestinationPath)>();
+        var sourceEntryKinds = new Dictionary<string, StorageItemKind>(StringComparer.Ordinal);
         var directories = new HashSet<string>(StringComparer.Ordinal);
         var destinationEntries = destination.Entries.ToDictionary(
             static item => item.RelativePath,
@@ -193,6 +194,19 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
 
             foreach (var entry in sourceEntries.Entries)
             {
+                if (sourceEntryKinds.TryGetValue(entry.RelativePath, out var priorKind))
+                {
+                    return ManifestBuildResult.Fail(new StorageFailure(
+                        priorKind != entry.Kind
+                            ? "manual_transfer.source_kind_collision"
+                            : "manual_transfer.source_manifest_duplicate",
+                        StorageFailureKind.Integrity,
+                        priorKind != entry.Kind
+                            ? "The source returned a file and folder with the same path."
+                            : "The source returned a duplicated recursive entry."));
+                }
+                sourceEntryKinds.Add(entry.RelativePath, entry.Kind);
+
                 if (!TryGetDescendantSuffix(selected.RelativePath, entry.RelativePath, out var suffix))
                 {
                     return ManifestBuildResult.Fail(new StorageFailure(
@@ -240,6 +254,14 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (item, destinationPath) in sourceFiles)
         {
+            if (directories.Contains(destinationPath))
+            {
+                return ManifestBuildResult.Fail(new StorageFailure(
+                    "manual_transfer.source_kind_collision",
+                    StorageFailureKind.Integrity,
+                    "The recursive manifest mapped a file and folder to the same destination path."));
+            }
+
             if (!targetPaths.Add(destinationPath))
             {
                 return ManifestBuildResult.Fail(new StorageFailure(
@@ -309,6 +331,7 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var entries = new List<StorageListItem>();
+        var continuationTokens = new HashSet<string>(StringComparer.Ordinal);
         string? continuation = null;
         for (var pageNumber = 0; pageNumber < MaximumManifestPages; pageNumber++)
         {
@@ -359,6 +382,14 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
             {
                 return new TreeListResult(entries, null);
             }
+
+            if (!continuationTokens.Add(continuation))
+            {
+                return new TreeListResult([], new StorageFailure(
+                    "manual_transfer.repeated_page_token",
+                    StorageFailureKind.Integrity,
+                    "The provider repeated a recursive listing page token."));
+            }
         }
 
         return new TreeListResult([], new StorageFailure(
@@ -382,6 +413,7 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
         while (directories.Count > 0)
         {
             var directory = directories.Dequeue();
+            var continuationTokens = new HashSet<string>(StringComparer.Ordinal);
             string? continuation = null;
             do
             {
@@ -438,6 +470,13 @@ internal sealed class RecursiveTransferController : IAsyncDisposable
                 }
 
                 continuation = response.ContinuationToken;
+                if (continuation is not null && !continuationTokens.Add(continuation))
+                {
+                    return new TreeListResult([], new StorageFailure(
+                        "manual_transfer.repeated_page_token",
+                        StorageFailureKind.Integrity,
+                        "The provider repeated a recursive listing page token."));
+                }
             }
             while (continuation is not null);
         }

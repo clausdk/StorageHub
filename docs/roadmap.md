@@ -42,7 +42,8 @@ state, IPC, UI, and failure behavior are all represented and tested.
 ### 2. Durable working core — implemented
 
 - Dual-pane local/remote browsing with saved connections and bounded paging.
-- File copy/move enqueue between saved-connection panes.
+- File copy/move enqueue and bounded recursive folder-copy manifests between
+  saved-connection panes; folder moves remain gated on durable child dependencies.
 - Fenced transfer worker with retries, cancellation, checkpoints, recovery, and
   queue query/mutation UI.
 - Durable sync profiles, baselines, immutable plans, runs, conflicts, execution
@@ -57,8 +58,9 @@ state, IPC, UI, and failure behavior are all represented and tested.
 - Implemented: read-only object inspector for bounded version pages, metadata,
   and tags, with no signed-URL or mutation messages.
 - Exact-version download/read actions that preserve version identity.
-- Bounded cached health snapshots per saved connection, including last probe time,
-  latency, safe status, and credential/trust-action requirements.
+- Implemented: bounded, revision-aware in-memory health snapshots after explicit
+  storage probes, including last probe time, latency, safe status, and
+  credential/trust-action requirements. Periodic refresh remains planned.
 - Short-lived session leasing so navigation and inspection do not repeatedly
   register a provider while still respecting credential/trust rotation.
 - Signed URLs as a separate secret-bearing workflow with short defaults, explicit
@@ -84,8 +86,10 @@ Unicode, large-object, and hostile-identity tests pass.
 
 ### 5. File-manager depth
 
-- Safely enumerated directory jobs with immutable manifests, explicit symlink
-  policy, collision preview, and restartable per-file children.
+- Implemented for saved-connection copy: safely enumerated bounded directory
+  manifests, explicit symbolic-link rejection, collision validation, empty-folder
+  creation, and restartable per-file children. Local/ad-hoc sources and durable
+  dependency-aware folder moves remain planned.
 - Create folder, rename, duplicate, delete, trash/restore where supported, batch
   rename, checksums, compare panes, and conflict-resolution workflows.
 - Local shell integration, drag/drop, clipboard formats, Open With, properties,

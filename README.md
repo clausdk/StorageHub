@@ -171,6 +171,7 @@ library.
 ## Prerequisites
 
 - Windows and PowerShell
+- Visual Studio C++ build tools with the Desktop development workload (required for the Explorer drag/drop broker)
 - [.NET SDK 10.0.302](global.json), or a later 10.0 patch accepted by
   `global.json`
 - Git

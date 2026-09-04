@@ -394,6 +394,9 @@ public sealed class SyncProfileEditorForm : Form
         {
             await LoadProfilesAsync(_lifetime.Token).ConfigureAwait(true);
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             ShowError(error);
@@ -926,6 +929,9 @@ public sealed class SyncProfileEditorForm : Form
         {
             await SelectProfileAsync(choice.ProfileId, _lifetime.Token).ConfigureAwait(true);
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             ShowError(error);
@@ -956,14 +962,20 @@ public sealed class SyncProfileEditorForm : Form
         {
             _ = await action(_lifetime.Token).ConfigureAwait(true);
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             ShowError(error);
         }
         finally
         {
-            _save.Enabled = true;
-            _preview.Enabled = true;
+            if (!_disposed && !IsDisposed && !Disposing)
+            {
+                _save.Enabled = true;
+                _preview.Enabled = true;
+            }
         }
     }
 

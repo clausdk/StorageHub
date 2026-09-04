@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using StorageHub.Contracts.Ipc;
 
@@ -5,6 +6,7 @@ namespace StorageHub.Desktop;
 
 public sealed class SshTerminalForm : Form
 {
+    private const int WmSetRedraw = 0x000B;
     private readonly Guid _connectionId;
     private readonly ISshTerminalAgentClient _client;
     private readonly bool _ownsClient;
@@ -14,7 +16,9 @@ public sealed class SshTerminalForm : Form
     private readonly System.Windows.Forms.Timer _resizeTimer;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly Decoder _utf8Decoder = Encoding.UTF8.GetDecoder();
-    private readonly VtTerminalBuffer _buffer = new(120, 30);
+    private readonly VtTerminalBuffer _buffer;
+    private readonly SshTerminalPreferences _preferences;
+    private readonly Font _terminalFont;
     private readonly Font _boldTerminalFont;
     private Guid _sessionId;
     private bool _polling;
@@ -27,6 +31,15 @@ public sealed class SshTerminalForm : Form
         Guid connectionId,
         string displayName,
         ISshTerminalAgentClient? client = null)
+        : this(connectionId, displayName, client, preferences: null)
+    {
+    }
+
+    internal SshTerminalForm(
+        Guid connectionId,
+        string displayName,
+        ISshTerminalAgentClient? client,
+        SshTerminalPreferences? preferences)
     {
         if (connectionId == Guid.Empty)
         {
@@ -36,6 +49,10 @@ public sealed class SshTerminalForm : Form
         _connectionId = connectionId;
         _ownsClient = client is null;
         _client = client ?? new NamedPipeSshTerminalAgentClient();
+        _preferences = SshTerminalPreferences.Resolve(
+            preferences ?? DesktopUpdatePreferencesStore.CreateDefault().Load().SshTerminal);
+        _buffer = new VtTerminalBuffer(120, 30, _preferences.ScrollbackLines);
+        _terminalFont = CreateTerminalFont(_preferences.FontFamily, _preferences.FontSize);
         Text = $"{displayName} — SSH Terminal";
         AccessibleName = $"SSH terminal for {displayName}";
         StartPosition = FormStartPosition.CenterParent;
@@ -52,7 +69,7 @@ public sealed class SshTerminalForm : Form
             BorderStyle = BorderStyle.None,
             BackColor = Color.FromArgb(12, 18, 28),
             ForeColor = Color.FromArgb(226, 232, 240),
-            Font = new Font("Cascadia Mono", 10F, FontStyle.Regular, GraphicsUnit.Point),
+            Font = _terminalFont,
             WordWrap = false,
             ScrollBars = RichTextBoxScrollBars.ForcedVertical,
             HideSelection = false,
@@ -79,7 +96,7 @@ public sealed class SshTerminalForm : Form
         Controls.Add(_terminal);
         Controls.Add(statusStrip);
 
-        _pollTimer = new System.Windows.Forms.Timer { Interval = 60 };
+        _pollTimer = new System.Windows.Forms.Timer { Interval = _preferences.RefreshIntervalMilliseconds };
         _pollTimer.Tick += PollTimerTick;
         _resizeTimer = new System.Windows.Forms.Timer { Interval = 250 };
         _resizeTimer.Tick += ResizeTimerTick;
@@ -118,6 +135,7 @@ public sealed class SshTerminalForm : Form
             _terminal.KeyDown -= TerminalKeyDown;
             _terminal.KeyPress -= TerminalKeyPress;
             _terminal.Resize -= TerminalResize;
+            _terminalFont.Dispose();
             _boldTerminalFont.Dispose();
             _pollTimer.Dispose();
             _resizeTimer.Dispose();
@@ -155,7 +173,10 @@ public sealed class SshTerminalForm : Form
                 SshTerminalIpcContract.CurrentVersion,
                 _connectionId,
                 columns,
-                rows), cancellationToken);
+                rows,
+                _preferences.TerminalName,
+                _preferences.StartupCommand,
+                _preferences.KeepAliveSeconds), cancellationToken);
             if (response.Failure is not null)
             {
                 AppendSystemText($"\r\n[StorageHub] {response.Failure.Message}\r\n");
@@ -209,7 +230,7 @@ public sealed class SshTerminalForm : Form
                 DisconnectUi();
             }
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
@@ -284,8 +305,14 @@ public sealed class SshTerminalForm : Form
                 DisconnectUi();
             }
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
+            InvalidOperationException or TimeoutException or System.Text.Json.JsonException)
+        {
+            AppendSystemText("\r\n[StorageHub] Could not send input to the background agent.\r\n");
+            DisconnectUi();
         }
     }
 
@@ -320,8 +347,14 @@ public sealed class SshTerminalForm : Form
                 _status.Text = $"Connected · {columns}×{rows}";
             }
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
+            InvalidOperationException or TimeoutException or System.Text.Json.JsonException)
+        {
+            _status.Text = "The terminal could not be resized; it will retry after the next window resize.";
+            _status.ForeColor = StorageHubTheme.Warning;
         }
     }
 
@@ -381,6 +414,11 @@ public sealed class SshTerminalForm : Form
     private void RenderTerminal()
     {
         var snapshot = _buffer.Snapshot();
+        var redrawSuspended = _terminal.IsHandleCreated;
+        if (redrawSuspended)
+        {
+            _ = SendMessage(_terminal.Handle, WmSetRedraw, IntPtr.Zero, IntPtr.Zero);
+        }
         _terminal.SuspendLayout();
         try
         {
@@ -390,22 +428,55 @@ public sealed class SshTerminalForm : Form
                 _terminal.Select(run.Start, run.Length);
                 _terminal.SelectionColor = run.Foreground;
                 _terminal.SelectionBackColor = run.Background;
-                _terminal.SelectionFont = run.Bold ? _boldTerminalFont : _terminal.Font;
+                _terminal.SelectionFont = run.Bold && _preferences.RenderBoldText
+                    ? _boldTerminalFont
+                    : _terminalFont;
             }
             _terminal.Select(snapshot.CursorOffset, 0);
             _terminal.ScrollToCaret();
         }
         finally
         {
-            _terminal.ResumeLayout();
+            _terminal.ResumeLayout(performLayout: false);
+            if (redrawSuspended && !_terminal.IsDisposed && _terminal.IsHandleCreated)
+            {
+                _ = SendMessage(_terminal.Handle, WmSetRedraw, new IntPtr(1), IntPtr.Zero);
+                // RichEdit otherwise paints every temporary selection used to apply
+                // ANSI style runs. Re-enable drawing only after the complete snapshot
+                // is formatted, then present it as one frame.
+                _terminal.Refresh();
+            }
         }
     }
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", ExactSpelling = true)]
+    private static extern IntPtr SendMessage(
+        IntPtr windowHandle,
+        int message,
+        IntPtr wParam,
+        IntPtr lParam);
 
     private void DisconnectUi()
     {
         _pollTimer.Stop();
         _status.Text = "Disconnected";
         _closeTask = CloseSessionAsync();
+    }
+
+    private static Font CreateTerminalFont(string family, float size)
+    {
+        try
+        {
+            return new Font(family, size, FontStyle.Regular, GraphicsUnit.Point);
+        }
+        catch (ArgumentException)
+        {
+            return new Font(
+                SshTerminalPreferences.Defaults.FontFamily,
+                SshTerminalPreferences.Defaults.FontSize,
+                FontStyle.Regular,
+                GraphicsUnit.Point);
+        }
     }
 
 }

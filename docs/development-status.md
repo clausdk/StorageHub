@@ -13,11 +13,11 @@ tested foundations from UI concepts and planned production integration.
 | Profiles | Local, S3, FTP, FTPS, SFTP models; metadata; vault references; transport/trust policy validation; SQLite CRUD/search/soft-delete |
 | Security | Versioned vault, Windows DPAPI current-user protector, secret leases, trust-store contracts, SQLite repository, and atomic trust rollover |
 | Persistence | Cross-process-serialized ordered migrations; strict transactional archival of the recognized legacy-preview schema collision; WAL/foreign-key/full-sync configuration; integrity checks; single-writer boundary; profile/trust, scheduler, transfer, sync, execution, and reliable-outbox repositories through schema v8 |
-| Transfers | State machine, immutable v3 intent/checkpoint models, bounded copy, portable SHA-256/length verification, safe move ordering, durable fenced queue with retries/recovery, running agent worker, mutation/query IPC, and saved-pane file enqueue |
+| Transfers | State machine, immutable v3 intent/checkpoint models, bounded copy, portable SHA-256/length verification, safe move ordering, durable fenced queue with retries/recovery, running agent worker, mutation/query IPC, saved-pane file enqueue, and bounded recursive saved-connection folder copy with immutable manifests and empty-directory preservation |
 | Sync | Three-way classifier, conflict categories, deletion guards, immutable digest-schema-v3 plans, durable profiles/baselines/plans/runs/conflicts, preview/apply orchestration, execution fencing, leased outbox worker, and desktop management |
 | Scheduling | Cron/time-zone/DST calculation, misfire decisions, SQLite optimistic revisions, profile-scoped fenced leases, post-lock authoritative timing, bounded renewal, idempotent/stale-completion handling, queue-one behavior, preview-only durable dispatch, management IPC, and desktop editor |
 | Agent | Guarded reparse-free/current-user-only data tree, one process per Windows user, real database/vault startup, protected CodeLogic discovery, transfer/sync/scheduler workers, health reporting, bounded normal and secret-only current-user pipes, browse/test/profile/trust/queue/sync/schedule/read-only-object-inspector commands, sanitized vault enrollment/rotation/deletion, profile-bound trust enrollment/rejection/rollover, and bounded unauthenticated SSH host-key discovery that never records trust |
-| Desktop | Dual-pane workspace tabs with direct close controls, active-pane navigation/history/bounded paging, saved-connection file copy/move enqueue, durable queue/sync/schedule surfaces, read-only versions/metadata/tags inspector, structured General/Connections/Updates/About settings, protocol-aware Connection Manager with provider-enforceable operational defaults, a grouped/sorted saved-profile tree, searchable tag pills, manual/ask/automatic SSH host-key discovery, verified certificate/host-key enrollment, rejection, and rollover, explicit vault enrollment actions, agent status polling, and persisted automatic-update controls; actions without an implemented controller or persistence path remain hidden |
+| Desktop | Dual-pane workspace tabs with direct close controls, active-pane navigation/history/bounded paging, saved-connection file copy/move enqueue, durable queue/sync/schedule surfaces, read-only versions/metadata/tags inspector, structured General/Connections/Updates/About settings, protocol-aware Connection Manager with provider-enforceable operational defaults, revision-bound connection-health presentation, a grouped/sorted saved-profile tree, searchable tag pills, manual/ask/automatic SSH host-key discovery, verified certificate/host-key enrollment, rejection, and rollover, explicit vault enrollment actions, agent status polling, and persisted automatic-update controls; actions without an implemented controller or persistence path remain hidden |
 | Packaging | Self-contained win-x64 desktop/agent payload, per-user Velopack Setup and MSI, portable archive, graceful agent lifecycle, fixed-source GitHub release checking, integrity-checked silent update/restart, checksums, provenance attestation, disposable-runner smoke test, and prerelease publication after every successful main push |
 | Diagnostics | Safe artifact manifest policy that excludes secret and durable-state files |
 
@@ -45,16 +45,18 @@ every visible main or Connection Manager toolbar action to have a real handler.
 
 ## Integration work still required
 
-1. Extend pane transfers from saved-connection files to safely enumerated
-   directories and deliberately modeled local/ad-hoc sources. Existing local
-   destinations without an atomic version/ETag condition remain create-only.
+1. Extend the implemented recursive saved-connection folder copy to deliberately
+   modeled local/ad-hoc sources and durable dependency-aware folder moves.
+   Existing local destinations without an atomic version/ETag condition remain
+   create-only.
 2. Expand persisted settings beyond the implemented updater and SSH-discovery
    preferences, and add a bounded temporary-session contract before restoring Quick Connect.
    Import/export, rename, pane comparison, and global queue controls likewise
    remain hidden until their real command paths and failure handling exist.
-3. Add per-connection health snapshots and bounded session leasing. Aggregate
-   CodeLogic health intentionally reports CL.Storage's disabled configuration
-   bootstrap and is not a substitute for provider health.
+3. Add periodic refresh policy and bounded session leasing to the implemented
+   revision-bound, in-memory connection-health snapshots. Aggregate CodeLogic
+   health intentionally reports CL.Storage's disabled configuration bootstrap
+   and is not a substitute for provider health.
 4. Add crash/restart, credential/trust rotation, cancellation, low-disk,
    long-path, Unicode, large-directory, and lost-acknowledgement stress tests.
 5. Expand profiles in order through WebDAV, Azure Blob, Google Cloud Storage,

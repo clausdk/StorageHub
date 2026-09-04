@@ -88,7 +88,7 @@ public sealed class DesktopUpdaterTests
         fixture.Store.Save(DesktopUpdatePreferences.Defaults with { Appearance = appearance });
 
         Assert.Equal(appearance, fixture.Store.Load().Appearance);
-        Assert.Contains("\"schemaVersion\": 7", File.ReadAllText(fixture.Path), StringComparison.Ordinal);
+        Assert.Contains("\"schemaVersion\": 8", File.ReadAllText(fixture.Path), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -100,6 +100,36 @@ public sealed class DesktopUpdaterTests
         fixture.Store.Save(DesktopUpdatePreferences.Defaults with { DefaultWorkspaceLayout = layout });
 
         Assert.Equal(layout, fixture.Store.Load().DefaultWorkspaceLayout);
+    }
+
+    [Fact]
+    public void SshTerminalPreferencesRoundTripAndInvalidValuesFailSafe()
+    {
+        using var fixture = new SettingsFixture();
+        var expected = new SshTerminalPreferences(
+            "screen-256color",
+            "bash -l",
+            45,
+            "Consolas",
+            11.5F,
+            5_000,
+            90,
+            RenderBoldText: false);
+        fixture.Store.Save(DesktopUpdatePreferences.Defaults with { SshTerminal = expected });
+
+        Assert.Equal(expected, fixture.Store.Load().SshTerminal);
+
+        var normalized = SshTerminalPreferences.Resolve(expected with
+        {
+            TerminalName = "bad terminal name",
+            KeepAliveSeconds = -1,
+            FontSize = 100,
+            ScrollbackLines = 1
+        });
+        Assert.Equal(SshTerminalPreferences.Defaults.TerminalName, normalized.TerminalName);
+        Assert.Equal(SshTerminalPreferences.Defaults.KeepAliveSeconds, normalized.KeepAliveSeconds);
+        Assert.Equal(SshTerminalPreferences.Defaults.FontSize, normalized.FontSize);
+        Assert.Equal(SshTerminalPreferences.Defaults.ScrollbackLines, normalized.ScrollbackLines);
     }
 
     [Fact]

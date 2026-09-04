@@ -22,6 +22,7 @@ internal static class ConnectionDefaultSettings
         "s3ServiceType",
         "endpoint",
         "region",
+        "prefix",
         "addressingStyle",
         "tlsMode",
         "trustMode",
@@ -58,10 +59,36 @@ internal static class ConnectionDefaultSettings
             }
         }
 
+        var connectTimeout = ReadBoundedInteger(
+            stored,
+            Key(providerKind, ConnectTimeoutKey),
+            builtIn.ConnectTimeoutSeconds,
+            1,
+            600);
+        // CL.Storage exposes one network timeout for remote providers. Keeping the
+        // two profile values identical prevents creation of a profile the adapter
+        // would later have to reject as unenforceable.
+        var operationTimeout = providerKind == StorageProviderKind.Local
+            ? ReadBoundedInteger(
+                stored,
+                Key(providerKind, OperationTimeoutKey),
+                builtIn.OperationTimeoutSeconds,
+                1,
+                86_400)
+            : connectTimeout;
+        var retryAttempts = SupportsConfigurableRetries(providerKind)
+            ? ReadBoundedInteger(
+                stored,
+                Key(providerKind, RetryAttemptsKey),
+                builtIn.MaximumRetryAttempts,
+                0,
+                20)
+            : 0;
+
         return new ConnectionProviderDefaults(
-            ReadBoundedInteger(stored, Key(providerKind, ConnectTimeoutKey), builtIn.ConnectTimeoutSeconds, 1, 600),
-            ReadBoundedInteger(stored, Key(providerKind, OperationTimeoutKey), builtIn.OperationTimeoutSeconds, 1, 86_400),
-            ReadBoundedInteger(stored, Key(providerKind, RetryAttemptsKey), builtIn.MaximumRetryAttempts, 0, 20),
+            connectTimeout,
+            operationTimeout,
+            retryAttempts,
             fields);
     }
 
@@ -84,6 +111,9 @@ internal static class ConnectionDefaultSettings
     }
 
     internal static string Key(StorageProviderKind provider, string setting) => $"{provider}.{setting}";
+
+    internal static bool SupportsConfigurableRetries(StorageProviderKind provider) => provider is
+        StorageProviderKind.Local or StorageProviderKind.S3 or StorageProviderKind.Ssh;
 
     private static ConnectionProviderDefaults BuiltInOperationalDefaults(StorageProviderKind provider) => provider switch
     {

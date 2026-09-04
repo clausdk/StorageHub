@@ -25,6 +25,7 @@ public sealed class MainForm : Form
     private readonly MenuStrip _menu;
     private readonly DesktopUpdater _updater;
     private readonly PackagedDesktopLifecycle? _packagedLifecycle;
+    private readonly bool _explorerDropBrokerAvailable;
     private readonly TabControl _workspaceTabs;
     private readonly TransferQueueControl _transferQueue;
     private readonly OverviewDashboardControl _overview;
@@ -49,10 +50,12 @@ public sealed class MainForm : Form
     internal MainForm(
         DesktopUpdatePreferencesStore updatePreferencesStore,
         IDesktopUpdateEngineFactory? updateEngineFactory = null,
-        PackagedDesktopLifecycle? packagedLifecycle = null)
+        PackagedDesktopLifecycle? packagedLifecycle = null,
+        bool explorerDropBrokerAvailable = true)
     {
         _updatePreferencesStore = updatePreferencesStore;
         _packagedLifecycle = packagedLifecycle;
+        _explorerDropBrokerAvailable = explorerDropBrokerAvailable;
         _updater = new DesktopUpdater(updatePreferencesStore, updateEngineFactory);
         _recursiveTransfers = new RecursiveTransferController(_manualTransfers);
         _externalEditor = new ExternalEditorController(updatePreferencesStore);
@@ -120,7 +123,6 @@ public sealed class MainForm : Form
         mainSplit.Panel2.BackColor = StorageHubTheme.Surface;
         mainSplit.Panel1.Controls.Add(_workspaceTabs);
         _transferQueue = new TransferQueueControl();
-        _syncTasks.ReviewRunRequested += (_, _) => _transferQueue.SelectSyncRunsTab();
         _manualTransfers.TransfersEnqueued += ManualTransfersEnqueued;
         mainSplit.Panel2.Controls.Add(_transferQueue);
 
@@ -328,6 +330,20 @@ public sealed class MainForm : Form
         destination.TransferDropRequested += (_, args) => EnqueuePaneDrop(page, destination, args);
         source.ShellImportDropRequested += (_, args) => _ = ReviewShellImportAsync(args);
         destination.ShellImportDropRequested += (_, args) => _ = ReviewShellImportAsync(args);
+        if (_explorerDropBrokerAvailable)
+        {
+            source.BeginExplorerDropAsync = BeginExplorerDropAsync;
+            destination.BeginExplorerDropAsync = BeginExplorerDropAsync;
+            source.CommitExplorerDropAsync = CommitExplorerDropAsync;
+            destination.CommitExplorerDropAsync = CommitExplorerDropAsync;
+        }
+        else
+        {
+            const string unavailableReason =
+                "Drag to File Explorer is unavailable because the StorageHub Explorer integration could not be registered. Repair the installation or restart StorageHub.";
+            source.ExplorerDropUnavailableReason = unavailableReason;
+            destination.ExplorerDropUnavailableReason = unavailableReason;
+        }
         source.SelectionStaged += (_, args) => StagePaneSelection(source, args);
         destination.SelectionStaged += (_, args) => StagePaneSelection(destination, args);
         source.CanPaste = () => _paneClipboard is not null;
@@ -442,6 +458,46 @@ public sealed class MainForm : Form
         RefreshPaneClipboardPresentation();
         return page;
     }
+
+    private Task<ExplorerDropBeginResponse> BeginExplorerDropAsync(
+        PaneSelectionSnapshot selection,
+        CancellationToken cancellationToken)
+    {
+        if (selection.Context.ConnectionId is not { } connectionId ||
+            string.IsNullOrWhiteSpace(selection.Context.RootIdentity))
+        {
+            return Task.FromResult(new ExplorerDropBeginResponse(
+                ShellTransferIpcContract.CurrentVersion,
+                null,
+                null,
+                new StorageIpcFailure(
+                    "shell-transfer.export.invalid",
+                    StorageIpcFailureCategory.Validation,
+                    "Explorer export requires an open saved connection.",
+                    false)));
+        }
+
+        var sources = selection.Items.Select(item => new ShellExportSource(
+            new TransferQueueAddress(
+                connectionId,
+                selection.Context.RootIdentity,
+                item.RelativePath,
+                item.NativeItemId,
+                item.VersionId,
+                item.EntityTag),
+            item.IsContainer,
+            item.Name)).ToArray();
+        return _shellTransfers.BeginExplorerDropAsync(new ShellExportPrepareRequest(
+            ShellTransferIpcContract.CurrentVersion,
+            sources), cancellationToken);
+    }
+
+    private Task<ExplorerDropCommitResponse> CommitExplorerDropAsync(
+        string token,
+        CancellationToken cancellationToken) =>
+        _shellTransfers.CommitExplorerDropAsync(new ExplorerDropCommitRequest(
+            ShellTransferIpcContract.CurrentVersion,
+            token), cancellationToken);
 
     private static void SetWorkspaceOrientation(
         SplitContainer split,
@@ -570,7 +626,8 @@ public sealed class MainForm : Form
                     NavigateActivePane(PaneNavigation.Up);
                     break;
                 case "Run Sync":
-                    _transferQueue.SelectSyncRunsTab();
+                    _workspaceTabs.SelectedIndex = 1;
+                    _syncTasks.ShowRunReview();
                     break;
                 case "Schedules...":
                     ShowSchedules();

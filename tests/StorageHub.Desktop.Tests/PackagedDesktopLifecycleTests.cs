@@ -154,7 +154,14 @@ public sealed class PackagedDesktopLifecycleTests
     public void VelopackHooksRegisterRefreshStopAndUnregisterWithoutADataDeletionSurface()
     {
         var fixture = CreateFixture(shutdownResult: true);
-        var hooks = new DesktopPackageLifecycleHooks(fixture.Lifecycle);
+        var brokerUnregisterCalls = 0;
+        var hooks = new DesktopPackageLifecycleHooks(
+            fixture.Lifecycle,
+            () =>
+            {
+                brokerUnregisterCalls++;
+                return true;
+            });
 
         hooks.AfterInstall();
         hooks.BeforeUpdate();
@@ -166,6 +173,7 @@ public sealed class PackagedDesktopLifecycleTests
         Assert.Equal(
             [AgentShutdownReason.Update, AgentShutdownReason.Uninstall],
             fixture.AgentClient.ShutdownReasons);
+        Assert.Equal(1, brokerUnregisterCalls);
     }
 
     [Fact]

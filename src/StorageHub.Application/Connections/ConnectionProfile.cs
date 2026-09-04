@@ -734,6 +734,55 @@ public sealed record SftpPrivateKeyAuthentication : ConnectionAuthentication
     public SftpPrivateKeyFormat KeyFormat { get; }
 }
 
+/// <summary>
+/// SSH multi-factor authentication where the server requires both a private key
+/// and the account password. The private-key passphrase protects the key itself
+/// and is intentionally stored as a separate vault reference.
+/// </summary>
+public sealed record SshPrivateKeyPasswordAuthentication : ConnectionAuthentication
+{
+    public SshPrivateKeyPasswordAuthentication(
+        string username,
+        SecretReference passwordReference,
+        SecretReference privateKeyReference,
+        SecretReference passphraseReference,
+        SftpPrivateKeyFormat keyFormat)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(username);
+        if (username.Length > 256 || username.Any(char.IsControl))
+        {
+            throw new ArgumentException("The username is invalid.", nameof(username));
+        }
+        ValidateReference(passwordReference, nameof(passwordReference));
+        ValidateReference(privateKeyReference, nameof(privateKeyReference));
+        ValidateReference(passphraseReference, nameof(passphraseReference));
+        if (!Enum.IsDefined(keyFormat))
+        {
+            throw new ArgumentOutOfRangeException(nameof(keyFormat));
+        }
+
+        Username = username.Trim();
+        PasswordReference = passwordReference;
+        PrivateKeyReference = privateKeyReference;
+        PassphraseReference = passphraseReference;
+        KeyFormat = keyFormat;
+    }
+
+    public string Username { get; }
+    public SecretReference PasswordReference { get; }
+    public SecretReference PrivateKeyReference { get; }
+    public SecretReference PassphraseReference { get; }
+    public SftpPrivateKeyFormat KeyFormat { get; }
+
+    private static void ValidateReference(SecretReference reference, string parameterName)
+    {
+        if (!SecretReference.TryParse(reference.Value, out _))
+        {
+            throw new ArgumentException("The SSH secret reference is invalid.", parameterName);
+        }
+    }
+}
+
 public sealed record ConnectionProfile
 {
     private ConnectionProfile(
@@ -861,8 +910,11 @@ public sealed record ConnectionProfile
                 S3AccessKeyAuthentication,
             ConnectionProviderKind.Ftp or ConnectionProviderKind.Ftps =>
                 Authentication is NoAuthentication or UsernamePasswordAuthentication,
-            ConnectionProviderKind.Sftp or ConnectionProviderKind.Ssh =>
+            ConnectionProviderKind.Sftp =>
                 Authentication is UsernamePasswordAuthentication or SftpPrivateKeyAuthentication,
+            ConnectionProviderKind.Ssh =>
+                Authentication is UsernamePasswordAuthentication or SftpPrivateKeyAuthentication or
+                    SshPrivateKeyPasswordAuthentication,
             _ => false
         };
         if (!valid)

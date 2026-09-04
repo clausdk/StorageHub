@@ -31,7 +31,8 @@ public sealed class StorageHubDatabaseInitializer
                 new PortableChecksumEvidenceSchemaMigration(),
                 new SymmetricSyncSchemaMigration(),
                 new SyncDestinationExistenceSchemaMigration(),
-                new NonAtomicSyncWritesSchemaMigration()
+                new NonAtomicSyncWritesSchemaMigration(),
+                new LocalTransferEndpointsSchemaMigration()
             ],
             timeProvider);
     }

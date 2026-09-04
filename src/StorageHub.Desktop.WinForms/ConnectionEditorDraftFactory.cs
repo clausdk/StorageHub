@@ -257,7 +257,8 @@ public static class ConnectionEditorDraftFactory
                     ConnectionAuthenticationKind.UsernamePassword,
                     Username: Require(values, "username", "A username is required."),
                     PasswordReference: Require(values, "passwordReference", "A vault password reference is required.")),
-            StorageProviderKind.Sftp or StorageProviderKind.Ssh => BuildSftpAuthentication(values),
+            StorageProviderKind.Sftp => BuildSshAuthentication(values, allowMultiFactor: false),
+            StorageProviderKind.Ssh => BuildSshAuthentication(values, allowMultiFactor: true),
             _ => throw new ArgumentOutOfRangeException(nameof(provider))
         };
 
@@ -299,8 +300,9 @@ public static class ConnectionEditorDraftFactory
             SessionTokenReference: token);
     }
 
-    private static ConnectionAuthenticationDocument BuildSftpAuthentication(
-        IReadOnlyDictionary<string, string> values)
+    private static ConnectionAuthenticationDocument BuildSshAuthentication(
+        IReadOnlyDictionary<string, string> values,
+        bool allowMultiFactor)
     {
         var mode = Get(values, "authenticationMode") ?? "Private key reference";
         var username = Require(values, "username", "An SFTP username is required.");
@@ -324,6 +326,21 @@ public static class ConnectionEditorDraftFactory
                     values,
                     "passwordReference",
                     "A vault password reference is required.")),
+            "Private key + password (MFA)" when allowMultiFactor => new ConnectionAuthenticationDocument(
+                ConnectionAuthenticationKind.SshPrivateKeyPassword,
+                Username: username,
+                PasswordReference: Require(
+                    values,
+                    "passwordReference",
+                    "An account-password vault reference is required for SSH multi-factor authentication."),
+                PrivateKeyReference: Require(
+                    values,
+                    "privateKeyReference",
+                    "An encrypted private-key vault reference is required for SSH multi-factor authentication."),
+                PrivateKeyPassphraseReference: Require(
+                    values,
+                    "privateKeyPassphraseReference",
+                    "A private-key passphrase vault reference is required for SSH multi-factor authentication.")),
             _ => throw new ArgumentException(
                 "SSH agent authentication is not available in the current provider adapter.",
                 nameof(values))
@@ -376,6 +393,7 @@ public static class ConnectionEditorDraftFactory
         {
             ConnectionAuthenticationKind.SftpPrivateKey => "Private key reference",
             ConnectionAuthenticationKind.UsernamePassword => "Password reference",
+            ConnectionAuthenticationKind.SshPrivateKeyPassword => "Private key + password (MFA)",
             _ => null
         });
     }

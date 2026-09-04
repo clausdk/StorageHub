@@ -37,6 +37,18 @@ public interface ITransferQueueAgentClient : IAsyncDisposable
     Task<ShellImportCommitResponse> CommitShellImportAsync(
         ShellImportCommitRequest request,
         CancellationToken cancellationToken = default) => throw new NotSupportedException("This transfer client does not support shell imports.");
+
+    Task<ShellExportPrepareResponse> PrepareShellExportAsync(
+        ShellExportPrepareRequest request,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException("This transfer client does not support shell exports.");
+
+    Task<ExplorerDropBeginResponse> BeginExplorerDropAsync(
+        ShellExportPrepareRequest request,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException("This transfer client does not support Explorer drops.");
+
+    Task<ExplorerDropCommitResponse> CommitExplorerDropAsync(
+        ExplorerDropCommitRequest request,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException("This transfer client does not support Explorer drops.");
 }
 
 /// <summary>
@@ -177,6 +189,103 @@ public sealed class NamedPipeTransferQueueAgentClient : ITransferQueueAgentClien
             {
                 if (!ShellTransferIpcContract.IsSupported(response.ContractVersion) || response.TransferIds is null || response.TransferIds.Any(id => id == Guid.Empty)) throw InvalidResponse();
             }, cancellationToken);
+    }
+
+    public Task<ShellExportPrepareResponse> PrepareShellExportAsync(ShellExportPrepareRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!ShellTransferIpcContract.IsSupported(request.ContractVersion) || !request.HasValidBounds)
+            throw new ArgumentException("The shell export request is outside the negotiated IPC contract bounds.", nameof(request));
+        return PrepareShellExportJobAsync(request, cancellationToken);
+    }
+
+    public Task<ExplorerDropBeginResponse> BeginExplorerDropAsync(
+        ShellExportPrepareRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!ShellTransferIpcContract.IsSupported(request.ContractVersion) || !request.HasValidBounds)
+            throw new ArgumentException("The Explorer drop request is outside the negotiated IPC contract bounds.", nameof(request));
+        return ExecuteAsync<ShellExportPrepareRequest, ExplorerDropBeginResponse>(
+            ShellTransferIpcMessageTypes.BeginExplorerDropRequest,
+            ShellTransferIpcMessageTypes.BeginExplorerDropResponse,
+            request,
+            response =>
+            {
+                if (!ShellTransferIpcContract.IsSupported(response.ContractVersion) ||
+                    (response.Failure is null &&
+                     (response.DropToken is not { Length: 32 } || !response.DropToken.All(Uri.IsHexDigit) ||
+                      string.IsNullOrWhiteSpace(response.MarkerPath) || !Path.IsPathFullyQualified(response.MarkerPath))))
+                    throw InvalidResponse();
+            }, cancellationToken);
+    }
+
+    public Task<ExplorerDropCommitResponse> CommitExplorerDropAsync(
+        ExplorerDropCommitRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!ShellTransferIpcContract.IsSupported(request.ContractVersion) || !request.HasValidBounds)
+            throw new ArgumentException("The Explorer drop commit is outside the negotiated IPC contract bounds.", nameof(request));
+        return ExecuteAsync<ExplorerDropCommitRequest, ExplorerDropCommitResponse>(
+            ShellTransferIpcMessageTypes.CommitExplorerDropRequest,
+            ShellTransferIpcMessageTypes.CommitExplorerDropResponse,
+            request,
+            response =>
+            {
+                if (!ShellTransferIpcContract.IsSupported(response.ContractVersion) ||
+                    (response.Accepted && (response.ExportId == Guid.Empty || string.IsNullOrWhiteSpace(response.DestinationPath) ||
+                                           !Path.IsPathFullyQualified(response.DestinationPath))))
+                    throw InvalidResponse();
+            }, cancellationToken);
+    }
+
+    private async Task<ShellExportPrepareResponse> PrepareShellExportJobAsync(
+        ShellExportPrepareRequest request,
+        CancellationToken cancellationToken)
+    {
+        var started = await ExecuteAsync<ShellExportPrepareRequest, ShellExportStartResponse>(
+            ShellTransferIpcMessageTypes.StartExportRequest,
+            ShellTransferIpcMessageTypes.StartExportResponse,
+            request,
+            response =>
+            {
+                if (!ShellTransferIpcContract.IsSupported(response.ContractVersion) ||
+                    (response.Failure is null && response.ExportId == Guid.Empty)) throw InvalidResponse();
+            }, cancellationToken).ConfigureAwait(false);
+        if (started.Failure is not null)
+        {
+            return new ShellExportPrepareResponse(ShellTransferIpcContract.CurrentVersion, [], started.Failure);
+        }
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var status = await ExecuteAsync<ShellExportStatusRequest, ShellExportStatusResponse>(
+                ShellTransferIpcMessageTypes.ExportStatusRequest,
+                ShellTransferIpcMessageTypes.ExportStatusResponse,
+                new ShellExportStatusRequest(ShellTransferIpcContract.CurrentVersion, started.ExportId),
+                response =>
+                {
+                    if (!ShellTransferIpcContract.IsSupported(response.ContractVersion) ||
+                        response.ExportId != started.ExportId || !Enum.IsDefined(response.State) ||
+                        response.DiscoveredEntries < 0 || response.CompletedFiles < 0 || response.CompletedBytes < 0 ||
+                        response.LocalPaths is null || response.LocalPaths.Length > ShellTransferIpcLimits.MaximumPaths ||
+                        response.LocalPaths.Any(path => string.IsNullOrWhiteSpace(path) || path.Length > ShellTransferIpcLimits.MaximumPathLength || !Path.IsPathFullyQualified(path)))
+                        throw InvalidResponse();
+                }, cancellationToken).ConfigureAwait(false);
+            if (status.State == ShellExportState.Completed)
+            {
+                return new ShellExportPrepareResponse(status.ContractVersion, status.LocalPaths);
+            }
+            if (status.State == ShellExportState.Failed || status.Failure is not null)
+            {
+                return new ShellExportPrepareResponse(status.ContractVersion, [], status.Failure ??
+                    new StorageIpcFailure("shell-transfer.failed", StorageIpcFailureCategory.Unavailable,
+                        "StorageHub could not prepare the selected items for Explorer.", true));
+            }
+            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async ValueTask DisposeAsync()

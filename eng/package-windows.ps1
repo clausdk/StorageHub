@@ -752,6 +752,7 @@ try {
             (Join-Path $stageRoot 'StorageHub.Desktop.dll'),
             (Join-Path $stageRoot 'StorageHub.Desktop.deps.json'),
             (Join-Path $stageRoot 'StorageHub.Desktop.runtimeconfig.json'),
+            (Join-Path $stageRoot 'StorageHub.ShellExtension.Native.dll'),
             (Join-Path $stageRoot 'coreclr.dll'),
             $agentExe,
             (Join-Path $stageAgent 'StorageHub.Agent.Windows.dll'),

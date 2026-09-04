@@ -77,6 +77,7 @@ public sealed class PresentationModelTests
         var ftp = ConnectionProviderCatalog.Get(StorageProviderKind.Ftp);
         var ftps = ConnectionProviderCatalog.Get(StorageProviderKind.Ftps);
         var sftp = ConnectionProviderCatalog.Get(StorageProviderKind.Sftp);
+        var ssh = ConnectionProviderCatalog.Get(StorageProviderKind.Ssh);
 
         Assert.Equal(["rootPath"], local.GeneralFields.Select(field => field.Key));
         Assert.Empty(local.AuthenticationFields);
@@ -88,6 +89,12 @@ public sealed class PresentationModelTests
         Assert.DoesNotContain(sftp.SecurityFields, field => field.Key == "hostKeyPolicy");
         var authentication = Assert.Single(sftp.AuthenticationFields, field => field.Key == "authenticationMode");
         Assert.Equal(["Private key reference", "Password reference"], authentication.Choices);
+        var sshAuthentication = Assert.Single(
+            ssh.AuthenticationFields,
+            field => field.Key == "authenticationMode");
+        Assert.Equal(
+            ["Private key reference", "Password reference", "Private key + password (MFA)"],
+            sshAuthentication.Choices);
     }
 
     [Fact]

@@ -76,6 +76,14 @@ public static class ConnectionProviderCatalog
     private static readonly ReadOnlyCollection<string> SshAuthenticationModes =
         Array.AsReadOnly(new[] { "Private key reference", "Password reference" });
 
+    private static readonly ReadOnlyCollection<string> SshClientAuthenticationModes =
+        Array.AsReadOnly(new[]
+        {
+            "Private key reference",
+            "Password reference",
+            "Private key + password (MFA)"
+        });
+
     private static readonly ReadOnlyCollection<ConnectionProviderDescriptor> Providers = Array.AsReadOnly(
     new ConnectionProviderDescriptor[]
     {
@@ -207,7 +215,7 @@ public static class ConnectionProviderCatalog
             ],
             [
                 Field("username", "Username", ConnectionFieldKind.Text, required: true),
-                Field("authenticationMode", "Authentication", ConnectionFieldKind.Choice, defaultValue: SshAuthenticationModes[0], choices: SshAuthenticationModes),
+                Field("authenticationMode", "Authentication", ConnectionFieldKind.Choice, defaultValue: SshClientAuthenticationModes[0], choices: SshClientAuthenticationModes),
                 Field("passwordReference", "Password reference", ConnectionFieldKind.SecretReference, placeholder: "Optional vault entry"),
                 Field("privateKeyReference", "OpenSSH / PEM private-key reference", ConnectionFieldKind.SecretReference, placeholder: "Select a vault entry"),
                 Field("privateKeyPassphraseReference", "Private-key passphrase reference", ConnectionFieldKind.SecretReference, required: true, placeholder: "Required vault entry")

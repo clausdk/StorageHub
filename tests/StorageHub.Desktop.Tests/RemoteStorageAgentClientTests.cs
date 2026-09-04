@@ -203,6 +203,38 @@ public sealed class RemoteStorageAgentClientTests
     }
 
     [Fact]
+    public async Task ClientRejectsHealthSnapshotsFromPreHealthContractVersions()
+    {
+        var connectionId = Guid.NewGuid();
+        var transport = new FakeTransport(request => IpcEnvelope.Create(
+            StorageIpcMessageTypes.ConnectionListResponse,
+            request.RequestId,
+            1,
+            new ConnectionListResponse(
+                StorageIpcContract.StableIdentityVersion,
+                [new ConnectionSummary(
+                    connectionId,
+                    "Archive",
+                    StorageConnectionProvider.S3,
+                    FolderPath: null,
+                    Tags: [],
+                    IsFavorite: false,
+                    IsEnabled: true,
+                    IconKey: null,
+                    AccentColor: null,
+                    Version: 1,
+                    Health: new ConnectionHealthSnapshot(
+                        ConnectionHealthState.Healthy,
+                        DateTimeOffset.UtcNow,
+                        1,
+                        "Connection healthy"))])));
+        await using var client = CreateClient(transport);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.ListConnectionsAsync(
+            new ConnectionListRequest(StorageIpcContract.StableIdentityVersion)));
+    }
+
+    [Fact]
     public async Task ClientKeepsV1BrowsingCompatibilityWithoutStableIdentities()
     {
         var connectionId = Guid.NewGuid();

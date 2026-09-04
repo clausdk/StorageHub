@@ -179,7 +179,17 @@ public sealed class ShellWiringTests
         {
             var connections = new[]
             {
-                Summary("Favorite", StorageConnectionProvider.S3, folder: "Team", tags: ["production"], favorite: true),
+                Summary(
+                    "Favorite",
+                    StorageConnectionProvider.S3,
+                    folder: "Team",
+                    tags: ["production"],
+                    favorite: true,
+                    health: new ConnectionHealthSnapshot(
+                        ConnectionHealthState.Healthy,
+                        DateTimeOffset.UtcNow,
+                        42,
+                        "Connection healthy")),
                 Summary("Foldered", StorageConnectionProvider.Sftp, folder: "Team"),
                 Summary("Provider only", StorageConnectionProvider.Ftp),
                 Summary("Shell", StorageConnectionProvider.Ssh, folder: "Team", type: ConnectionProfileType.Client),
@@ -210,6 +220,7 @@ public sealed class ShellWiringTests
                 .ToArray();
             Assert.Equal(5, cards.Length);
             Assert.Equal(5, cards.Select(static card => card.ConnectionId).Distinct().Count());
+            Assert.Equal("Healthy · 42 ms", cards.Single(static card => card.Name == "Favorite").State);
 
             GetField<TextBox>(manager, "_searchBox").Text = "production";
 
@@ -233,10 +244,10 @@ public sealed class ShellWiringTests
             System.Windows.Forms.Application.DoEvents();
             var categories = GetField<TreeView>(settings, "_categories");
             Assert.Equal(
-                ["Transfers & sync", "Editing", "Appearance", "Workspace", "Connections", "Updates"],
+                ["Transfers & sync", "Editing", "Appearance", "Workspace", "Connections & trust", "Updates"],
                 categories.Nodes.Cast<TreeNode>().Select(static node => node.Text));
             var transfers = categories.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Transfers & sync");
-            Assert.Equal("Concurrency", Assert.Single(transfers.Nodes.Cast<TreeNode>()).Text);
+            Assert.Empty(transfers.Nodes.Cast<TreeNode>());
             var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
             Assert.Equal(8 + ConnectionProviderCatalog.All.Count, pages.Count);
             var pageNodes = categories.Nodes.Cast<TreeNode>()
@@ -281,6 +292,86 @@ public sealed class ShellWiringTests
         });
     }
 
+    [Fact]
+    public void WorkspaceDisablesExplorerExportWhenTheShellBrokerIsUnavailable()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            var settingsPath = Path.Combine(
+                Path.GetTempPath(),
+                $"storagehub-shell-test-{Guid.NewGuid():N}.json");
+            using var main = new MainForm(
+                new DesktopUpdatePreferencesStore(settingsPath),
+                explorerDropBrokerAvailable: false);
+            var tabs = GetField<TabControl>(main, "_workspaceTabs");
+            var panes = tabs.TabPages[2].Controls.OfType<SplitContainer>()
+                .SelectMany(split => split.Panel1.Controls.Cast<Control>()
+                    .Concat(split.Panel2.Controls.Cast<Control>()))
+                .OfType<BrowserPaneControl>()
+                .ToArray();
+
+            Assert.Equal(2, panes.Length);
+            Assert.All(panes, pane =>
+            {
+                Assert.Null(pane.BeginExplorerDropAsync);
+                Assert.Null(pane.CommitExplorerDropAsync);
+                Assert.Contains("unavailable", pane.ExplorerDropUnavailableReason, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("repair", pane.ExplorerDropUnavailableReason, StringComparison.OrdinalIgnoreCase);
+            });
+        });
+    }
+
+    [Fact]
+    public void ClickingCustomSidebarCardLoadsThatSavedProfileIntoEditor()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            var connectionId = Guid.NewGuid();
+            var profile = new ConnectionProfileDocument(
+                connectionId,
+                3,
+                new ConnectionProfileDraft(
+                    new ConnectionProfileMetadataDocument("Loaded archive", Tags: []),
+                    new ConnectionEndpointDocument(StorageConnectionProvider.S3, Host: "s3.loaded.test"),
+                    new ConnectionAuthenticationDocument(ConnectionAuthenticationKind.None),
+                    new ConnectionOperationalOptionsDocument()),
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow);
+            using var manager = new ConnectionManagerForm(
+                storageClient: new FakeStorageClient(connectionId),
+                profileClient: new FakeProfileClient(profile));
+            InvokeReloadProfiles(manager);
+            var sidebar = GetField<ConnectionSidebarControl>(manager, "_profileSidebar");
+            var item = Assert.Single(Descendants<ConnectionSidebarItem>(sidebar));
+
+            typeof(Control).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(item, [EventArgs.Empty]);
+            System.Windows.Forms.Application.DoEvents();
+
+            var selected = GetField<ConnectionProfileDocument>(manager, "_selectedProfile");
+            Assert.Equal(connectionId, selected.ConnectionId);
+            Assert.Equal("Loaded archive", selected.Draft.Metadata.DisplayName);
+        });
+    }
+
+    [Fact]
+    public void SshMfaModeEnablesPasswordAndPrivateKeyVaultFieldsTogether()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var manager = new ConnectionManagerForm(StorageProviderKind.Ssh);
+            var fields = GetField<Dictionary<string, Control>>(manager, "_editorFields");
+            var mode = Assert.IsType<ComboBox>(fields["authenticationMode"]);
+
+            mode.SelectedItem = "Private key + password (MFA)";
+
+            Assert.True(fields["passwordReference"].Enabled);
+            Assert.True(fields["privateKeyReference"].Enabled);
+            Assert.True(fields["privateKeyPassphraseReference"].Enabled);
+            Assert.Contains("public-key", mode.AccessibleDescription, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
     private static ConnectionSummary Summary(
         string name,
         StorageConnectionProvider provider,
@@ -288,7 +379,8 @@ public sealed class ShellWiringTests
         string[]? tags = null,
         bool favorite = false,
         bool enabled = true,
-        ConnectionProfileType type = ConnectionProfileType.Storage) => new(
+        ConnectionProfileType type = ConnectionProfileType.Storage,
+        ConnectionHealthSnapshot? health = null) => new(
             Guid.NewGuid(),
             name,
             provider,
@@ -299,7 +391,8 @@ public sealed class ShellWiringTests
             provider.ToString(),
             AccentColor: null,
             Version: 1,
-            Type: type);
+            Type: type,
+            Health: health);
 
     private static IEnumerable<TreeNode> FlattenTree(TreeNode node)
     {
@@ -310,6 +403,15 @@ public sealed class ShellWiringTests
             {
                 yield return descendant;
             }
+        }
+    }
+
+    private static IEnumerable<T> Descendants<T>(Control root) where T : Control
+    {
+        foreach (Control child in root.Controls)
+        {
+            if (child is T match) yield return match;
+            foreach (var descendant in Descendants<T>(child)) yield return descendant;
         }
     }
 
@@ -380,6 +482,20 @@ public sealed class ShellWiringTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+
+    private sealed class FakeProfileClient(ConnectionProfileDocument profile) : IRemoteConnectionProfileClient
+    {
+        public Task<ConnectionProfileGetResponse> GetAsync(ConnectionProfileGetRequest request, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ConnectionProfileGetResponse(ConnectionProfileIpcContract.CurrentVersion, profile));
+        public Task<ConnectionProfileWriteResponse> CreateAsync(ConnectionProfileCreateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ConnectionProfileWriteResponse> UpdateAsync(ConnectionProfileUpdateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ConnectionProfileWriteResponse> DeleteAsync(ConnectionProfileDeleteRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ConnectionTrustGetResponse> GetTrustAsync(ConnectionTrustGetRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ConnectionTrustMutationResponse> DecideTrustAsync(ConnectionTrustDecisionRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ConnectionTrustMutationResponse> RolloverTrustAsync(ConnectionTrustRolloverRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

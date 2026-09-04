@@ -24,9 +24,12 @@ public sealed class StorageIpcContractTests
         Assert.False(oversizedPath.HasValidBounds);
         Assert.False(valid with { ContractVersion = 0 } is { HasValidBounds: true });
         Assert.True(StorageIpcContract.IsSupported(StorageIpcContract.LegacyVersion));
+        Assert.True(StorageIpcContract.IsSupported(StorageIpcContract.StableIdentityVersion));
         Assert.True(StorageIpcContract.IsSupported(StorageIpcContract.CurrentVersion));
         Assert.False(StorageIpcContract.SupportsStableItemIdentities(StorageIpcContract.LegacyVersion));
         Assert.True(StorageIpcContract.SupportsStableItemIdentities(StorageIpcContract.CurrentVersion));
+        Assert.False(StorageIpcContract.SupportsConnectionHealth(StorageIpcContract.StableIdentityVersion));
+        Assert.True(StorageIpcContract.SupportsConnectionHealth(StorageIpcContract.CurrentVersion));
     }
 
     [Fact]

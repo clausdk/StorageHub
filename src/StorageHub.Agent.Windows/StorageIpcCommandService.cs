@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using StorageHub.Agent.Ipc;
 using StorageHub.Application.Connections;
 using StorageHub.Contracts.Ipc;
@@ -35,15 +36,21 @@ public interface IStorageIpcSessionOpener
 /// </summary>
 public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
 {
+    private const int MaximumCachedHealthSnapshots = 256;
     private readonly IConnectionProfileRepository _profiles;
     private readonly IStorageIpcSessionOpener _sessionOpener;
+    private readonly TimeProvider _timeProvider;
+    private readonly ConcurrentDictionary<Guid, CachedConnectionHealth> _health = new();
+    private readonly object _healthGate = new();
 
     public StorageIpcCommandService(
         IConnectionProfileRepository profiles,
-        IStorageIpcSessionOpener sessionOpener)
+        IStorageIpcSessionOpener sessionOpener,
+        TimeProvider? timeProvider = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _sessionOpener = sessionOpener ?? throw new ArgumentNullException(nameof(sessionOpener));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -82,7 +89,8 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
                 vaultProvider,
                 secretFileMaterializer,
                 sessionFactoryProvider,
-                timeProvider))
+                timeProvider),
+            timeProvider)
     {
     }
 
@@ -140,7 +148,9 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
                     "The saved connection list exceeded the negotiated response limit.");
             }
 
-            var summaries = profiles.Select(MapConnection).ToArray();
+            var summaries = profiles.Select(profile => MapConnection(
+                profile,
+                StorageIpcContract.SupportsConnectionHealth(request.ContractVersion))).ToArray();
             return AgentIpcCommandResponse.Create(
                 StorageIpcMessageTypes.ConnectionListResponse,
                 new ConnectionListResponse(request.ContractVersion, summaries));
@@ -187,9 +197,9 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
             var opened = await _sessionOpener.OpenAsync(profile, cancellationToken).ConfigureAwait(false);
             if (opened.IsFailure)
             {
-                return ConnectionTestFailure(
+                return CompleteConnectionTest(
+                    profile,
                     request.ContractVersion,
-                    request.ConnectionId,
                     started,
                     SanitizeFailure(opened.Error));
             }
@@ -198,25 +208,19 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
             var sessionFailure = ValidateSession(lease.Session, profile.Id);
             if (sessionFailure is not null)
             {
-                return ConnectionTestFailure(
+                return CompleteConnectionTest(
+                    profile,
                     request.ContractVersion,
-                    request.ConnectionId,
                     started,
                     sessionFailure);
             }
 
             var health = await lease.Session.CheckHealthAsync(cancellationToken).ConfigureAwait(false);
             return health.IsSuccess
-                ? AgentIpcCommandResponse.Create(
-                    StorageIpcMessageTypes.ConnectionTestResponse,
-                    new ConnectionTestResponse(
-                        request.ContractVersion,
-                        request.ConnectionId,
-                        Succeeded: true,
-                        ElapsedMilliseconds: ElapsedMilliseconds(started)))
-                : ConnectionTestFailure(
+                ? CompleteConnectionTest(profile, request.ContractVersion, started)
+                : CompleteConnectionTest(
+                    profile,
                     request.ContractVersion,
-                    request.ConnectionId,
                     started,
                     SanitizeFailure(health.Error));
         }
@@ -383,7 +387,17 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
         _ => throw new InvalidDataException("The saved connection provider is invalid.")
     };
 
-    private static ConnectionSummary MapConnection(ConnectionProfile profile) => new(
+    private ConnectionSummary MapConnection(ConnectionProfile profile, bool includeHealth)
+    {
+        ConnectionHealthSnapshot? health = null;
+        if (includeHealth &&
+            _health.TryGetValue(profile.Id.Value, out var cached) &&
+            cached.ProfileVersion == profile.Version)
+        {
+            health = cached.Snapshot;
+        }
+
+        return new ConnectionSummary(
         profile.Id.Value,
         profile.Metadata.DisplayName,
         MapProvider(profile.Provider),
@@ -396,7 +410,9 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
         profile.Version,
         profile.Type == StorageHub.Application.Connections.ConnectionProfileType.Client
             ? StorageHub.Contracts.Ipc.ConnectionProfileType.Client
-            : StorageHub.Contracts.Ipc.ConnectionProfileType.Storage);
+            : StorageHub.Contracts.Ipc.ConnectionProfileType.Storage,
+        health);
+    }
 
     private static StorageListItem MapEntry(StorageEntry entry, bool includeStableIdentities) => new(
         entry.Name,
@@ -585,6 +601,57 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
             ElapsedMilliseconds: ElapsedMilliseconds(started),
             failure));
 
+    private AgentIpcCommandResponse CompleteConnectionTest(
+        ConnectionProfile profile,
+        int contractVersion,
+        long started,
+        StorageIpcFailure? failure = null)
+    {
+        var elapsed = ElapsedMilliseconds(started);
+        var snapshot = failure is null
+            ? new ConnectionHealthSnapshot(
+                ConnectionHealthState.Healthy,
+                _timeProvider.GetUtcNow().ToUniversalTime(),
+                elapsed,
+                "Connection healthy")
+            : new ConnectionHealthSnapshot(
+                failure.Category is StorageIpcFailureCategory.Unauthorized or StorageIpcFailureCategory.Security
+                    ? ConnectionHealthState.NeedsAttention
+                    : ConnectionHealthState.Unavailable,
+                _timeProvider.GetUtcNow().ToUniversalTime(),
+                elapsed,
+                failure.Message,
+                RequiresCredentialAction: failure.Category == StorageIpcFailureCategory.Unauthorized,
+                RequiresTrustAction: failure.Category == StorageIpcFailureCategory.Security);
+        CacheHealth(profile, snapshot);
+        return AgentIpcCommandResponse.Create(
+            StorageIpcMessageTypes.ConnectionTestResponse,
+            new ConnectionTestResponse(
+                contractVersion,
+                profile.Id.Value,
+                Succeeded: failure is null,
+                elapsed,
+                failure));
+    }
+
+    private void CacheHealth(ConnectionProfile profile, ConnectionHealthSnapshot snapshot)
+    {
+        lock (_healthGate)
+        {
+            while (_health.Count >= MaximumCachedHealthSnapshots &&
+                !_health.ContainsKey(profile.Id.Value))
+            {
+                var oldest = _health.OrderBy(static item => item.Value.Snapshot.CheckedUtc).FirstOrDefault();
+                if (oldest.Key == Guid.Empty || !_health.TryRemove(oldest.Key, out _))
+                {
+                    break;
+                }
+            }
+
+            _health[profile.Id.Value] = new CachedConnectionHealth(profile.Version, snapshot);
+        }
+    }
+
     private static AgentIpcCommandResponse StorageListFailure(
         StorageListPageRequest request,
         StorageIpcFailure failure) => AgentIpcCommandResponse.Create(
@@ -621,8 +688,12 @@ public sealed class StorageIpcCommandService : IAgentIpcCommandHandler
                 vaultProvider(),
                 trustStore,
                 secretFileMaterializer,
-                timeProvider));
+            timeProvider));
     }
+
+    private sealed record CachedConnectionHealth(
+        long ProfileVersion,
+        ConnectionHealthSnapshot Snapshot);
 
     private sealed class CodeLogicStorageIpcSessionOpener(
         Func<CodeLogicConnectionProfileConnector> connectorProvider) : IStorageIpcSessionOpener

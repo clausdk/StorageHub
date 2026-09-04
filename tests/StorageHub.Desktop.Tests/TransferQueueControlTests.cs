@@ -22,7 +22,8 @@ public sealed class TransferQueueControlTests
             control.RefreshQueueAsync().GetAwaiter().GetResult();
 
             var tabs = Assert.Single(control.Controls.OfType<TabControl>());
-            Assert.Equal(8, tabs.TabPages.Count);
+            Assert.Equal(7, tabs.TabPages.Count);
+            Assert.DoesNotContain(tabs.TabPages.Cast<TabPage>(), page => page.Text == "Sync Runs");
             var grid = Assert.Single(tabs.SelectedTab!.Controls.OfType<DataGridView>());
             Assert.Single(grid.Rows.Cast<DataGridViewRow>());
             Assert.Equal(1, client.ListCount);
@@ -60,10 +61,47 @@ public sealed class TransferQueueControlTests
 
             foreach (var (name, states) in expected)
             {
-                tabs.SelectedTab = tabs.TabPages.Cast<TabPage>().Single(page => page.Text == name);
+                tabs.SelectedTab = tabs.TabPages.Cast<TabPage>().Single(page => page.Name == name);
                 control.RefreshQueueAsync().GetAwaiter().GetResult();
                 Assert.Equal(states, client.LastStates);
             }
+        });
+    }
+
+    [Fact]
+    public void QueueTabsAndToolbarShowIconsWithoutClippingLabels()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var form = new Form { ClientSize = new Size(1_400, 500) };
+            using var control = new TransferQueueControl(new FakeQueueClient());
+            form.Controls.Add(control);
+            form.Show();
+            System.Windows.Forms.Application.DoEvents();
+
+            var tabs = Assert.Single(control.Controls.OfType<TabControl>());
+            Assert.NotNull(tabs.ImageList);
+            Assert.Equal(7, tabs.ImageList.Images.Count);
+            for (var index = 0; index < tabs.TabPages.Count; index++)
+            {
+                var page = tabs.TabPages[index];
+                Assert.False(string.IsNullOrWhiteSpace(page.ImageKey));
+                var required = TextRenderer.MeasureText(
+                    page.Text,
+                    tabs.Font,
+                    Size.Empty,
+                    TextFormatFlags.NoPadding).Width + tabs.ImageList.ImageSize.Width + 20;
+                Assert.True(tabs.GetTabRect(index).Width >= required, $"The {page.Text} tab is clipped.");
+            }
+
+            var toolbar = Assert.Single(control.Controls.OfType<ToolStrip>());
+            var commandButtons = toolbar.Items.OfType<ToolStripButton>().ToArray();
+            Assert.Equal(["Refresh", "Cancel", "Retry", "Apply", "Next"], commandButtons.Select(button => button.Text));
+            Assert.All(commandButtons, button =>
+            {
+                Assert.Equal(ToolStripItemDisplayStyle.ImageAndText, button.DisplayStyle);
+                Assert.NotNull(button.Image);
+            });
         });
     }
 

@@ -588,7 +588,7 @@ public sealed class SyncDurabilityMigrationTests : IDisposable
         var upgraded = await new StorageHubDatabaseInitializer(options).InitializeAsync();
 
         Assert.True(upgraded.IsReady, upgraded.Message);
-        Assert.Equal(NonAtomicSyncWritesSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
+        Assert.Equal(LocalTransferEndpointsSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
         await using var read = new SqliteConnection($"Data Source={options.DatabasePath};Mode=ReadOnly;Pooling=False");
         await read.OpenAsync();
         await using var count = read.CreateCommand();

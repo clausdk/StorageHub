@@ -177,7 +177,7 @@ public sealed class SshTerminalIpcCommandService : IAgentIpcCommandHandler, IAsy
         SshTerminalOpenRequest request,
         CancellationToken cancellationToken)
     {
-        AuthenticationMethod authentication;
+        AuthenticationMethod[] authenticationMethods;
         PrivateKeyFile? authenticationResource = null;
         var vault = _getVault();
         switch (profile.Authentication)
@@ -186,9 +186,12 @@ public sealed class SshTerminalIpcCommandService : IAgentIpcCommandHandler, IAsy
                 await using (var lease = await vault.OpenAsync(password.PasswordReference, cancellationToken)
                     .ConfigureAwait(false))
                 {
-                    authentication = new PasswordAuthenticationMethod(
-                        password.Username,
-                        Encoding.UTF8.GetString(lease.Memory.Span));
+                    authenticationMethods =
+                    [
+                        new PasswordAuthenticationMethod(
+                            password.Username,
+                            Encoding.UTF8.GetString(lease.Memory.Span))
+                    ];
                 }
                 break;
             case SftpPrivateKeyAuthentication key:
@@ -206,7 +209,37 @@ public sealed class SshTerminalIpcCommandService : IAgentIpcCommandHandler, IAsy
                             keyStream,
                             Encoding.UTF8.GetString(passphraseLease.Memory.Span));
                         authenticationResource = privateKey;
-                        authentication = new PrivateKeyAuthenticationMethod(key.Username, privateKey);
+                        authenticationMethods = [new PrivateKeyAuthenticationMethod(key.Username, privateKey)];
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(keyBytes);
+                    }
+                }
+                break;
+            case SshPrivateKeyPasswordAuthentication mfa:
+                await using (var keyLease = await vault.OpenAsync(mfa.PrivateKeyReference, cancellationToken)
+                    .ConfigureAwait(false))
+                await using (var passphraseLease = await vault.OpenAsync(mfa.PassphraseReference, cancellationToken)
+                    .ConfigureAwait(false))
+                await using (var passwordLease = await vault.OpenAsync(mfa.PasswordReference, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    var keyBytes = keyLease.Memory.ToArray();
+                    try
+                    {
+                        using var keyStream = new MemoryStream(keyBytes, writable: false);
+                        var privateKey = new PrivateKeyFile(
+                            keyStream,
+                            Encoding.UTF8.GetString(passphraseLease.Memory.Span));
+                        authenticationResource = privateKey;
+                        authenticationMethods =
+                        [
+                            new PrivateKeyAuthenticationMethod(mfa.Username, privateKey),
+                            new PasswordAuthenticationMethod(
+                                mfa.Username,
+                                Encoding.UTF8.GetString(passwordLease.Memory.Span))
+                        ];
                     }
                     finally
                     {
@@ -218,19 +251,29 @@ public sealed class SshTerminalIpcCommandService : IAgentIpcCommandHandler, IAsy
                 throw new InvalidDataException("The SSH authentication method is unsupported.");
         }
 
-        var connection = new ConnectionInfo(endpoint.Host, endpoint.Port, GetUsername(profile.Authentication), authentication)
-        {
-            Timeout = profile.OperationalOptions.ConnectTimeout,
-            RetryAttempts = Math.Max(1, profile.OperationalOptions.Retry.MaximumAttempts + 1)
-        };
-        var client = new SshClient(connection);
-        client.HostKeyReceived += (_, args) =>
-        {
-            var fingerprint = $"SHA256:{args.FingerPrintSHA256}";
-            args.CanTrust = trusted.Contains(fingerprint);
-        };
+        SshClient? client = null;
         try
         {
+            var connection = new ConnectionInfo(
+                endpoint.Host,
+                endpoint.Port,
+                GetUsername(profile.Authentication),
+                authenticationMethods)
+            {
+                Timeout = profile.OperationalOptions.ConnectTimeout,
+                RetryAttempts = Math.Max(1, profile.OperationalOptions.Retry.MaximumAttempts + 1)
+            };
+            client = new SshClient(connection)
+            {
+                KeepAliveInterval = request.KeepAliveSeconds == 0
+                    ? TimeSpan.Zero
+                    : TimeSpan.FromSeconds(request.KeepAliveSeconds)
+            };
+            client.HostKeyReceived += (_, args) =>
+            {
+                var fingerprint = $"SHA256:{args.FingerPrintSHA256}";
+                args.CanTrust = trusted.Contains(fingerprint);
+            };
             await client.ConnectAsync(cancellationToken).ConfigureAwait(false);
             var shell = client.CreateShellStream(
                 request.TerminalName,
@@ -239,11 +282,16 @@ public sealed class SshTerminalIpcCommandService : IAgentIpcCommandHandler, IAsy
                 0,
                 0,
                 SshTerminalIpcContract.MaximumChunkBytes);
+            if (!string.IsNullOrWhiteSpace(request.StartupCommand))
+            {
+                shell.Write(request.StartupCommand + "\r");
+                shell.Flush();
+            }
             return new SshTerminalSession(client, shell, authenticationResource);
         }
         catch
         {
-            client.Dispose();
+            client?.Dispose();
             authenticationResource?.Dispose();
             throw;
         }
@@ -381,6 +429,7 @@ public sealed class SshTerminalIpcCommandService : IAgentIpcCommandHandler, IAsy
     {
         UsernamePasswordAuthentication password => password.Username,
         SftpPrivateKeyAuthentication key => key.Username,
+        SshPrivateKeyPasswordAuthentication mfa => mfa.Username,
         _ => throw new InvalidDataException("The SSH username is unavailable.")
     };
 
