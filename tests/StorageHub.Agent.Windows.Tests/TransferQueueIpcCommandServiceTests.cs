@@ -135,6 +135,7 @@ public sealed class TransferQueueIpcCommandServiceTests : IDisposable
         var payload = command.Payload.GetRawText();
 
         Assert.Equal(2, first.Transfers.Length);
+        Assert.Equal(3, first.StateCounts![TransferQueueState.Pending]);
         Assert.Single(second.Transfers);
         Assert.NotNull(first.ContinuationToken);
         Assert.Null(second.ContinuationToken);
@@ -174,6 +175,29 @@ public sealed class TransferQueueIpcCommandServiceTests : IDisposable
         Assert.Equal(TransferQueueState.Cancelled, applied.Transfer?.State);
         Assert.Equal(TransferQueueMutationOutcome.RevisionConflict, stale.Outcome);
         Assert.Equal(applied.Transfer?.Revision, stale.Transfer?.Revision);
+    }
+
+    [Fact]
+    public async Task Clear_history_removes_terminal_jobs_but_not_pending_work()
+    {
+        var fixture = await CreateFixtureAsync();
+        var cancelledRequest = await CreateRequestAsync(fixture);
+        var pendingRequest = await CreateRequestAsync(fixture);
+        var cancelled = await SendAsync<TransferEnqueueRequest, TransferEnqueueResponse>(
+            fixture.Service, TransferQueueIpcMessageTypes.EnqueueRequest, cancelledRequest);
+        _ = await SendAsync<TransferEnqueueRequest, TransferEnqueueResponse>(
+            fixture.Service, TransferQueueIpcMessageTypes.EnqueueRequest, pendingRequest);
+        _ = await SendAsync<TransferCancelRequest, TransferMutationResponse>(
+            fixture.Service, TransferQueueIpcMessageTypes.CancelRequest,
+            new TransferCancelRequest(TransferQueueIpcContract.CurrentVersion, cancelledRequest.TransferId, cancelled.Transfer!.Revision));
+
+        var cleared = await SendAsync<TransferHistoryClearRequest, TransferHistoryClearResponse>(
+            fixture.Service, TransferQueueIpcMessageTypes.ClearHistoryRequest,
+            new TransferHistoryClearRequest(TransferQueueIpcContract.CurrentVersion, [], ClearAll: true));
+
+        Assert.Equal(1, cleared.ClearedCount);
+        Assert.Null(await fixture.Store.FindAsync(new TransferJobId(cancelledRequest.TransferId)));
+        Assert.NotNull(await fixture.Store.FindAsync(new TransferJobId(pendingRequest.TransferId)));
     }
 
     [Fact]

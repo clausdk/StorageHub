@@ -40,7 +40,8 @@ public sealed class TransferQueueIpcCommandService : IAgentIpcCommandHandler
         TransferQueueIpcMessageTypes.StatusRequest or
         TransferQueueIpcMessageTypes.CancelRequest or
         TransferQueueIpcMessageTypes.RetryRequest or
-        TransferQueueIpcMessageTypes.ReconcileRequest;
+        TransferQueueIpcMessageTypes.ReconcileRequest or
+        TransferQueueIpcMessageTypes.ClearHistoryRequest;
 
     public ValueTask<AgentIpcCommandResponse> HandleAsync(
         IpcEnvelope request,
@@ -55,6 +56,7 @@ public sealed class TransferQueueIpcCommandService : IAgentIpcCommandHandler
             TransferQueueIpcMessageTypes.CancelRequest => CancelAsync(request, cancellationToken),
             TransferQueueIpcMessageTypes.RetryRequest => RetryAsync(request, cancellationToken),
             TransferQueueIpcMessageTypes.ReconcileRequest => ReconcileAsync(request, cancellationToken),
+            TransferQueueIpcMessageTypes.ClearHistoryRequest => ClearHistoryAsync(request, cancellationToken),
             _ => ValueTask.FromResult(AgentIpcCommandResponse.Error(
                 "ipc.message.unsupported",
                 "The requested IPC operation is not supported by this agent version."))
@@ -183,12 +185,14 @@ public sealed class TransferQueueIpcCommandService : IAgentIpcCommandHandler
                     .ConfigureAwait(false);
             }
 
+            var counts = await _queries.CountByStateAsync(cancellationToken).ConfigureAwait(false);
             return AgentIpcCommandResponse.Create(
                 TransferQueueIpcMessageTypes.ListResponse,
                 new TransferListResponse(
                     TransferQueueIpcContract.CurrentVersion,
                     transfers,
-                    EncodeCursor(page.Continuation)));
+                    EncodeCursor(page.Continuation),
+                    StateCounts: counts.ToDictionary(pair => Map(pair.Key), pair => pair.Value)));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -197,6 +201,38 @@ public sealed class TransferQueueIpcCommandService : IAgentIpcCommandHandler
         catch (Exception)
         {
             return ListFailure(UnavailableFailure());
+        }
+    }
+
+    private async ValueTask<AgentIpcCommandResponse> ClearHistoryAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        var request = envelope.DeserializePayload<TransferHistoryClearRequest>();
+        var validation = ValidateRequest(request.ContractVersion, request.HasValidBounds);
+        if (validation is not null) return validation;
+        if (_store is not ITransferHistoryStore history)
+        {
+            return AgentIpcCommandResponse.Create(
+                TransferQueueIpcMessageTypes.ClearHistoryResponse,
+                new TransferHistoryClearResponse(TransferQueueIpcContract.CurrentVersion, 0, UnavailableFailure()));
+        }
+        try
+        {
+            var ids = request.ClearAll
+                ? null
+                : request.TransferIds.Select(id => new TransferJobId(id)).ToArray();
+            var cleared = await history.ClearTerminalHistoryAsync(ids, cancellationToken).ConfigureAwait(false);
+            return AgentIpcCommandResponse.Create(
+                TransferQueueIpcMessageTypes.ClearHistoryResponse,
+                new TransferHistoryClearResponse(TransferQueueIpcContract.CurrentVersion, cleared));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            return AgentIpcCommandResponse.Create(
+                TransferQueueIpcMessageTypes.ClearHistoryResponse,
+                new TransferHistoryClearResponse(TransferQueueIpcContract.CurrentVersion, 0, UnavailableFailure()));
         }
     }
 

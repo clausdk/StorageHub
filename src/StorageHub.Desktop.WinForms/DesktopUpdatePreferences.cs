@@ -97,9 +97,11 @@ internal sealed record DesktopUpdatePreferences(
     bool WarnBeforeUnsafeExternalEdit = true,
     IReadOnlyDictionary<string, string>? ConnectionDefaults = null,
     WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide,
-    SshTerminalPreferences? SshTerminal = null)
+    SshTerminalPreferences? SshTerminal = null,
+    bool ReconnectRemotePanesAutomatically = true,
+    bool ConfirmBeforeClearingTransferHistory = true)
 {
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 10;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
@@ -203,7 +205,9 @@ internal sealed class DesktopUpdatePreferencesStore
                         : WorkspaceLayout.SideBySide,
                     document.SchemaVersion >= 8 && document.SshTerminal is not null
                         ? SshTerminalPreferences.Resolve(document.SshTerminal)
-                        : null)
+                        : null,
+                    document.SchemaVersion < 9 || document.ReconnectRemotePanesAutomatically,
+                    document.SchemaVersion < 10 || document.ConfirmBeforeClearingTransferHistory)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -264,7 +268,9 @@ internal sealed class DesktopUpdatePreferencesStore
                 preferences.DefaultWorkspaceLayout,
                 preferences.SshTerminal is null
                     ? null
-                    : SshTerminalPreferences.Resolve(preferences.SshTerminal));
+                    : SshTerminalPreferences.Resolve(preferences.SshTerminal),
+                preferences.ReconnectRemotePanesAutomatically,
+                preferences.ConfirmBeforeClearingTransferHistory);
             using (var stream = new FileStream(
                 temporaryPath,
                 FileMode.CreateNew,
@@ -336,5 +342,7 @@ internal sealed class DesktopUpdatePreferencesStore
         bool WarnBeforeUnsafeExternalEdit = true,
         Dictionary<string, string>? ConnectionDefaults = null,
         WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide,
-        SshTerminalPreferences? SshTerminal = null);
+        SshTerminalPreferences? SshTerminal = null,
+        bool ReconnectRemotePanesAutomatically = true,
+        bool ConfirmBeforeClearingTransferHistory = true);
 }

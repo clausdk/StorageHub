@@ -58,6 +58,7 @@ public sealed class ThemeTests
             var previous = DesktopAppearanceService.EffectiveAppearance;
             DesktopAppearanceService.SetAppearance(appearance);
             using var main = new MainForm();
+            main.AddWorkspace(2);
             main.CreateControl();
             StorageHubTheme.Apply(main, previous);
 

@@ -25,12 +25,14 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _maximumEditableKilobytes;
     private readonly CheckBox _warnBeforeUnsafeExternalEdit;
     private readonly CheckBox _adaptiveConcurrency;
+    private readonly CheckBox _confirmBeforeClearingTransferHistory;
     private readonly NumericUpDown _minimumConcurrency;
     private readonly NumericUpDown _maximumTransferConcurrency;
     private readonly NumericUpDown _perConnectionConcurrency;
     private readonly NumericUpDown _maximumSyncConcurrency;
     private readonly ComboBox _appearance;
     private readonly ComboBox _defaultWorkspaceLayout;
+    private readonly CheckBox _reconnectRemotePanes;
     private readonly ComboBox _sshTerminalName;
     private readonly TextBox _sshStartupCommand;
     private readonly NumericUpDown _sshKeepAliveSeconds;
@@ -110,6 +112,10 @@ public sealed class SettingsForm : Form
             "Automatically tune concurrency from observed speed",
             "Starts at the minimum, increases after sustained healthy throughput, and backs off on slowdown or provider errors.",
             preferences.AdaptiveConcurrency);
+        _confirmBeforeClearingTransferHistory = CreateOption(
+            "Warn before clearing all transfer history",
+            "Shows a confirmation before permanently removing completed, cancelled, and failed transfer records.",
+            preferences.ConfirmBeforeClearingTransferHistory);
         _minimumConcurrency = CreateConcurrencyInput(1, 8, preferences.MinimumConcurrency, "Starting concurrency");
         _maximumTransferConcurrency = CreateConcurrencyInput(1, 32, preferences.MaximumTransferConcurrency, "Maximum concurrent transfers");
         _perConnectionConcurrency = CreateConcurrencyInput(1, 16, preferences.PerConnectionConcurrency, "Maximum transfers per connection");
@@ -137,6 +143,10 @@ public sealed class SettingsForm : Form
             _ => "Side by side"
         };
         _defaultWorkspaceLayout.SelectedItem = preferences.DefaultWorkspaceLayout;
+        _reconnectRemotePanes = CreateOption(
+            "Reconnect remote panes automatically when opening workspace files",
+            "Uses saved profiles to create fresh storage and SSH sessions. Workspace files never contain credentials or terminal contents.",
+            preferences.ReconnectRemotePanesAutomatically);
 
         var terminalPreferences = SshTerminalPreferences.Resolve(preferences.SshTerminal);
         _sshTerminalName = new ComboBox
@@ -360,12 +370,14 @@ public sealed class SettingsForm : Form
         _maximumEditableKilobytes.ValueChanged += MarkDirty;
         _warnBeforeUnsafeExternalEdit.CheckedChanged += MarkDirty;
         _adaptiveConcurrency.CheckedChanged += ConcurrencyChanged;
+        _confirmBeforeClearingTransferHistory.CheckedChanged += MarkDirty;
         _minimumConcurrency.ValueChanged += ConcurrencyChanged;
         _maximumTransferConcurrency.ValueChanged += ConcurrencyChanged;
         _perConnectionConcurrency.ValueChanged += ConcurrencyChanged;
         _maximumSyncConcurrency.ValueChanged += ConcurrencyChanged;
         _appearance.SelectedIndexChanged += AppearanceSelectionChanged;
         _defaultWorkspaceLayout.SelectedIndexChanged += MarkDirty;
+        _reconnectRemotePanes.CheckedChanged += MarkDirty;
         _sshTerminalName.TextChanged += MarkDirty;
         _sshStartupCommand.TextChanged += MarkDirty;
         _sshFontFamily.TextChanged += MarkDirty;
@@ -403,12 +415,14 @@ public sealed class SettingsForm : Form
             _maximumEditableKilobytes.ValueChanged -= MarkDirty;
             _warnBeforeUnsafeExternalEdit.CheckedChanged -= MarkDirty;
             _adaptiveConcurrency.CheckedChanged -= ConcurrencyChanged;
+            _confirmBeforeClearingTransferHistory.CheckedChanged -= MarkDirty;
             _minimumConcurrency.ValueChanged -= ConcurrencyChanged;
             _maximumTransferConcurrency.ValueChanged -= ConcurrencyChanged;
             _perConnectionConcurrency.ValueChanged -= ConcurrencyChanged;
             _maximumSyncConcurrency.ValueChanged -= ConcurrencyChanged;
             _appearance.SelectedIndexChanged -= AppearanceSelectionChanged;
             _defaultWorkspaceLayout.SelectedIndexChanged -= MarkDirty;
+            _reconnectRemotePanes.CheckedChanged -= MarkDirty;
             _sshTerminalName.TextChanged -= MarkDirty;
             _sshStartupCommand.TextChanged -= MarkDirty;
             _sshFontFamily.TextChanged -= MarkDirty;
@@ -437,6 +451,7 @@ public sealed class SettingsForm : Form
             "Concurrency",
             "Control how many transfers and synchronization jobs run at once.");
         page.Controls.Add(_adaptiveConcurrency);
+        page.Controls.Add(_confirmBeforeClearingTransferHistory);
         var table = new TableLayoutPanel
         {
             AutoSize = true,
@@ -884,7 +899,8 @@ public sealed class SettingsForm : Form
         });
         layout.Controls.Add(_defaultWorkspaceLayout);
         layout.Controls.Add(UiControlFactory.CreateDescription(
-            "You can switch layouts from each workspace toolbar."));
+            "Choose the orientation used by two- and three-pane presets."));
+        layout.Controls.Add(_reconnectRemotePanes);
         StyleSettingsSection(layout);
         page.Controls.Add(layout);
         return page;
@@ -1495,7 +1511,9 @@ public sealed class SettingsForm : Form
                 _defaultWorkspaceLayout.SelectedItem is WorkspaceLayout layout
                     ? layout
                     : WorkspaceLayout.SideBySide,
-                ReadSshTerminalPreferences());
+                ReadSshTerminalPreferences(),
+                _reconnectRemotePanes.Checked,
+                _confirmBeforeClearingTransferHistory.Checked);
             if (_saved is null)
             {
                 _store.Save(preferences);

@@ -34,6 +34,7 @@ public sealed class TransferQueueControl : UserControl
 
     private readonly ITransferQueueAgentClient _client;
     private readonly bool _ownsClient;
+    private readonly DesktopUpdatePreferencesStore? _preferencesStore;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly System.Windows.Forms.Timer _pollTimer;
     private readonly TabControl _tabs;
@@ -53,14 +54,28 @@ public sealed class TransferQueueControl : UserControl
     private bool _disposed;
 
     public TransferQueueControl()
-        : this(new NamedPipeTransferQueueAgentClient(), ownsClient: true)
+        : this(new NamedPipeTransferQueueAgentClient(), ownsClient: true, preferencesStore: null)
     {
     }
 
     public TransferQueueControl(ITransferQueueAgentClient client, bool ownsClient = false)
+        : this(client, ownsClient, preferencesStore: null)
+    {
+    }
+
+    internal TransferQueueControl(DesktopUpdatePreferencesStore preferencesStore)
+        : this(new NamedPipeTransferQueueAgentClient(), ownsClient: true, preferencesStore)
+    {
+    }
+
+    private TransferQueueControl(
+        ITransferQueueAgentClient client,
+        bool ownsClient,
+        DesktopUpdatePreferencesStore? preferencesStore)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _ownsClient = ownsClient;
+        _preferencesStore = preferencesStore;
         Dock = DockStyle.Fill;
         BackColor = StorageHubTheme.Surface;
         AccessibleName = "Transfer queue";
@@ -193,13 +208,14 @@ public sealed class TransferQueueControl : UserControl
 
     private void AddQueueTab(QueueTabDefinition definition)
     {
-        var page = new TabPage(definition.Name)
+        var page = new TabPage($"{definition.Name} (0)")
         {
             Name = definition.Name,
             AccessibleName = $"{definition.Name} transfers",
             ImageKey = definition.Name
         };
         var grid = CreateGrid(definition.Name);
+        ConfigureHistoryMenu(grid);
         grid.SelectionChanged += (_, _) => UpdateActionState();
         page.Controls.Add(grid);
         _definitions.Add(page, definition);
@@ -255,6 +271,82 @@ public sealed class TransferQueueControl : UserControl
         grid.Columns[4].FillWeight = 45;
         return grid;
     }
+
+    private void ConfigureHistoryMenu(DataGridView grid)
+    {
+        var menu = new ContextMenuStrip
+        {
+            Renderer = DesktopAppearanceService.MenuRenderer,
+            AccessibleName = "Transfer history commands"
+        };
+        var clearSelected = new ToolStripMenuItem("Clear selected history");
+        var clearAll = new ToolStripMenuItem("Clear all history...");
+        clearSelected.Click += async (_, _) => await ClearSelectedHistoryAsync(grid).ConfigureAwait(true);
+        clearAll.Click += async (_, _) => await ClearAllHistoryAsync().ConfigureAwait(true);
+        menu.Items.Add(clearSelected);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(clearAll);
+        menu.Opening += (_, _) => clearSelected.Enabled = grid.SelectedRows.Cast<DataGridViewRow>()
+            .Select(row => row.Tag)
+            .OfType<TransferQueueSummary>()
+            .Any(IsHistoryState);
+        grid.ContextMenuStrip = menu;
+    }
+
+    private async Task ClearSelectedHistoryAsync(DataGridView grid)
+    {
+        var ids = grid.SelectedRows.Cast<DataGridViewRow>()
+            .Select(row => row.Tag)
+            .OfType<TransferQueueSummary>()
+            .Where(IsHistoryState)
+            .Select(transfer => transfer.TransferId)
+            .Distinct()
+            .Take(TransferQueueIpcLimits.MaximumPageSize)
+            .ToArray();
+        if (ids.Length == 0) return;
+        await ClearHistoryAsync(new TransferHistoryClearRequest(
+            TransferQueueIpcContract.CurrentVersion, ids, ClearAll: false)).ConfigureAwait(true);
+    }
+
+    private async Task ClearAllHistoryAsync()
+    {
+        var preferences = _preferencesStore?.Load() ?? DesktopUpdatePreferences.Defaults;
+        if (preferences.ConfirmBeforeClearingTransferHistory)
+        {
+            using var confirmation = new ClearTransferHistoryConfirmationForm();
+            if (confirmation.ShowDialog(FindForm()) != DialogResult.OK) return;
+            if (confirmation.DontShowAgain && _preferencesStore is not null)
+            {
+                try { _preferencesStore.Save(preferences with { ConfirmBeforeClearingTransferHistory = false }); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+                {
+                    _status.Text = "The warning preference could not be saved.";
+                }
+            }
+        }
+        await ClearHistoryAsync(new TransferHistoryClearRequest(
+            TransferQueueIpcContract.CurrentVersion, [], ClearAll: true)).ConfigureAwait(true);
+    }
+
+    private async Task ClearHistoryAsync(TransferHistoryClearRequest request)
+    {
+        SetBusy(true, "Clearing transfer history...");
+        try
+        {
+            var response = await _client.ClearHistoryAsync(request, _lifetime.Token).ConfigureAwait(true);
+            _status.Text = response.Failure is null
+                ? response.ClearedCount == 0 ? "No transfer history to clear." : $"Cleared {response.ClearedCount:N0} history record(s)."
+                : response.Failure.Message;
+            if (response.Failure is null)
+                await RefreshQueueCoreAsync(resetPage: true, _lifetime.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception) { SetUnavailable(); }
+        finally { SetBusy(false); }
+    }
+
+    private static bool IsHistoryState(TransferQueueSummary transfer) => transfer.State is
+        TransferQueueState.Completed or TransferQueueState.Cancelled or TransferQueueState.Failed;
 
     private ToolStripButton CreateButton(
         UiGlyph glyph,
@@ -445,7 +537,7 @@ public sealed class TransferQueueControl : UserControl
             }
 
             PopulateGrid(_grids[selectedTab], response.Transfers);
-            selectedTab.Text = FormatQueueTabTitle(definition.Name, response.Transfers);
+            UpdateTabCounters(response, definition);
             ConfigureTabSize();
             _nextCursor = response.ContinuationToken;
             _nextButton.Enabled = _nextCursor is not null;
@@ -514,6 +606,18 @@ public sealed class TransferQueueControl : UserControl
                 : FormatBytes(knownTotal)
             : progress > 0 ? FormatBytes(progress) : null;
         return size is null ? $"{name} · {transfers.Count}" : $"{name} · {transfers.Count} · {size}";
+    }
+
+    private void UpdateTabCounters(TransferListResponse response, QueueTabDefinition selectedDefinition)
+    {
+        foreach (var (page, definition) in _definitions)
+        {
+            var count = response.StateCounts is null
+                ? definition == selectedDefinition ? response.Transfers.Length : 0
+                : definition.States.Sum(state => response.StateCounts.GetValueOrDefault(state));
+            page.Text = $"{definition.Name} ({count:N0})";
+            page.AccessibleDescription = $"{count:N0} {definition.Name.ToLowerInvariant()} transfers";
+        }
     }
 
     private static string FormatBytes(long value) => value switch
@@ -617,4 +721,56 @@ public sealed class TransferQueueControl : UserControl
     }
 
     private sealed record QueueTabDefinition(string Name, UiGlyph Glyph, TransferQueueState[] States);
+}
+
+internal sealed class ClearTransferHistoryConfirmationForm : Form
+{
+    private readonly CheckBox _dontShowAgain;
+
+    internal ClearTransferHistoryConfirmationForm()
+    {
+        Text = "Clear all transfer history?";
+        AccessibleName = "Clear all transfer history warning";
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ClientSize = new Size(500, 190);
+        var message = new Label
+        {
+            AutoSize = false,
+            Location = new Point(18, 18),
+            Size = new Size(464, 70),
+            Text = "This permanently removes all completed, cancelled, and failed transfer records. Active, queued, paused, and conflicted transfers are not affected.",
+            ForeColor = StorageHubTheme.Text
+        };
+        _dontShowAgain = new CheckBox
+        {
+            Text = "Don't show this warning again",
+            AutoSize = true,
+            Location = new Point(18, 100)
+        };
+        var clear = new Button
+        {
+            Text = "Clear history",
+            DialogResult = DialogResult.OK,
+            Location = new Point(282, 140),
+            Size = new Size(100, 32)
+        };
+        var cancel = new Button
+        {
+            Text = "Cancel",
+            DialogResult = DialogResult.Cancel,
+            Location = new Point(392, 140),
+            Size = new Size(90, 32)
+        };
+        StorageHubTheme.StylePrimaryButton(clear);
+        clear.BackColor = StorageHubTheme.Danger;
+        StorageHubTheme.StyleSecondaryButton(cancel);
+        Controls.AddRange([message, _dontShowAgain, clear, cancel]);
+        AcceptButton = clear;
+        CancelButton = cancel;
+    }
+
+    internal bool DontShowAgain => _dontShowAgain.Checked;
 }

@@ -527,6 +527,19 @@ public interface ITransferQueueQueryStore
     ValueTask<TransferQueuePage> ListAsync(
         TransferQueueQuery query,
         CancellationToken cancellationToken = default);
+
+    ValueTask<IReadOnlyDictionary<TransferState, int>> CountByStateAsync(
+        CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult<IReadOnlyDictionary<TransferState, int>>(
+            new Dictionary<TransferState, int>());
+}
+
+/// <summary>Administrative deletion of terminal transfer history only.</summary>
+public interface ITransferHistoryStore
+{
+    ValueTask<int> ClearTerminalHistoryAsync(
+        IReadOnlyCollection<TransferJobId>? transferJobIds = null,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record TransferQueueQuery

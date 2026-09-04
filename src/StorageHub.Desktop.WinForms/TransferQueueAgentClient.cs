@@ -30,6 +30,11 @@ public interface ITransferQueueAgentClient : IAsyncDisposable
         TransferReconcileRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<TransferHistoryClearResponse> ClearHistoryAsync(
+        TransferHistoryClearRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This transfer client does not support clearing history.");
+
     Task<ShellImportPlanResponse> PlanShellImportAsync(
         ShellImportPlanRequest request,
         CancellationToken cancellationToken = default) => throw new NotSupportedException("This transfer client does not support shell imports.");
@@ -160,6 +165,24 @@ public sealed class NamedPipeTransferQueueAgentClient : ITransferQueueAgentClien
             TransferQueueIpcMessageTypes.ReconcileResponse,
             request,
             request.TransferId,
+            cancellationToken);
+    }
+
+    public Task<TransferHistoryClearResponse> ClearHistoryAsync(
+        TransferHistoryClearRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequest(request.ContractVersion, request.HasValidBounds, nameof(request));
+        return ExecuteAsync<TransferHistoryClearRequest, TransferHistoryClearResponse>(
+            TransferQueueIpcMessageTypes.ClearHistoryRequest,
+            TransferQueueIpcMessageTypes.ClearHistoryResponse,
+            request,
+            response =>
+            {
+                ValidateContract(response.ContractVersion);
+                if (response.ClearedCount < 0 || !IsValidFailure(response.Failure)) throw InvalidResponse();
+            },
             cancellationToken);
     }
 
@@ -456,7 +479,8 @@ public sealed class NamedPipeTransferQueueAgentClient : ITransferQueueAgentClien
                 !IsValidSummary(transfer) ||
                 !request.States.Contains(transfer.State)) ||
             response.Transfers.Select(static transfer => transfer.TransferId).Distinct().Count() !=
-                response.Transfers.Length)
+                response.Transfers.Length ||
+            response.StateCounts is not null && response.StateCounts.Any(pair => !Enum.IsDefined(pair.Key) || pair.Value < 0))
         {
             throw InvalidResponse();
         }

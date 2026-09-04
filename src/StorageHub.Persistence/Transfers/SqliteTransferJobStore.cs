@@ -13,7 +13,7 @@ namespace StorageHub.Persistence.Transfers;
 /// Durable SQLite transfer queue. Every owner mutation is fenced by the monotonically increasing
 /// owner epoch and by lease expiry; state and checkpoint updates additionally use revision CAS.
 /// </summary>
-public sealed class SqliteTransferJobStore : ITransferJobStore, ITransferQueueQueryStore
+public sealed class SqliteTransferJobStore : ITransferJobStore, ITransferQueueQueryStore, ITransferHistoryStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -139,6 +139,51 @@ public sealed class SqliteTransferJobStore : ITransferJobStore, ITransferQueueQu
         }
 
         return new TransferQueuePage(jobs, continuation);
+    }
+
+    public async ValueTask<IReadOnlyDictionary<TransferState, int>> CountByStateAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _database.OpenReadConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT state, COUNT(*) FROM transfer_jobs GROUP BY state;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var counts = new Dictionary<TransferState, int>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var state = ParseEnum<TransferState>(reader.GetString(0), "transfer state");
+            counts[state] = reader.GetInt32(1);
+        }
+        return counts;
+    }
+
+    public async ValueTask<int> ClearTerminalHistoryAsync(
+        IReadOnlyCollection<TransferJobId>? transferJobIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (transferJobIds?.Any(id => id.IsEmpty) == true)
+            throw new ArgumentException("Transfer history IDs cannot be empty.", nameof(transferJobIds));
+        await using var writer = await _database.AcquireWriterAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = writer.Connection.CreateCommand();
+        var idFilter = string.Empty;
+        if (transferJobIds is { Count: > 0 })
+        {
+            var parameters = transferJobIds.Select((id, index) =>
+            {
+                var name = $"$id{index.ToString(CultureInfo.InvariantCulture)}";
+                command.Parameters.AddWithValue(name, id.ToString());
+                return name;
+            }).ToArray();
+            idFilter = $" AND transfer_job_id IN ({string.Join(", ", parameters)})";
+        }
+        command.CommandText = $"""
+            DELETE FROM transfer_jobs
+            WHERE state IN ($completed, $cancelled, $failed){idFilter};
+            """;
+        command.Parameters.AddWithValue("$completed", FormatEnum(TransferState.Completed));
+        command.Parameters.AddWithValue("$cancelled", FormatEnum(TransferState.Cancelled));
+        command.Parameters.AddWithValue("$failed", FormatEnum(TransferState.Failed));
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<TransferJobClaim?> TryClaimNextAsync(

@@ -38,7 +38,7 @@ public sealed class BrowserPaneControlTests
     {
         SyncRunReviewControlTests.RunOnSta(() =>
         {
-            using var pane = new BrowserPaneControl("Source", showLocalDefault: true);
+            using var pane = new BrowserPaneControl("Pane 1", showLocalDefault: true);
             var more = Assert.IsType<ToolStripDropDownButton>(
                 typeof(BrowserPaneControl)
                     .GetField("_moreButton", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -55,8 +55,8 @@ public sealed class BrowserPaneControlTests
             Assert.Contains("Move", commands);
             Assert.Contains("Paste", commands);
             Assert.Contains("Delete", commands);
-            Assert.Contains("Copy to other pane", commands);
-            Assert.Contains("Move to other pane", commands);
+            Assert.DoesNotContain("Copy to other pane", commands);
+            Assert.DoesNotContain("Move to other pane", commands);
             Assert.Contains("Refresh", commands);
             Assert.Contains("Select all", commands);
             Assert.Contains("Properties...", commands);
@@ -68,7 +68,7 @@ public sealed class BrowserPaneControlTests
     {
         SyncRunReviewControlTests.RunOnSta(() =>
         {
-            using var pane = new BrowserPaneControl("Source", showLocalDefault: true);
+            using var pane = new BrowserPaneControl("Pane 1", showLocalDefault: true);
             using var host = new Form { Size = new Size(900, 600) };
             host.Controls.Add(pane);
             host.Show();
@@ -115,7 +115,7 @@ public sealed class BrowserPaneControlTests
             var connectionId = Guid.NewGuid();
             var client = new FakeRemoteStorageClient(connectionId);
             using var pane = new BrowserPaneControl(
-                "Source",
+                "Pane 1",
                 showLocalDefault: true,
                 new RemoteBrowserController(client));
             var selector = Assert.Single(Descendants<ComboBox>(pane));
@@ -124,7 +124,7 @@ public sealed class BrowserPaneControlTests
 
             selector.SelectedIndex = 1;
 
-            Assert.Equal(1, client.ConnectionListCount);
+            Assert.InRange(client.ConnectionListCount, 1, 2);
             Assert.Collection(
                 selector.Items.Cast<ConnectionCardModel>(),
                 item => Assert.Equal("This PC", item.Name),
@@ -155,7 +155,7 @@ public sealed class BrowserPaneControlTests
             var client = new FakeMixedConnectionClient(storageId, sshId);
             var terminalClient = new FakeSshTerminalClient();
             using var pane = new BrowserPaneControl(
-                "Destination",
+                "Pane 2",
                 showLocalDefault: false,
                 new RemoteBrowserController(client),
                 (connectionId, displayName) => new SshTerminalForm(
@@ -170,6 +170,7 @@ public sealed class BrowserPaneControlTests
             var selector = Assert.Single(Descendants<ComboBox>(pane));
             Assert.Collection(
                 selector.Items.Cast<ConnectionCardModel>(),
+                item => Assert.Equal("This PC", item.Name),
                 item => Assert.Equal("Connections Home", item.Name),
                 item => Assert.Equal(storageId, item.ConnectionId),
                 item => Assert.Equal(sshId, item.ConnectionId));

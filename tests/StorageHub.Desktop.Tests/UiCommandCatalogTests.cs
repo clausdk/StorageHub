@@ -6,7 +6,7 @@ public sealed class UiCommandCatalogTests
     public void TopMenusMatchTheProductNavigationContract()
     {
         Assert.Equal(
-            ["File", "Edit", "View", "Go", "Connections", "Transfer", "Sync", "Tools", "Help"],
+            ["Workspace", "Edit", "View", "Go", "Connections", "Transfer", "Sync", "Tools", "Help"],
             UiCommandCatalog.TopMenus);
     }
 
@@ -31,7 +31,9 @@ public sealed class UiCommandCatalogTests
     }
 
     [Theory]
-    [InlineData("File", "New Workspace Tab", Keys.Control | Keys.T)]
+    [InlineData("Workspace", "New Workspace...", Keys.Control | Keys.T)]
+    [InlineData("Workspace", "Open Workspace...", Keys.Control | Keys.O)]
+    [InlineData("Workspace", "Save Workspace", Keys.Control | Keys.S)]
     [InlineData("View", "Refresh", Keys.F5)]
     [InlineData("Connections", "Quick Connect...", Keys.Control | Keys.K)]
     [InlineData("Sync", "Compare Panes", Keys.Control | Keys.D)]
