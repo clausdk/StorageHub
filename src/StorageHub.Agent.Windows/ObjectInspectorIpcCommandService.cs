@@ -32,6 +32,9 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
         EditableFileIpcMessageTypes.DownloadRequest or
         EditableFileIpcMessageTypes.UploadRequest or
         EditableFileIpcMessageTypes.DirectoryEnsureRequest or
+        EditableFileIpcMessageTypes.DirectoryCreateRequest or
+        EditableFileIpcMessageTypes.FileCreateRequest or
+        EditableFileIpcMessageTypes.RenameRequest or
         EditableFileIpcMessageTypes.DeleteRequest;
 
     public ValueTask<AgentIpcCommandResponse> HandleAsync(
@@ -53,6 +56,12 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
                 UploadEditedFileAsync(request, cancellationToken),
             EditableFileIpcMessageTypes.DirectoryEnsureRequest =>
                 EnsureDirectoryAsync(request, cancellationToken),
+            EditableFileIpcMessageTypes.DirectoryCreateRequest =>
+                CreateDirectoryAsync(request, cancellationToken),
+            EditableFileIpcMessageTypes.FileCreateRequest =>
+                CreateFileAsync(request, cancellationToken),
+            EditableFileIpcMessageTypes.RenameRequest =>
+                RenameItemAsync(request, cancellationToken),
             EditableFileIpcMessageTypes.DeleteRequest =>
                 DeleteItemAsync(request, cancellationToken),
             _ => ValueTask.FromResult(AgentIpcCommandResponse.Error(
@@ -605,6 +614,137 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
         return new AddressValidation(address.Value, null);
     }
 
+    private async ValueTask<AgentIpcCommandResponse> CreateDirectoryAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        StorageDirectoryCreateRequest request;
+        try { request = envelope.DeserializePayload<StorageDirectoryCreateRequest>(); }
+        catch (JsonException) { return InvalidPayload(); }
+        if (!request.HasValidBounds) return InvalidRequest(request.ContractVersion);
+
+        try
+        {
+            var opened = await _connector.OpenAsync(new ConnectionProfileId(request.Address.ConnectionId), cancellationToken)
+                .ConfigureAwait(false);
+            if (opened.IsFailure) return CreateDirectoryFailure(request, SanitizeFailure(opened.Error));
+            await using var connection = opened.Value;
+            var validated = ValidateAndCreateAddress(connection.Session, request.Address);
+            if (validated.Failure is not null) return CreateDirectoryFailure(request, validated.Failure);
+
+            var existing = await connection.Session.GetEntryAsync(validated.Address!, cancellationToken).ConfigureAwait(false);
+            if (existing.IsSuccess)
+            {
+                return CreateDirectoryFailure(request, Conflict("An item already uses that folder name."));
+            }
+            if (existing.Error.Kind != StorageFailureKind.NotFound)
+            {
+                return CreateDirectoryFailure(request, SanitizeFailure(existing.Error));
+            }
+            if (!connection.Session.Capabilities.Supports(StorageFeature.CreateDirectory))
+            {
+                return CreateDirectoryFailure(request, Unsupported("This provider does not support creating explicit folders."));
+            }
+
+            var created = await connection.Session.CreateDirectoryAsync(validated.Address!, cancellationToken).ConfigureAwait(false);
+            return created.IsSuccess
+                ? CreateDirectorySuccess(request)
+                : CreateDirectoryFailure(request, SanitizeFailure(created.Error));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception) { return CreateDirectoryFailure(request, InspectorUnavailable()); }
+    }
+
+    private async ValueTask<AgentIpcCommandResponse> CreateFileAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        StorageFileCreateRequest request;
+        try { request = envelope.DeserializePayload<StorageFileCreateRequest>(); }
+        catch (JsonException) { return InvalidPayload(); }
+        if (!request.HasValidBounds) return InvalidRequest(request.ContractVersion);
+
+        try
+        {
+            var opened = await _connector.OpenAsync(new ConnectionProfileId(request.Address.ConnectionId), cancellationToken)
+                .ConfigureAwait(false);
+            if (opened.IsFailure) return CreateFileFailure(request, SanitizeFailure(opened.Error));
+            await using var connection = opened.Value;
+            var validated = ValidateAndCreateAddress(connection.Session, request.Address);
+            if (validated.Failure is not null) return CreateFileFailure(request, validated.Failure);
+            if (!connection.Session.Capabilities.Supports(StorageFeature.ConditionalCreate))
+            {
+                return CreateFileFailure(request, Unsupported(
+                    "This provider cannot safely create a new empty file without overwriting an existing item."));
+            }
+
+            var openedWrite = await connection.Session.OpenWriteAsync(
+                new StorageWriteRequest(validated.Address!, StorageWriteMode.CreateNew, expectedLength: 0),
+                cancellationToken).ConfigureAwait(false);
+            if (openedWrite.IsFailure) return CreateFileFailure(request, SanitizeFailure(openedWrite.Error));
+            await using var write = openedWrite.Value;
+            var committed = await write.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return committed.IsSuccess
+                ? CreateFileSuccess(request)
+                : CreateFileFailure(request, SanitizeFailure(committed.Error));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception) { return CreateFileFailure(request, InspectorUnavailable()); }
+    }
+
+    private async ValueTask<AgentIpcCommandResponse> RenameItemAsync(
+        IpcEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        StorageItemRenameRequest request;
+        try { request = envelope.DeserializePayload<StorageItemRenameRequest>(); }
+        catch (JsonException) { return InvalidPayload(); }
+        if (!request.HasValidBounds || !SameParent(request.Source.RelativePath, request.Destination.RelativePath))
+            return InvalidRequest(request.ContractVersion);
+
+        try
+        {
+            var opened = await _connector.OpenAsync(new ConnectionProfileId(request.Source.ConnectionId), cancellationToken)
+                .ConfigureAwait(false);
+            if (opened.IsFailure) return RenameFailure(request, SanitizeFailure(opened.Error));
+            await using var connection = opened.Value;
+            var source = ValidateAndCreateAddress(connection.Session, request.Source);
+            var destination = ValidateAndCreateAddress(connection.Session, request.Destination);
+            if (source.Failure is not null) return RenameFailure(request, source.Failure);
+            if (destination.Failure is not null) return RenameFailure(request, destination.Failure);
+
+            var sourceEntry = await connection.Session.GetEntryAsync(source.Address!, cancellationToken).ConfigureAwait(false);
+            if (sourceEntry.IsFailure) return RenameFailure(request, SanitizeFailure(sourceEntry.Error));
+            var required = sourceEntry.Value.Kind is StorageEntryKind.Directory or StorageEntryKind.Prefix
+                ? StorageFeature.DirectoryMove : StorageFeature.FileMove;
+            if (!connection.Session.Capabilities.Supports(required))
+                return RenameFailure(request, Unsupported("This provider does not support renaming this type of item."));
+
+            var moved = await connection.Session.MoveAsync(
+                new StorageMoveRequest(source.Address!, destination.Address!, Overwrite: false),
+                cancellationToken).ConfigureAwait(false);
+            return moved.IsSuccess ? RenameSuccess(request) : RenameFailure(request, SanitizeFailure(moved.Error));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception) { return RenameFailure(request, InspectorUnavailable()); }
+    }
+
+    private static bool SameParent(string source, string destination) =>
+        string.Equals(Parent(source), Parent(destination), StringComparison.Ordinal) &&
+        destination[(destination.LastIndexOf('/') + 1)..].Length > 0;
+
+    private static string Parent(string path)
+    {
+        var separator = path.LastIndexOf('/');
+        return separator < 0 ? string.Empty : path[..separator];
+    }
+
+    private static StorageIpcFailure Conflict(string message) =>
+        new("storage.item.conflict", StorageIpcFailureCategory.Conflict, message, IsTransient: false);
+
+    private static StorageIpcFailure Unsupported(string message) =>
+        new("storage.item.unsupported", StorageIpcFailureCategory.Unsupported, message, IsTransient: false);
+
     private async ValueTask<AgentIpcCommandResponse> DeleteItemAsync(
         IpcEnvelope envelope,
         CancellationToken cancellationToken)
@@ -888,6 +1028,30 @@ public sealed class ObjectInspectorIpcCommandService : IAgentIpcCommandHandler
             request.Address,
             Deleted: false,
             failure));
+
+    private static AgentIpcCommandResponse CreateDirectorySuccess(StorageDirectoryCreateRequest request) =>
+        AgentIpcCommandResponse.Create(EditableFileIpcMessageTypes.DirectoryCreateResponse,
+            new StorageDirectoryCreateResponse(request.ContractVersion, request.Address, Created: true));
+
+    private static AgentIpcCommandResponse CreateDirectoryFailure(StorageDirectoryCreateRequest request, StorageIpcFailure failure) =>
+        AgentIpcCommandResponse.Create(EditableFileIpcMessageTypes.DirectoryCreateResponse,
+            new StorageDirectoryCreateResponse(request.ContractVersion, request.Address, Created: false, failure));
+
+    private static AgentIpcCommandResponse CreateFileSuccess(StorageFileCreateRequest request) =>
+        AgentIpcCommandResponse.Create(EditableFileIpcMessageTypes.FileCreateResponse,
+            new StorageFileCreateResponse(request.ContractVersion, request.Address, Created: true));
+
+    private static AgentIpcCommandResponse CreateFileFailure(StorageFileCreateRequest request, StorageIpcFailure failure) =>
+        AgentIpcCommandResponse.Create(EditableFileIpcMessageTypes.FileCreateResponse,
+            new StorageFileCreateResponse(request.ContractVersion, request.Address, Created: false, failure));
+
+    private static AgentIpcCommandResponse RenameSuccess(StorageItemRenameRequest request) =>
+        AgentIpcCommandResponse.Create(EditableFileIpcMessageTypes.RenameResponse,
+            new StorageItemRenameResponse(request.ContractVersion, request.Source, request.Destination, Renamed: true));
+
+    private static AgentIpcCommandResponse RenameFailure(StorageItemRenameRequest request, StorageIpcFailure failure) =>
+        AgentIpcCommandResponse.Create(EditableFileIpcMessageTypes.RenameResponse,
+            new StorageItemRenameResponse(request.ContractVersion, request.Source, request.Destination, Renamed: false, failure));
 
     private sealed record AddressValidation(StorageAddress? Address, StorageIpcFailure? Failure);
 }

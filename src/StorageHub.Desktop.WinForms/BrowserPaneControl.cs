@@ -40,6 +40,7 @@ public sealed class BrowserPaneControl : UserControl
     private readonly ToolStripTextBox _addressBox;
     private readonly ToolStripTextBox _filterBox;
     private readonly ToolStrip _fileCommands;
+    private readonly ToolStripButton _newFolderButton;
     private readonly ToolStripButton _copyButton;
     private readonly ToolStripButton _moveButton;
     private readonly ToolStripButton _pasteButton;
@@ -323,14 +324,18 @@ public sealed class BrowserPaneControl : UserControl
             Font = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold)
         });
         _fileCommands.Items.Add(new ToolStripSeparator());
+        _newFolderButton = CreateCommandButton(UiGlyph.Folder, "New folder", "Create a folder in this location");
         _copyButton = CreateCommandButton(UiGlyph.File, "Copy", "Stage selected items for copying");
         _moveButton = CreateCommandButton(UiGlyph.Forward, "Move", "Stage selected items for moving");
         _pasteButton = CreateCommandButton(UiGlyph.Save, "Paste", "Review and paste the StorageHub clipboard here");
         _deleteButton = CreateCommandButton(UiGlyph.Delete, "Delete", "Review and delete selected items");
+        _newFolderButton.Click += (_, _) => NewFolderRequested?.Invoke(this, EventArgs.Empty);
         _copyButton.Click += (_, _) => StageSelection(TransferQueueOperation.Copy);
         _moveButton.Click += (_, _) => StageSelection(TransferQueueOperation.Move);
         _pasteButton.Click += (_, _) => PasteRequested?.Invoke(this, EventArgs.Empty);
         _deleteButton.Click += (_, _) => DeleteRequested?.Invoke(this, EventArgs.Empty);
+        _fileCommands.Items.Add(_newFolderButton);
+        _fileCommands.Items.Add(new ToolStripSeparator());
         _fileCommands.Items.Add(_copyButton);
         _fileCommands.Items.Add(_moveButton);
         _fileCommands.Items.Add(_pasteButton);
@@ -393,31 +398,47 @@ public sealed class BrowserPaneControl : UserControl
         _fileContextMenu = new ContextMenuStrip
         {
             Renderer = DesktopAppearanceService.MenuRenderer,
-            AccessibleName = $"{title} transfer commands",
+            AccessibleName = $"{title} file commands",
         };
         var open = CreateContextMenuItem("Open", UiGlyph.Folder);
+        var newFolder = CreateContextMenuItem("New folder", UiGlyph.Folder, "Ctrl+Shift+N");
+        var newFile = CreateContextMenuItem("New empty file...", UiGlyph.File);
         var edit = CreateContextMenuItem("Edit in external editor...", UiGlyph.File);
+        var rename = CreateContextMenuItem("Rename", UiGlyph.File, "F2");
+        var batchRename = CreateContextMenuItem("Batch rename...", UiGlyph.File);
         var copy = CreateContextMenuItem("Copy", UiGlyph.File, "Ctrl+C");
         var cut = CreateContextMenuItem("Cut", UiGlyph.Forward, "Ctrl+X");
         var paste = CreateContextMenuItem("Paste", UiGlyph.Save, "Ctrl+V");
+        var delete = CreateContextMenuItem("Delete", UiGlyph.Delete, "Delete");
         var refresh = CreateContextMenuItem("Refresh", UiGlyph.Refresh, "F5");
         var selectAll = CreateContextMenuItem("Select all", UiGlyph.Test, "Ctrl+A");
         var inspectObject = CreateContextMenuItem("Properties...", UiGlyph.Info);
         open.Font = new Font(open.Font, FontStyle.Bold);
         open.Click += (_, _) => OpenOrEditSelected();
+        newFolder.Click += (_, _) => NewFolderRequested?.Invoke(this, EventArgs.Empty);
+        newFile.Click += (_, _) => NewFileRequested?.Invoke(this, EventArgs.Empty);
         edit.Click += (_, _) => RaiseEditRequested();
+        rename.Click += (_, _) => RenameRequested?.Invoke(this, EventArgs.Empty);
+        batchRename.Click += (_, _) => BatchRenameRequested?.Invoke(this, EventArgs.Empty);
         copy.Click += (_, _) => StageSelection(TransferQueueOperation.Copy);
         cut.Click += (_, _) => StageSelection(TransferQueueOperation.Move);
         paste.Click += (_, _) => PasteRequested?.Invoke(this, EventArgs.Empty);
+        delete.Click += (_, _) => DeleteRequested?.Invoke(this, EventArgs.Empty);
         refresh.Click += (_, _) => Reload();
         selectAll.Click += (_, _) => SelectAllVisibleItems();
         inspectObject.Click += (_, _) => ObjectInspectionRequested?.Invoke(this, EventArgs.Empty);
+        _fileContextMenu.Items.Add(newFolder);
+        _fileContextMenu.Items.Add(newFile);
+        _fileContextMenu.Items.Add(new ToolStripSeparator());
         _fileContextMenu.Items.Add(open);
         _fileContextMenu.Items.Add(edit);
+        _fileContextMenu.Items.Add(rename);
+        _fileContextMenu.Items.Add(batchRename);
         _fileContextMenu.Items.Add(new ToolStripSeparator());
         _fileContextMenu.Items.Add(copy);
         _fileContextMenu.Items.Add(cut);
         _fileContextMenu.Items.Add(paste);
+        _fileContextMenu.Items.Add(delete);
         _fileContextMenu.Items.Add(new ToolStripSeparator());
         _fileContextMenu.Items.Add(refresh);
         _fileContextMenu.Items.Add(selectAll);
@@ -432,14 +453,21 @@ public sealed class BrowserPaneControl : UserControl
                 : null;
             var selectedContainer = selectedItem is { IsContainer: true };
             var selectedParent = selectedItem is { IsParentNavigation: true };
+            var canCreate = CanMutateCurrentLocation();
+            newFolder.Enabled = canCreate;
+            newFile.Enabled = canCreate;
             open.Enabled = singleSelection;
             open.Text = selectedParent
                 ? "Go up one level"
                 : selectedContainer ? "Open" : "Open in external editor...";
             edit.Enabled = singleSelection && !selectedContainer && !selectedParent;
+            rename.Enabled = singleSelection && !selectedParent;
+            batchRename.Enabled = _fileList.SelectedIndices.Cast<int>()
+                .Count(index => (uint)index < (uint)_items.Count && !_items[index].IsParentNavigation) > 1;
             copy.Enabled = hasSelection;
             cut.Enabled = hasSelection;
             paste.Enabled = CanPaste?.Invoke() == true;
+            delete.Enabled = hasSelection;
             selectAll.Enabled = _items.Any(static item => !item.IsParentNavigation);
             inspectObject.Enabled = singleSelection && !selectedParent;
         };
@@ -541,6 +569,14 @@ public sealed class BrowserPaneControl : UserControl
     public event EventHandler? PasteRequested;
 
     public event EventHandler? DeleteRequested;
+
+    public event EventHandler? NewFolderRequested;
+
+    public event EventHandler? NewFileRequested;
+
+    public event EventHandler? RenameRequested;
+
+    public event EventHandler? BatchRenameRequested;
 
     public event EventHandler? EditRequested;
 
@@ -731,6 +767,9 @@ public sealed class BrowserPaneControl : UserControl
         return PaneSelectionSnapshot.Create(context.Value, items);
     }
 
+    /// <summary>Captures the current mutable storage location without requiring a selection.</summary>
+    public StorageResult<PaneTransferContext> CaptureCurrentLocation() => CaptureTransferContext();
+
     public StorageResult<PaneDestinationSnapshot> CaptureDestinationSnapshot(
         IReadOnlyCollection<string>? relevantNames = null)
     {
@@ -854,6 +893,7 @@ public sealed class BrowserPaneControl : UserControl
         _moveButton.Enabled = hasSelection;
         _deleteButton.Enabled = hasSelection;
         _pasteButton.Enabled = storageVisible && CanPaste?.Invoke() == true;
+        _newFolderButton.Enabled = storageVisible && CanMutateCurrentLocation();
         _moreButton.Enabled = storageVisible;
     }
 
@@ -875,6 +915,22 @@ public sealed class BrowserPaneControl : UserControl
         {
             _fileList.EndUpdate();
         }
+    }
+
+    /// <summary>Inverts selection for every visible non-navigation item.</summary>
+    public void InvertVisibleSelection()
+    {
+        _fileList.BeginUpdate();
+        try
+        {
+            for (var index = 0; index < _fileList.VirtualListSize; index++)
+            {
+                if ((uint)index >= (uint)_items.Count || _items[index].IsParentNavigation) continue;
+                if (_fileList.SelectedIndices.Contains(index)) _fileList.SelectedIndices.Remove(index);
+                else _fileList.SelectedIndices.Add(index);
+            }
+        }
+        finally { _fileList.EndUpdate(); }
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -2348,6 +2404,42 @@ public sealed class BrowserPaneControl : UserControl
             return;
         }
 
+        if (e.Control && e.Shift && e.KeyCode == Keys.N)
+        {
+            e.Handled = e.SuppressKeyPress = true;
+            if (CanMutateCurrentLocation()) NewFolderRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        if (e.Control && e.KeyCode == Keys.A)
+        {
+            e.Handled = e.SuppressKeyPress = true;
+            SelectAllVisibleItems();
+            return;
+        }
+
+        if (e.Control && e.KeyCode == Keys.I)
+        {
+            e.Handled = e.SuppressKeyPress = true;
+            InvertVisibleSelection();
+            return;
+        }
+
+        if (e.KeyCode == Keys.Delete)
+        {
+            e.Handled = e.SuppressKeyPress = true;
+            if (HasTransferableSelection()) DeleteRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        if (e.KeyCode == Keys.F2)
+        {
+            e.Handled = e.SuppressKeyPress = true;
+            if (HasTransferableSelection() && _fileList.SelectedIndices.Count == 1)
+                RenameRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
         if (e.KeyCode != Keys.Enter)
         {
             return;
@@ -2636,7 +2728,11 @@ public sealed class BrowserPaneControl : UserControl
         };
 
         var open = CreateContextMenuItem("Open", UiGlyph.Folder);
+        var newFolder = CreateContextMenuItem("New folder", UiGlyph.Folder, "Ctrl+Shift+N");
+        var newFile = CreateContextMenuItem("New empty file...", UiGlyph.File);
         var edit = CreateContextMenuItem("Edit in external editor...", UiGlyph.File);
+        var rename = CreateContextMenuItem("Rename", UiGlyph.File, "F2");
+        var batchRename = CreateContextMenuItem("Batch rename...", UiGlyph.File);
         var copy = CreateContextMenuItem("Copy", UiGlyph.File, "Ctrl+C");
         var move = CreateContextMenuItem("Move", UiGlyph.Forward, "Ctrl+X");
         var paste = CreateContextMenuItem("Paste", UiGlyph.Save, "Ctrl+V");
@@ -2644,20 +2740,31 @@ public sealed class BrowserPaneControl : UserControl
         var refresh = CreateContextMenuItem("Refresh", UiGlyph.Refresh, "F5");
         var selectAll = CreateContextMenuItem("Select all", UiGlyph.Test, "Ctrl+A");
         var properties = CreateContextMenuItem("Properties...", UiGlyph.Info);
+        var invertSelection = CreateContextMenuItem("Invert selection", UiGlyph.Test, "Ctrl+I");
 
         open.Font = new Font(open.Font, FontStyle.Bold);
         open.Click += (_, _) => OpenOrEditSelected();
+        newFolder.Click += (_, _) => NewFolderRequested?.Invoke(this, EventArgs.Empty);
+        newFile.Click += (_, _) => NewFileRequested?.Invoke(this, EventArgs.Empty);
         edit.Click += (_, _) => RaiseEditRequested();
+        rename.Click += (_, _) => RenameRequested?.Invoke(this, EventArgs.Empty);
+        batchRename.Click += (_, _) => BatchRenameRequested?.Invoke(this, EventArgs.Empty);
         copy.Click += (_, _) => StageSelection(TransferQueueOperation.Copy);
         move.Click += (_, _) => StageSelection(TransferQueueOperation.Move);
         paste.Click += (_, _) => PasteRequested?.Invoke(this, EventArgs.Empty);
         delete.Click += (_, _) => DeleteRequested?.Invoke(this, EventArgs.Empty);
         refresh.Click += (_, _) => Reload();
         selectAll.Click += (_, _) => SelectAllVisibleItems();
+        invertSelection.Click += (_, _) => InvertVisibleSelection();
         properties.Click += (_, _) => ObjectInspectionRequested?.Invoke(this, EventArgs.Empty);
 
+        button.DropDownItems.Add(newFolder);
+        button.DropDownItems.Add(newFile);
+        button.DropDownItems.Add(new ToolStripSeparator());
         button.DropDownItems.Add(open);
         button.DropDownItems.Add(edit);
+        button.DropDownItems.Add(rename);
+        button.DropDownItems.Add(batchRename);
         button.DropDownItems.Add(new ToolStripSeparator());
         button.DropDownItems.Add(copy);
         button.DropDownItems.Add(move);
@@ -2666,6 +2773,7 @@ public sealed class BrowserPaneControl : UserControl
         button.DropDownItems.Add(new ToolStripSeparator());
         button.DropDownItems.Add(refresh);
         button.DropDownItems.Add(selectAll);
+        button.DropDownItems.Add(invertSelection);
         button.DropDownItems.Add(new ToolStripSeparator());
         button.DropDownItems.Add(properties);
         button.DropDown.Renderer = DesktopAppearanceService.MenuRenderer;
@@ -2678,11 +2786,17 @@ public sealed class BrowserPaneControl : UserControl
                 : null;
             var selectedContainer = selectedItem is { IsContainer: true };
             var selectedParent = selectedItem is { IsParentNavigation: true };
+            var canCreate = CanMutateCurrentLocation();
+            newFolder.Enabled = canCreate;
+            newFile.Enabled = canCreate;
             open.Enabled = singleSelection;
             open.Text = selectedParent
                 ? "Go up one level"
                 : selectedContainer ? "Open" : "Open in external editor...";
             edit.Enabled = singleSelection && !selectedContainer && !selectedParent;
+            rename.Enabled = singleSelection && !selectedParent;
+            batchRename.Enabled = _fileList.SelectedIndices.Cast<int>()
+                .Count(index => (uint)index < (uint)_items.Count && !_items[index].IsParentNavigation) > 1;
             copy.Enabled = hasSelection;
             move.Enabled = hasSelection;
             paste.Enabled = CanPaste?.Invoke() == true;
@@ -2691,6 +2805,17 @@ public sealed class BrowserPaneControl : UserControl
             properties.Enabled = singleSelection && !selectedParent;
         };
         return button;
+    }
+
+    private bool CanMutateCurrentLocation()
+    {
+        var context = CaptureTransferContext();
+        return context.IsSuccess && context.Value.Kind switch
+        {
+            PaneTransferContextKind.SavedConnection => true,
+            PaneTransferContextKind.ThisPc => !string.IsNullOrWhiteSpace(context.Value.RelativePath),
+            _ => false
+        };
     }
 
     internal static IReadOnlyList<BrowserListItem> ComposeVisibleItems(

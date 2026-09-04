@@ -35,6 +35,10 @@ public sealed class UiCommandCatalogTests
     [InlineData("Workspace", "Open Workspace...", Keys.Control | Keys.O)]
     [InlineData("Workspace", "Save Workspace", Keys.Control | Keys.S)]
     [InlineData("View", "Refresh", Keys.F5)]
+    [InlineData("Edit", "New Folder", Keys.Control | Keys.Shift | Keys.N)]
+    [InlineData("Edit", "Rename", Keys.F2)]
+    [InlineData("Edit", "Delete", Keys.Delete)]
+    [InlineData("Edit", "Invert Selection", Keys.Control | Keys.I)]
     [InlineData("Connections", "Quick Connect...", Keys.Control | Keys.K)]
     [InlineData("Sync", "Compare Panes", Keys.Control | Keys.D)]
     public void CriticalCommandsExposeKeyboardShortcuts(string menu, string command, Keys shortcut)

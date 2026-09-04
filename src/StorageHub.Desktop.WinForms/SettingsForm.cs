@@ -26,6 +26,7 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _warnBeforeUnsafeExternalEdit;
     private readonly CheckBox _adaptiveConcurrency;
     private readonly CheckBox _confirmBeforeClearingTransferHistory;
+    private readonly CheckBox _confirmBeforeDeletingItems;
     private readonly NumericUpDown _minimumConcurrency;
     private readonly NumericUpDown _maximumTransferConcurrency;
     private readonly NumericUpDown _perConnectionConcurrency;
@@ -116,6 +117,10 @@ public sealed class SettingsForm : Form
             "Warn before clearing all transfer history",
             "Shows a confirmation before permanently removing completed, cancelled, and failed transfer records.",
             preferences.ConfirmBeforeClearingTransferHistory);
+        _confirmBeforeDeletingItems = CreateOption(
+            "Warn before deleting files and folders",
+            "Shows a review prompt before sending local items to the Recycle Bin or permanently deleting remote items.",
+            preferences.ConfirmBeforeDeletingItems);
         _minimumConcurrency = CreateConcurrencyInput(1, 8, preferences.MinimumConcurrency, "Starting concurrency");
         _maximumTransferConcurrency = CreateConcurrencyInput(1, 32, preferences.MaximumTransferConcurrency, "Maximum concurrent transfers");
         _perConnectionConcurrency = CreateConcurrencyInput(1, 16, preferences.PerConnectionConcurrency, "Maximum transfers per connection");
@@ -371,6 +376,7 @@ public sealed class SettingsForm : Form
         _warnBeforeUnsafeExternalEdit.CheckedChanged += MarkDirty;
         _adaptiveConcurrency.CheckedChanged += ConcurrencyChanged;
         _confirmBeforeClearingTransferHistory.CheckedChanged += MarkDirty;
+        _confirmBeforeDeletingItems.CheckedChanged += MarkDirty;
         _minimumConcurrency.ValueChanged += ConcurrencyChanged;
         _maximumTransferConcurrency.ValueChanged += ConcurrencyChanged;
         _perConnectionConcurrency.ValueChanged += ConcurrencyChanged;
@@ -416,6 +422,7 @@ public sealed class SettingsForm : Form
             _warnBeforeUnsafeExternalEdit.CheckedChanged -= MarkDirty;
             _adaptiveConcurrency.CheckedChanged -= ConcurrencyChanged;
             _confirmBeforeClearingTransferHistory.CheckedChanged -= MarkDirty;
+            _confirmBeforeDeletingItems.CheckedChanged -= MarkDirty;
             _minimumConcurrency.ValueChanged -= ConcurrencyChanged;
             _maximumTransferConcurrency.ValueChanged -= ConcurrencyChanged;
             _perConnectionConcurrency.ValueChanged -= ConcurrencyChanged;
@@ -452,6 +459,7 @@ public sealed class SettingsForm : Form
             "Control how many transfers and synchronization jobs run at once.");
         page.Controls.Add(_adaptiveConcurrency);
         page.Controls.Add(_confirmBeforeClearingTransferHistory);
+        page.Controls.Add(_confirmBeforeDeletingItems);
         var table = new TableLayoutPanel
         {
             AutoSize = true,
@@ -1513,7 +1521,8 @@ public sealed class SettingsForm : Form
                     : WorkspaceLayout.SideBySide,
                 ReadSshTerminalPreferences(),
                 _reconnectRemotePanes.Checked,
-                _confirmBeforeClearingTransferHistory.Checked);
+                _confirmBeforeClearingTransferHistory.Checked,
+                _confirmBeforeDeletingItems.Checked);
             if (_saved is null)
             {
                 _store.Save(preferences);

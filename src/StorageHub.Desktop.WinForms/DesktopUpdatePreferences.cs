@@ -99,9 +99,10 @@ internal sealed record DesktopUpdatePreferences(
     WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide,
     SshTerminalPreferences? SshTerminal = null,
     bool ReconnectRemotePanesAutomatically = true,
-    bool ConfirmBeforeClearingTransferHistory = true)
+    bool ConfirmBeforeClearingTransferHistory = true,
+    bool ConfirmBeforeDeletingItems = true)
 {
-    public const int CurrentSchemaVersion = 10;
+    public const int CurrentSchemaVersion = 11;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
@@ -207,7 +208,8 @@ internal sealed class DesktopUpdatePreferencesStore
                         ? SshTerminalPreferences.Resolve(document.SshTerminal)
                         : null,
                     document.SchemaVersion < 9 || document.ReconnectRemotePanesAutomatically,
-                    document.SchemaVersion < 10 || document.ConfirmBeforeClearingTransferHistory)
+                    document.SchemaVersion < 10 || document.ConfirmBeforeClearingTransferHistory,
+                    document.SchemaVersion < 11 || document.ConfirmBeforeDeletingItems)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -270,7 +272,8 @@ internal sealed class DesktopUpdatePreferencesStore
                     ? null
                     : SshTerminalPreferences.Resolve(preferences.SshTerminal),
                 preferences.ReconnectRemotePanesAutomatically,
-                preferences.ConfirmBeforeClearingTransferHistory);
+                preferences.ConfirmBeforeClearingTransferHistory,
+                preferences.ConfirmBeforeDeletingItems);
             using (var stream = new FileStream(
                 temporaryPath,
                 FileMode.CreateNew,
@@ -344,5 +347,6 @@ internal sealed class DesktopUpdatePreferencesStore
         WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide,
         SshTerminalPreferences? SshTerminal = null,
         bool ReconnectRemotePanesAutomatically = true,
-        bool ConfirmBeforeClearingTransferHistory = true);
+        bool ConfirmBeforeClearingTransferHistory = true,
+        bool ConfirmBeforeDeletingItems = true);
 }

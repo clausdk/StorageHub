@@ -40,6 +40,21 @@ public interface IObjectInspectorAgentClient : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("This inspector client does not support directory creation.");
 
+    Task<StorageDirectoryCreateResponse> CreateDirectoryAsync(
+        StorageDirectoryCreateRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This inspector client does not support explicit directory creation.");
+
+    Task<StorageFileCreateResponse> CreateFileAsync(
+        StorageFileCreateRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This inspector client does not support empty-file creation.");
+
+    Task<StorageItemRenameResponse> RenameItemAsync(
+        StorageItemRenameRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This inspector client does not support renaming storage items.");
+
     Task<StorageItemDeleteResponse> DeleteItemAsync(
         StorageItemDeleteRequest request,
         CancellationToken cancellationToken = default) =>
@@ -150,6 +165,45 @@ public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentC
             EditableFileIpcMessageTypes.DirectoryEnsureResponse,
             request!,
             response => ValidateDirectoryEnsureResponse(request!, response),
+            cancellationToken);
+    }
+
+    public Task<StorageDirectoryCreateResponse> CreateDirectoryAsync(
+        StorageDirectoryCreateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequest(request, request?.HasValidBounds == true, nameof(request));
+        return ExecuteAsync<StorageDirectoryCreateRequest, StorageDirectoryCreateResponse>(
+            EditableFileIpcMessageTypes.DirectoryCreateRequest,
+            EditableFileIpcMessageTypes.DirectoryCreateResponse,
+            request!,
+            response => ValidateCreateDirectoryResponse(request!, response),
+            cancellationToken);
+    }
+
+    public Task<StorageFileCreateResponse> CreateFileAsync(
+        StorageFileCreateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequest(request, request?.HasValidBounds == true, nameof(request));
+        return ExecuteAsync<StorageFileCreateRequest, StorageFileCreateResponse>(
+            EditableFileIpcMessageTypes.FileCreateRequest,
+            EditableFileIpcMessageTypes.FileCreateResponse,
+            request!,
+            response => ValidateCreateFileResponse(request!, response),
+            cancellationToken);
+    }
+
+    public Task<StorageItemRenameResponse> RenameItemAsync(
+        StorageItemRenameRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequest(request, request?.HasValidBounds == true, nameof(request));
+        return ExecuteAsync<StorageItemRenameRequest, StorageItemRenameResponse>(
+            EditableFileIpcMessageTypes.RenameRequest,
+            EditableFileIpcMessageTypes.RenameResponse,
+            request!,
+            response => ValidateRenameResponse(request!, response),
             cancellationToken);
     }
 
@@ -399,6 +453,46 @@ public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentC
             response.Address != request.Address ||
             !IsValidFailure(response.Failure) ||
             response.Failure is not null && response.Created)
+        {
+            throw InvalidResponse();
+        }
+    }
+
+    private static void ValidateCreateDirectoryResponse(
+        StorageDirectoryCreateRequest request,
+        StorageDirectoryCreateResponse response)
+    {
+        if (response.ContractVersion != request.ContractVersion ||
+            response.Address != request.Address ||
+            !IsValidFailure(response.Failure) ||
+            response.Failure is not null == response.Created)
+        {
+            throw InvalidResponse();
+        }
+    }
+
+    private static void ValidateCreateFileResponse(
+        StorageFileCreateRequest request,
+        StorageFileCreateResponse response)
+    {
+        if (response.ContractVersion != request.ContractVersion ||
+            response.Address != request.Address ||
+            !IsValidFailure(response.Failure) ||
+            response.Failure is not null == response.Created)
+        {
+            throw InvalidResponse();
+        }
+    }
+
+    private static void ValidateRenameResponse(
+        StorageItemRenameRequest request,
+        StorageItemRenameResponse response)
+    {
+        if (response.ContractVersion != request.ContractVersion ||
+            response.Source != request.Source ||
+            response.Destination != request.Destination ||
+            !IsValidFailure(response.Failure) ||
+            response.Failure is not null == response.Renamed)
         {
             throw InvalidResponse();
         }

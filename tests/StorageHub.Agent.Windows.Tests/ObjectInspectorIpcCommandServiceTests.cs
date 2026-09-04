@@ -217,6 +217,68 @@ public sealed class ObjectInspectorIpcCommandServiceTests
     }
 
     [Fact]
+    public async Task RenameIsSameFolderNonOverwritingAndUsesProviderMove()
+    {
+        var profileId = ConnectionProfileId.New();
+        const string root = "sftp:root";
+        var sourceAddress = StorageAddress.Create(profileId, root, "folder/old.txt", entityTag: "etag-1").Value;
+        var destinationAddress = StorageAddress.Create(profileId, root, "folder/new.txt").Value;
+        var sourceEntry = StorageEntry.Create(sourceAddress, StorageEntryKind.File, size: 3, eTag: "etag-1").Value;
+        var destinationEntry = StorageEntry.Create(destinationAddress, StorageEntryKind.File, size: 3).Value;
+        var session = new FakeAdvancedSession(profileId, root)
+        {
+            EffectiveCapabilities = new EffectiveStorageCapabilities([
+                new(StorageFeature.FileMove, FeatureSupport.Native())]),
+            EntryResult = StorageResult<StorageEntry>.Success(sourceEntry),
+            MoveResult = StorageResult<StorageEntry>.Success(destinationEntry)
+        };
+        var service = new ObjectInspectorIpcCommandService(new FakeConnector(
+            StorageResult<ISyncEndpointConnection>.Success(new FakeConnection(session))));
+        var request = new StorageItemRenameRequest(
+            EditableFileIpcContract.CurrentVersion,
+            new ObjectInspectorAddress(profileId.Value, root, "folder/old.txt", EntityTag: "etag-1"),
+            new ObjectInspectorAddress(profileId.Value, root, "folder/new.txt"));
+
+        var response = await service.HandleAsync(IpcEnvelope.Create(
+            EditableFileIpcMessageTypes.RenameRequest, Guid.NewGuid(), 1, request));
+        var payload = response.Payload.Deserialize<StorageItemRenameResponse>();
+
+        Assert.True(payload?.Renamed);
+        Assert.Null(payload?.Failure);
+        Assert.Equal("folder/old.txt", session.LastMoveRequest?.Source.CanonicalRelativePath);
+        Assert.Equal("folder/new.txt", session.LastMoveRequest?.Destination.CanonicalRelativePath);
+        Assert.False(session.LastMoveRequest?.Overwrite);
+    }
+
+    [Fact]
+    public async Task ExplicitDirectoryCreationCallsSupportedProvider()
+    {
+        var profileId = ConnectionProfileId.New();
+        const string root = "sftp:root";
+        var storageAddress = StorageAddress.Create(profileId, root, "folder/new-folder").Value;
+        var createdEntry = StorageEntry.Create(storageAddress, StorageEntryKind.Directory).Value;
+        var session = new FakeAdvancedSession(profileId, root)
+        {
+            EffectiveCapabilities = new EffectiveStorageCapabilities([
+                new(StorageFeature.CreateDirectory, FeatureSupport.Native())]),
+            CreateDirectoryResult = StorageResult<StorageEntry>.Success(createdEntry)
+        };
+        var service = new ObjectInspectorIpcCommandService(new FakeConnector(
+            StorageResult<ISyncEndpointConnection>.Success(new FakeConnection(session))));
+        var request = new StorageDirectoryCreateRequest(
+            EditableFileIpcContract.CurrentVersion,
+            new ObjectInspectorAddress(profileId.Value, root, "folder/new-folder"));
+
+        var response = await service.HandleAsync(IpcEnvelope.Create(
+            EditableFileIpcMessageTypes.DirectoryCreateRequest, Guid.NewGuid(), 1, request));
+        var payload = response.Payload.Deserialize<StorageDirectoryCreateResponse>();
+
+        Assert.True(payload?.Created);
+        Assert.Null(payload?.Failure);
+        Assert.Equal("folder/new-folder", session.LastCreatedDirectory?.CanonicalRelativePath);
+    }
+
+    [Fact]
     public async Task InFlightCancellationDisposesRootScopedConnection()
     {
         var profileId = ConnectionProfileId.New();
@@ -291,7 +353,15 @@ public sealed class ObjectInspectorIpcCommandServiceTests
             StorageResult<StorageTags>.Success(StorageTags.Create(
                 new Dictionary<string, string>()).Value);
         public StorageResult DeleteResult { get; init; } = StorageResult.Success();
+        public StorageResult<StorageEntry> EntryResult { get; init; } = StorageResult<StorageEntry>.Fail(
+            new StorageFailure("storage.not_found", StorageFailureKind.NotFound, "Not found."));
+        public StorageResult<StorageEntry> MoveResult { get; init; } = StorageResult<StorageEntry>.Fail(
+            new StorageFailure("storage.move.failed", StorageFailureKind.Provider, "Move failed."));
+        public StorageResult<StorageEntry> CreateDirectoryResult { get; init; } = StorageResult<StorageEntry>.Fail(
+            new StorageFailure("storage.directory.failed", StorageFailureKind.Provider, "Create failed."));
         public StorageDeleteRequest? LastDeleteRequest { get; private set; }
+        public StorageMoveRequest? LastMoveRequest { get; private set; }
+        public StorageAddress? LastCreatedDirectory { get; private set; }
 
         public async ValueTask<StorageResult<StorageObjectVersionPage>> ListObjectVersionsAsync(
             StorageAddress address,
@@ -343,7 +413,7 @@ public sealed class ObjectInspectorIpcCommandServiceTests
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask<StorageResult<StorageEntry>> GetEntryAsync(
             StorageAddress address,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            CancellationToken cancellationToken = default) => ValueTask.FromResult(EntryResult);
         public ValueTask<StorageResult<StoragePage>> ListAsync(
             StorageAddress address,
             StorageListRequest? request = null,
@@ -356,7 +426,11 @@ public sealed class ObjectInspectorIpcCommandServiceTests
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask<StorageResult<StorageEntry>> CreateDirectoryAsync(
             StorageAddress address,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            LastCreatedDirectory = address;
+            return ValueTask.FromResult(CreateDirectoryResult);
+        }
         public ValueTask<StorageResult> DeleteAsync(
             StorageDeleteRequest request,
             CancellationToken cancellationToken = default)
@@ -370,7 +444,11 @@ public sealed class ObjectInspectorIpcCommandServiceTests
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask<StorageResult<StorageEntry>> MoveAsync(
             StorageMoveRequest request,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            LastMoveRequest = request;
+            return ValueTask.FromResult(MoveResult);
+        }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

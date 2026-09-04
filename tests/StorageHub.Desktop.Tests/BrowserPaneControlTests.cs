@@ -55,11 +55,36 @@ public sealed class BrowserPaneControlTests
             Assert.Contains("Move", commands);
             Assert.Contains("Paste", commands);
             Assert.Contains("Delete", commands);
+            Assert.Contains("New folder", commands);
+            Assert.Contains("New empty file...", commands);
+            Assert.Contains("Rename", commands);
+            Assert.Contains("Batch rename...", commands);
+            Assert.Contains("Invert selection", commands);
             Assert.DoesNotContain("Copy to other pane", commands);
             Assert.DoesNotContain("Move to other pane", commands);
             Assert.Contains("Refresh", commands);
             Assert.Contains("Select all", commands);
             Assert.Contains("Properties...", commands);
+        });
+    }
+
+    [Fact]
+    public void FileListContextMenuExposesCreationRenameAndDeleteCommands()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var pane = new BrowserPaneControl("Pane 1", showLocalDefault: true);
+            var menu = Assert.IsType<ContextMenuStrip>(
+                typeof(BrowserPaneControl)
+                    .GetField("_fileContextMenu", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(pane));
+            var commands = menu.Items.OfType<ToolStripMenuItem>().Select(static item => item.Text).ToArray();
+
+            Assert.Contains("New folder", commands);
+            Assert.Contains("New empty file...", commands);
+            Assert.Contains("Rename", commands);
+            Assert.Contains("Batch rename...", commands);
+            Assert.Contains("Delete", commands);
         });
     }
 
