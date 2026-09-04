@@ -95,13 +95,18 @@ jobs:
           $regsvr32 = Join-Path $env:SystemRoot 'System32\regsvr32.exe'
           $smokeExit = 1
           try {
-            & $regsvr32 /s $broker
-            if ($LASTEXITCODE -ne 0) { throw 'Explorer drop broker registration failed.' }
+            $registration = Start-Process -FilePath $regsvr32 `
+              -ArgumentList @('/s', $broker) -Wait -PassThru -WindowStyle Hidden
+            if ($registration.ExitCode -ne 0) { throw 'Explorer drop broker registration failed.' }
             & $smoke
             $smokeExit = $LASTEXITCODE
           }
           finally {
-            & $regsvr32 /s /u $broker
+            $unregistration = Start-Process -FilePath $regsvr32 `
+              -ArgumentList @('/s', '/u', $broker) -Wait -PassThru -WindowStyle Hidden
+            if ($unregistration.ExitCode -ne 0 -and $smokeExit -eq 0) {
+              $smokeExit = $unregistration.ExitCode
+            }
           }
           if ($smokeExit -ne 0) { exit $smokeExit }
 
