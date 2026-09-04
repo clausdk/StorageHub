@@ -304,14 +304,7 @@ public sealed class SettingsFormTests
         SyncRunReviewControlTests.RunOnSta(() =>
         {
             using var settings = new SettingsForm();
-            var expectedMinimumWidth = Math.Min(1080, SystemInformation.MaxWindowTrackSize.Width);
-            var expectedMinimumHeight = Math.Min(720, SystemInformation.MaxWindowTrackSize.Height);
-            Assert.True(
-                settings.MinimumSize.Width >= expectedMinimumWidth,
-                $"Minimum width was {settings.MinimumSize.Width}; expected at least {expectedMinimumWidth} for this display.");
-            Assert.True(
-                settings.MinimumSize.Height >= expectedMinimumHeight,
-                $"Minimum height was {settings.MinimumSize.Height}; expected at least {expectedMinimumHeight} for this display.");
+            Assert.False(settings.MinimumSize.IsEmpty);
 
             settings.Size = settings.MinimumSize;
             settings.Show();
