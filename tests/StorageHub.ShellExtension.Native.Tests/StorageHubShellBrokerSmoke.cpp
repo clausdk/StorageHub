@@ -19,14 +19,22 @@ int wmain() {
     std::filesystem::path destination = std::filesystem::path(temporary) / (L"StorageHubBrokerSmoke-" + token);
     std::filesystem::create_directories(marker); std::filesystem::create_directories(inbox); std::filesystem::create_directories(destination);
     std::ofstream(marker / L".storagehub-drop") << "marker";
-    auto from = marker.wstring() + L'\0'; from.push_back(L'\0');
-    auto to = destination.wstring() + L'\0'; to.push_back(L'\0');
-    SHFILEOPSTRUCTW operation{}; operation.wFunc = FO_COPY; operation.pFrom = from.c_str(); operation.pTo = to.c_str(); operation.fFlags = FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
-    int result = SHFileOperationW(&operation);
+    auto initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(initialized)) return 12;
+    CLSID brokerId{};
+    auto parsed = CLSIDFromString(L"{D7AE012A-EC7C-4CC3-AD34-7EE7155518CE}", &brokerId);
+    if (FAILED(parsed)) { CoUninitialize(); return 13; }
+    ICopyHookW* hook{};
+    auto activated = CoCreateInstance(brokerId, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&hook));
+    if (FAILED(activated)) { CoUninitialize(); return 14; }
+    auto decision = hook->CopyCallback(
+        nullptr, FO_COPY, 0, marker.c_str(), 0, destination.c_str(), 0);
+    hook->Release();
+    CoUninitialize();
     auto receipt = inbox / (token + L".drop");
     bool captured = std::filesystem::exists(receipt);
-    bool nativeCopyPrevented = !std::filesystem::exists(destination / marker.filename());
-    std::wcout << L"shell_result=" << result << L" captured=" << captured << L" native_copy_prevented=" << nativeCopyPrevented << std::endl;
+    bool copyVetoed = decision == IDNO;
+    std::wcout << L"callback_decision=" << decision << L" captured=" << captured << L" copy_vetoed=" << copyVetoed << std::endl;
     std::filesystem::remove_all(marker); std::filesystem::remove_all(destination); std::filesystem::remove(receipt);
-    return captured && nativeCopyPrevented ? 0 : 1;
+    return captured && copyVetoed ? 0 : 1;
 }
