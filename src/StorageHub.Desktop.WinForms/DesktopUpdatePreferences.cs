@@ -23,6 +23,63 @@ public enum WorkspaceLayout
     TopAndBottom = 2
 }
 
+internal sealed record SshTerminalPreferences(
+    string TerminalName = "xterm-256color",
+    string? StartupCommand = null,
+    int KeepAliveSeconds = 30,
+    string FontFamily = "Cascadia Mono",
+    float FontSize = 10F,
+    int ScrollbackLines = 2_000,
+    int RefreshIntervalMilliseconds = 60,
+    bool RenderBoldText = true)
+{
+    internal const int MaximumStartupCommandLength = 512;
+    internal static SshTerminalPreferences Defaults { get; } = new();
+
+    internal static SshTerminalPreferences Resolve(SshTerminalPreferences? value)
+    {
+        value ??= Defaults;
+        var terminalName = IsTerminalName(value.TerminalName)
+            ? value.TerminalName.Trim()
+            : Defaults.TerminalName;
+        var startupCommand = string.IsNullOrWhiteSpace(value.StartupCommand)
+            ? null
+            : IsStartupCommand(value.StartupCommand)
+                ? value.StartupCommand.Trim()
+                : null;
+        var fontFamily = IsFontFamily(value.FontFamily)
+            ? value.FontFamily.Trim()
+            : Defaults.FontFamily;
+        return new SshTerminalPreferences(
+            terminalName,
+            startupCommand,
+            value.KeepAliveSeconds is >= 0 and <= 3_600
+                ? value.KeepAliveSeconds : Defaults.KeepAliveSeconds,
+            fontFamily,
+            float.IsFinite(value.FontSize) && value.FontSize is >= 6F and <= 32F
+                ? value.FontSize : Defaults.FontSize,
+            value.ScrollbackLines is >= 100 and <= 20_000
+                ? value.ScrollbackLines : Defaults.ScrollbackLines,
+            value.RefreshIntervalMilliseconds is >= 16 and <= 500
+                ? value.RefreshIntervalMilliseconds : Defaults.RefreshIntervalMilliseconds,
+            value.RenderBoldText);
+    }
+
+    private static bool IsTerminalName(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= SshTerminalIpcContract.MaximumTerminalNameLength &&
+        !value.Any(static character => char.IsControl(character) || char.IsWhiteSpace(character));
+
+    private static bool IsStartupCommand(string value) =>
+        value.Length <= MaximumStartupCommandLength &&
+        !value.Any(char.IsControl);
+
+    private static bool IsFontFamily(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= 128 &&
+        !value.Any(char.IsControl);
+}
+
 internal sealed record DesktopUpdatePreferences(
     bool CheckAutomatically = true,
     bool DownloadAutomatically = true,
@@ -39,9 +96,10 @@ internal sealed record DesktopUpdatePreferences(
     DesktopAppearance Appearance = DesktopAppearance.System,
     bool WarnBeforeUnsafeExternalEdit = true,
     IReadOnlyDictionary<string, string>? ConnectionDefaults = null,
-    WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide)
+    WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide,
+    SshTerminalPreferences? SshTerminal = null)
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
@@ -142,7 +200,10 @@ internal sealed class DesktopUpdatePreferencesStore
                         : null,
                     document.SchemaVersion >= 7 && Enum.IsDefined(document.DefaultWorkspaceLayout)
                         ? document.DefaultWorkspaceLayout
-                        : WorkspaceLayout.SideBySide)
+                        : WorkspaceLayout.SideBySide,
+                    document.SchemaVersion >= 8 && document.SshTerminal is not null
+                        ? SshTerminalPreferences.Resolve(document.SshTerminal)
+                        : null)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -200,7 +261,10 @@ internal sealed class DesktopUpdatePreferencesStore
                 preferences.ConnectionDefaults is null
                     ? null
                     : ConnectionDefaultSettings.Normalize(preferences.ConnectionDefaults),
-                preferences.DefaultWorkspaceLayout);
+                preferences.DefaultWorkspaceLayout,
+                preferences.SshTerminal is null
+                    ? null
+                    : SshTerminalPreferences.Resolve(preferences.SshTerminal));
             using (var stream = new FileStream(
                 temporaryPath,
                 FileMode.CreateNew,
@@ -271,5 +335,6 @@ internal sealed class DesktopUpdatePreferencesStore
         DesktopAppearance Appearance = DesktopAppearance.System,
         bool WarnBeforeUnsafeExternalEdit = true,
         Dictionary<string, string>? ConnectionDefaults = null,
-        WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide);
+        WorkspaceLayout DefaultWorkspaceLayout = WorkspaceLayout.SideBySide,
+        SshTerminalPreferences? SshTerminal = null);
 }

@@ -509,6 +509,13 @@ public sealed class SqliteConnectionProfileRepository : IConnectionProfileReposi
             SftpPrivateKeyAuthentication key => new PersistedAuthentication(
                 "sftp-key", key.Username, PrivateKeyReference: key.PrivateKeyReference.Value,
                 PassphraseReference: key.PassphraseReference?.Value, KeyFormat: key.KeyFormat),
+            SshPrivateKeyPasswordAuthentication mfa => new PersistedAuthentication(
+                "ssh-key-password",
+                mfa.Username,
+                PasswordReference: mfa.PasswordReference.Value,
+                PrivateKeyReference: mfa.PrivateKeyReference.Value,
+                PassphraseReference: mfa.PassphraseReference.Value,
+                KeyFormat: mfa.KeyFormat),
             _ => throw new NotSupportedException(
                 $"Authentication type {authentication.GetType().Name} is not supported.")
         };
@@ -535,6 +542,12 @@ public sealed class SqliteConnectionProfileRepository : IConnectionProfileReposi
                 Required(value.Username, "username"),
                 SecretReference.Parse(Required(value.PrivateKeyReference, "private-key reference")),
                 ParseSecretReference(value.PassphraseReference),
+                value.KeyFormat ?? 0),
+            "ssh-key-password" => new SshPrivateKeyPasswordAuthentication(
+                Required(value.Username, "username"),
+                SecretReference.Parse(Required(value.PasswordReference, "password reference")),
+                SecretReference.Parse(Required(value.PrivateKeyReference, "private-key reference")),
+                SecretReference.Parse(Required(value.PassphraseReference, "private-key passphrase reference")),
                 value.KeyFormat ?? 0),
             _ => throw new InvalidDataException("The stored connection authentication kind is unknown.")
         };

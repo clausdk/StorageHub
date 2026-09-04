@@ -23,6 +23,7 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
+        var explorerDropBrokerAvailable = ExplorerDropBrokerInstaller.EnsureRegistered(AppContext.BaseDirectory);
         if (!agent.IsReady)
         {
             _ = MessageBox.Show(
@@ -38,7 +39,8 @@ internal static class Program
         System.Windows.Forms.Application.Run(new MainForm(
             preferencesStore,
             updateEngineFactory: null,
-            lifecycle));
+            lifecycle,
+            explorerDropBrokerAvailable));
         return 0;
     }
 }

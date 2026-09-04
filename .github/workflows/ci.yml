@@ -73,6 +73,43 @@ jobs:
             --logger trx
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Test native Explorer drop broker
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $msbuild = (& $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1)
+          if ([string]::IsNullOrWhiteSpace($msbuild)) {
+            throw 'Visual Studio C++ MSBuild was not found.'
+          }
+          & $msbuild `
+            .\tests\StorageHub.ShellExtension.Native.Tests\StorageHub.ShellExtension.Native.Tests.vcxproj `
+            /p:Configuration=Release /p:Platform=x64 /m
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $broker = (Resolve-Path `
+            .\src\StorageHub.ShellExtension.Native\x64\Release\StorageHub.ShellExtension.Native.dll).Path
+          $smoke = (Resolve-Path `
+            .\tests\StorageHub.ShellExtension.Native.Tests\x64\Release\StorageHub.ShellExtension.Native.Tests.exe).Path
+          $regsvr32 = Join-Path $env:SystemRoot 'System32\regsvr32.exe'
+          $smokeExit = 1
+          try {
+            $registration = Start-Process -FilePath $regsvr32 `
+              -ArgumentList @('/s', $broker) -Wait -PassThru -WindowStyle Hidden
+            if ($registration.ExitCode -ne 0) { throw 'Explorer drop broker registration failed.' }
+            & $smoke
+            $smokeExit = $LASTEXITCODE
+          }
+          finally {
+            $unregistration = Start-Process -FilePath $regsvr32 `
+              -ArgumentList @('/s', '/u', $broker) -Wait -PassThru -WindowStyle Hidden
+            if ($unregistration.ExitCode -ne 0 -and $smokeExit -eq 0) {
+              $smokeExit = $unregistration.ExitCode
+            }
+          }
+          if ($smokeExit -ne 0) { exit $smokeExit }
+
       - name: Test S3 conformance against disposable MinIO
         shell: pwsh
         run: |

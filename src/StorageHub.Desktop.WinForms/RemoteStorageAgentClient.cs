@@ -276,7 +276,10 @@ public sealed class NamedPipeRemoteStorageAgentClient : IRemoteStorageAgentClien
                 connection.Tags.Any(tag => !IsSafeText(tag, 256, required: true)) ||
                 !IsSafeText(connection.IconKey, 128) ||
                 !IsValidAccent(connection.AccentColor) ||
-                connection.Version < 1)
+                connection.Version < 1 ||
+                connection.Health is { HasValidBounds: false } ||
+                !StorageIpcContract.SupportsConnectionHealth(response.ContractVersion) &&
+                    connection.Health is not null)
             {
                 throw InvalidResponse();
             }

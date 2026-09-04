@@ -63,6 +63,27 @@ public sealed class ConnectionEditorDraftFactoryTests
     }
 
     [Fact]
+    public void BuildsSshPrivateKeyAndPasswordMfaDraft()
+    {
+        var values = ValidValues(StorageProviderKind.Ssh);
+        values["authenticationMode"] = "Private key + password (MFA)";
+        values["privateKeyReference"] = "shs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+        values["privateKeyPassphraseReference"] = "shs_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+
+        var draft = ConnectionEditorDraftFactory.Build(StorageProviderKind.Ssh, values);
+
+        Assert.True(draft.HasValidBounds);
+        Assert.Equal(ConnectionAuthenticationKind.SshPrivateKeyPassword, draft.Authentication.Kind);
+        Assert.NotNull(draft.Authentication.PasswordReference);
+        Assert.NotNull(draft.Authentication.PrivateKeyReference);
+        Assert.NotNull(draft.Authentication.PrivateKeyPassphraseReference);
+        Assert.DoesNotContain(
+            "Private key + password (MFA)",
+            ConnectionProviderCatalog.Get(StorageProviderKind.Sftp)
+                .AuthenticationFields.Single(field => field.Key == "authenticationMode").Choices!);
+    }
+
+    [Fact]
     public void PlainFtpRequiresExplicitAcknowledgement()
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal)

@@ -16,6 +16,18 @@ internal sealed class WindowsShellIconProvider : IDisposable
 
     public WindowsShellIconProvider(ImageList images) => _images = images ?? throw new ArgumentNullException(nameof(images));
 
+    /// <summary>Loads association icons before a virtual ListView starts requesting rows. Mutating
+    /// its native ImageList from RetrieveVirtualItem can abort the current paint pass and leave
+    /// rows blank until they are individually invalidated by the mouse.</summary>
+    public void Prime(IEnumerable<BrowserListItem> items, bool local)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        foreach (var item in items)
+        {
+            _ = GetKey(item, local);
+        }
+    }
+
     public string GetKey(BrowserListItem item, bool local)
     {
         if (item.IsParentNavigation)

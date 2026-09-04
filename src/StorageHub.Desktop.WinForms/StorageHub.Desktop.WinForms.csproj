@@ -35,6 +35,48 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <PropertyGroup>
+    <StorageHubVsWhere>$(MSBuildProgramFiles32)\Microsoft Visual Studio\Installer\vswhere.exe</StorageHubVsWhere>
+    <StorageHubNativeProject>$(MSBuildProjectDirectory)\..\StorageHub.ShellExtension.Native\StorageHub.ShellExtension.Native.vcxproj</StorageHubNativeProject>
+    <StorageHubNativeOutput>$(MSBuildProjectDirectory)\..\StorageHub.ShellExtension.Native\x64\$(Configuration)\StorageHub.ShellExtension.Native.dll</StorageHubNativeOutput>
+  </PropertyGroup>
+  <Target Name="ResolveStorageHubNativeMsBuild"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(StorageHubVsWhere)')"
+           Text="StorageHub Explorer integration requires Visual Studio C++ build tools, but vswhere.exe was not found." />
+    <Exec Command="&quot;$(StorageHubVsWhere)&quot; -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find MSBuild\**\Bin\MSBuild.exe"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_StorageHubNativeMsBuildCandidate" />
+    </Exec>
+    <PropertyGroup>
+      <StorageHubNativeMsBuild>@(_StorageHubNativeMsBuildCandidate)</StorageHubNativeMsBuild>
+    </PropertyGroup>
+    <Error Condition="'$(StorageHubNativeMsBuild)' == '' or !Exists('$(StorageHubNativeMsBuild)')"
+           Text="StorageHub Explorer integration requires an installed Visual Studio C++ MSBuild toolchain." />
+  </Target>
+  <Target Name="BuildAndStageExplorerDropBroker"
+          AfterTargets="Build"
+          DependsOnTargets="ResolveStorageHubNativeMsBuild"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="&quot;$(StorageHubNativeMsBuild)&quot; &quot;$(StorageHubNativeProject)&quot; /p:Configuration=$(Configuration) /p:Platform=x64 /m" />
+    <Error Condition="!Exists('$(StorageHubNativeOutput)')"
+           Text="The StorageHub Explorer drop broker build did not produce $(StorageHubNativeOutput)." />
+    <Copy SourceFiles="$(StorageHubNativeOutput)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="StageExplorerDropBrokerForPublish"
+          AfterTargets="Publish"
+          DependsOnTargets="BuildAndStageExplorerDropBroker"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Copy SourceFiles="$(StorageHubNativeOutput)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)StorageHub.ShellExtension.Native.dll')"
+           Text="The published StorageHub Desktop is missing its Explorer drop broker." />
+  </Target>
+
   <ItemGroup>
     <InternalsVisibleTo Include="StorageHub.Desktop.Tests" />
   </ItemGroup>

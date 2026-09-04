@@ -135,6 +135,33 @@ public sealed class ConnectionProfileTests
     }
 
     [Fact]
+    public void Ssh_supports_private_key_and_account_password_mfa()
+    {
+        var authentication = new SshPrivateKeyPasswordAuthentication(
+            "operator",
+            Password,
+            SecretReference.Create(),
+            SecretReference.Create(),
+            SftpPrivateKeyFormat.OpenSsh);
+        var profile = ConnectionProfile.Create(
+            ConnectionProfileId.New(),
+            Metadata("MFA shell"),
+            new SshClientEndpoint("ssh.example.test", 22, SshHostKeyPolicy.Pinned),
+            authentication,
+            OperationalOptions(),
+            DateTimeOffset.UtcNow);
+
+        Assert.Same(authentication, profile.Authentication);
+        Assert.Throws<ArgumentException>(() => ConnectionProfile.Create(
+            ConnectionProfileId.New(),
+            Metadata("Invalid SFTP MFA"),
+            new SftpEndpoint("sftp.example.test", 22, SshHostKeyPolicy.Pinned),
+            authentication,
+            OperationalOptions(),
+            DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
     public void Authentication_contracts_expose_references_not_secret_strings()
     {
         var passwordProperty = typeof(UsernamePasswordAuthentication)
@@ -143,10 +170,13 @@ public sealed class ConnectionProfileTests
             .GetProperty(nameof(SftpPrivateKeyAuthentication.PrivateKeyReference));
         var s3SecretProperty = typeof(S3AccessKeyAuthentication)
             .GetProperty(nameof(S3AccessKeyAuthentication.SecretKeyReference));
+        var mfaPasswordProperty = typeof(SshPrivateKeyPasswordAuthentication)
+            .GetProperty(nameof(SshPrivateKeyPasswordAuthentication.PasswordReference));
 
         Assert.Equal(typeof(SecretReference), passwordProperty!.PropertyType);
         Assert.Equal(typeof(SecretReference), keyProperty!.PropertyType);
         Assert.Equal(typeof(SecretReference), s3SecretProperty!.PropertyType);
+        Assert.Equal(typeof(SecretReference), mfaPasswordProperty!.PropertyType);
         Assert.DoesNotContain(
             typeof(UsernamePasswordAuthentication).GetProperties(),
             property => property.PropertyType == typeof(string) &&

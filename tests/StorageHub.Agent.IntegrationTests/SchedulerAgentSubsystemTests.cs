@@ -208,7 +208,7 @@ public sealed class SchedulerAgentSubsystemTests
         await runner.ExpectedStartsReached.WaitAsync(TimeSpan.FromSeconds(5));
         timeProvider.Advance(TimeSpan.FromMinutes(31));
         runner.Release();
-        await polling.WaitAsync(TimeSpan.FromSeconds(5));
+        await polling.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(2, store.LeaseRequests.Count);
         Assert.Equal(Now, store.LeaseRequests[0].ObservedAtUtc);

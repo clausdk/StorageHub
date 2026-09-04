@@ -101,6 +101,40 @@ public sealed class IpcContractTests
     }
 
     [Fact]
+    public void Ssh_key_and_password_mfa_requires_three_opaque_secret_references()
+    {
+        const string reference = "shs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        var authentication = new ConnectionAuthenticationDocument(
+            ConnectionAuthenticationKind.SshPrivateKeyPassword,
+            Username: "operator",
+            PasswordReference: reference,
+            PrivateKeyReference: reference,
+            PrivateKeyPassphraseReference: reference);
+        var draft = new ConnectionProfileDraft(
+            new ConnectionProfileMetadataDocument("MFA shell", Tags: []),
+            new ConnectionEndpointDocument(
+                StorageConnectionProvider.Ssh,
+                Host: "ssh.example.test",
+                Port: 22),
+            authentication,
+            new ConnectionOperationalOptionsDocument(),
+            Type: ConnectionProfileType.Client);
+
+        Assert.True(authentication.HasValidBounds);
+        Assert.True(draft.HasValidBounds);
+        Assert.False((authentication with { PasswordReference = null }).HasValidBounds);
+        Assert.False((authentication with { PrivateKeyReference = null }).HasValidBounds);
+        Assert.False((draft with
+        {
+            Endpoint = new ConnectionEndpointDocument(
+                StorageConnectionProvider.Sftp,
+                Host: "sftp.example.test",
+                Port: 22),
+            Type = ConnectionProfileType.Storage
+        }).HasValidBounds);
+    }
+
+    [Fact]
     public void Secret_request_requires_operation_specific_material_and_bounds()
     {
         const string reference = "shs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -426,5 +460,25 @@ public sealed class IpcContractTests
                 forbidden,
                 term => property.Name.Contains(term, StringComparison.OrdinalIgnoreCase));
         }
+    }
+
+    [Fact]
+    public void Ssh_terminal_open_preferences_are_bounded()
+    {
+        var valid = new SshTerminalOpenRequest(
+            SshTerminalIpcContract.CurrentVersion,
+            Guid.NewGuid(),
+            120,
+            40,
+            "screen-256color",
+            "bash -l",
+            KeepAliveSeconds: 90);
+
+        Assert.True(valid.HasValidBounds);
+        Assert.False((valid with { TerminalName = "xterm invalid" }).HasValidBounds);
+        Assert.False((valid with { StartupCommand = "bash\n-l" }).HasValidBounds);
+        Assert.False((valid with { StartupCommand = new string('x', 513) }).HasValidBounds);
+        Assert.False((valid with { KeepAliveSeconds = -1 }).HasValidBounds);
+        Assert.False((valid with { KeepAliveSeconds = 3_601 }).HasValidBounds);
     }
 }

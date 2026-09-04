@@ -366,6 +366,10 @@ $childEnvironment = @{
 $uninstallAttempted = $false
 $completed = $false
 $liveAgentProcessId = $null
+$brokerRegistered = $false
+$brokerClassId = '{D7AE012A-EC7C-4CC3-AD34-7EE7155518CE}'
+$brokerClassKey = "HKCU:\Software\Classes\CLSID\$brokerClassId"
+$brokerHandlerKey = 'HKCU:\Software\Classes\Directory\shellex\CopyHookHandlers\StorageHub'
 
 try {
     # Velopack --silent suppresses its normal post-install first launch. The
@@ -393,6 +397,7 @@ try {
 
     foreach ($requiredPayload in @(
             (Join-Path $installDirectory 'current\coreclr.dll'),
+            (Join-Path $installDirectory 'current\StorageHub.ShellExtension.Native.dll'),
             (Join-Path $installDirectory 'current\Agent\coreclr.dll'),
             (Join-Path $installDirectory 'current\BUILDINFO.json'),
             (Join-Path $installDirectory 'current\release-version.txt'),
@@ -404,6 +409,20 @@ try {
     }
     if (@(Get-ChildItem -LiteralPath (Join-Path $installDirectory 'current') -Filter '*.pdb' -File -Recurse).Count -ne 0) {
         throw 'The installed payload contains program database symbols.'
+    }
+
+    $brokerDll = Join-Path $installDirectory 'current\StorageHub.ShellExtension.Native.dll'
+    $regsvr32 = Join-Path $env:SystemRoot 'System32\regsvr32.exe'
+    Invoke-CheckedProcess `
+        -FilePath $regsvr32 `
+        -ArgumentList @('/s', $brokerDll) `
+        -EnvironmentVariables $childEnvironment `
+        -Description 'Register the installed Explorer drop broker' `
+        -TimeoutSeconds $ProcessTimeoutSeconds
+    $brokerRegistered = $true
+    if (-not (Test-Path -LiteralPath $brokerClassKey) -or
+        -not (Test-Path -LiteralPath $brokerHandlerKey)) {
+        throw 'The installed Explorer drop broker did not create its current-user registration.'
     }
 
     $autoStartAfterInstall = @(Get-StorageHubAutoStartEntries)
@@ -478,11 +497,20 @@ try {
         [string]::Join("`n", $autoStartBefore)) {
         throw 'StorageHub autostart registry state was not restored after uninstall.'
     }
+    if ((Test-Path -LiteralPath $brokerClassKey) -or
+        (Test-Path -LiteralPath $brokerHandlerKey)) {
+        throw 'StorageHub Explorer integration remained registered after uninstall.'
+    }
+    $brokerRegistered = $false
 
     $completed = $true
     Write-Host 'Installer smoke test passed: payload and lifecycle verified, live-Agent uninstall completed, and data was preserved.'
 }
 finally {
+    if ($brokerRegistered) {
+        Remove-Item -LiteralPath $brokerClassKey -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $brokerHandlerKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if (-not $uninstallAttempted) {
         $fallbackUpdateExe = Join-Path $installDirectory 'Update.exe'
         if (Test-Path -LiteralPath $fallbackUpdateExe -PathType Leaf) {

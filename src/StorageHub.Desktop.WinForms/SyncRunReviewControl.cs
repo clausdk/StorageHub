@@ -415,6 +415,9 @@ public sealed class SyncRunReviewControl : UserControl
         {
             await RefreshStatusAsync(_lifetime.Token).ConfigureAwait(true);
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             ShowError(error);
@@ -439,6 +442,9 @@ public sealed class SyncRunReviewControl : UserControl
         {
             await ApproveAndDispatchAsync(_lifetime.Token).ConfigureAwait(true);
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             ShowError(error);
@@ -453,6 +459,9 @@ public sealed class SyncRunReviewControl : UserControl
                 token => LoadPlanPageCoreAsync(reset: false, token),
                 _lifetime.Token).ConfigureAwait(true);
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             ShowError(error);
@@ -466,6 +475,9 @@ public sealed class SyncRunReviewControl : UserControl
             await ExecuteSerializedAsync(
                 token => LoadConflictPageCoreAsync(reset: false, token),
                 _lifetime.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {

@@ -64,6 +64,50 @@ public sealed class BrowserPaneControlTests
     }
 
     [Fact]
+    public void ReplacingVirtualRowsPrimesIconsAndImmediatelyReturnsEveryNewRow()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var pane = new BrowserPaneControl("Source", showLocalDefault: true);
+            using var host = new Form { Size = new Size(900, 600) };
+            host.Controls.Add(pane);
+            host.Show();
+            System.Windows.Forms.Application.DoEvents();
+            pane.SetItems(
+            [
+                new BrowserListItem("one.txt", "1 B", "File", "", "", "C:\\one.txt", Kind: StorageItemKind.File),
+                new BrowserListItem("two.png", "2 B", "File", "", "", "C:\\two.png", Kind: StorageItemKind.File),
+                new BrowserListItem("folder", "", "Folder", "", "", "C:\\folder", true, StorageItemKind.Directory)
+            ]);
+            var list = Assert.Single(Descendants<ListView>(pane));
+            var imageCountAfterUpdate = list.SmallImageList!.Images.Count;
+
+            Assert.Equal(3, list.VirtualListSize);
+            Assert.Equal(["folder", "one.txt", "two.png"],
+                Enumerable.Range(0, list.VirtualListSize).Select(index => list.Items[index].Text));
+            Assert.Equal(imageCountAfterUpdate, list.SmallImageList.Images.Count);
+        });
+    }
+
+    [Fact]
+    public void ShellExportCacheKeyIsStableForSelectionOrderAndChangesWithRemoteIdentity()
+    {
+        var connectionId = Guid.NewGuid();
+        var context = PaneTransferContext.Create(
+            PaneTransferContextKind.SavedConnection, connectionId, "root", "folder").Value;
+        var first = PaneTransferItem.Create("a.txt", "folder/a.txt", StorageItemKind.File, 1, versionId: "v1").Value;
+        var second = PaneTransferItem.Create("b.txt", "folder/b.txt", StorageItemKind.File, 2, entityTag: "etag").Value;
+        var forward = PaneSelectionSnapshot.Create(context, [first, second]).Value;
+        var reverse = PaneSelectionSnapshot.Create(context, [second, first]).Value;
+        var changed = PaneSelectionSnapshot.Create(
+            context,
+            [PaneTransferItem.Create("a.txt", "folder/a.txt", StorageItemKind.File, 1, versionId: "v2").Value, second]).Value;
+
+        Assert.Equal(BrowserPaneControl.CreateShellExportKey(forward), BrowserPaneControl.CreateShellExportKey(reverse));
+        Assert.NotEqual(BrowserPaneControl.CreateShellExportKey(forward), BrowserPaneControl.CreateShellExportKey(changed));
+    }
+
+    [Fact]
     public void LocalDefaultPaneKeepsThisPcAndCanBecomeASavedConnectionPane()
     {
         SyncRunReviewControlTests.RunOnSta(() =>

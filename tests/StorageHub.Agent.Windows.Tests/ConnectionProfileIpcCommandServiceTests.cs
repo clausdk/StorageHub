@@ -42,6 +42,44 @@ public sealed class ConnectionProfileIpcCommandServiceTests
     }
 
     [Fact]
+    public async Task CreateMapsSshPrivateKeyAndPasswordMfaReferences()
+    {
+        const string password = "shs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        const string key = "shs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+        const string passphrase = "shs_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+        var repository = new RecordingProfileRepository();
+        var service = new ConnectionProfileIpcCommandService(repository, new FixedTimeProvider(Now));
+        var draft = new ConnectionProfileDraft(
+            new ConnectionProfileMetadataDocument("MFA shell", Tags: []),
+            new ConnectionEndpointDocument(
+                StorageConnectionProvider.Ssh,
+                Host: "ssh.example.test",
+                Port: 22),
+            new ConnectionAuthenticationDocument(
+                ConnectionAuthenticationKind.SshPrivateKeyPassword,
+                Username: "operator",
+                PasswordReference: password,
+                PrivateKeyReference: key,
+                PrivateKeyPassphraseReference: passphrase),
+            new ConnectionOperationalOptionsDocument(),
+            Type: StorageHub.Contracts.Ipc.ConnectionProfileType.Client);
+
+        var result = await service.HandleAsync(IpcEnvelope.Create(
+            ConnectionProfileIpcMessageTypes.CreateRequest,
+            Guid.NewGuid(),
+            1,
+            new ConnectionProfileCreateRequest(ConnectionProfileIpcContract.CurrentVersion, draft)));
+
+        Assert.Equal(
+            ContractWriteStatus.Succeeded,
+            result.Payload.Deserialize<ConnectionProfileWriteResponse>()?.Status);
+        var authentication = Assert.IsType<SshPrivateKeyPasswordAuthentication>(repository.Created?.Authentication);
+        Assert.Equal(password, authentication.PasswordReference.Value);
+        Assert.Equal(key, authentication.PrivateKeyReference.Value);
+        Assert.Equal(passphrase, authentication.PassphraseReference.Value);
+    }
+
+    [Fact]
     public async Task CreateRejectsProviderIrrelevantFieldsBeforeRepositoryCall()
     {
         var repository = new RecordingProfileRepository();

@@ -5,11 +5,14 @@ namespace StorageHub.Desktop;
 
 public sealed class SettingsForm : Form
 {
+    private const int ContentWidth = 700;
+    private const int NavigationWidth = 260;
     private readonly DesktopUpdatePreferencesStore _store;
     private readonly Action<DesktopUpdatePreferences>? _saved;
     private readonly IRemoteSecretVaultClient _secretClient;
     private readonly bool _ownsSecretClient;
     private readonly TreeView _categories;
+    private readonly Font _categoryItemFont;
     private readonly Dictionary<string, Control> _pages = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Control> _connectionDefaultControls = new(StringComparer.Ordinal);
     private readonly CheckBox _checkAutomatically;
@@ -28,6 +31,14 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _maximumSyncConcurrency;
     private readonly ComboBox _appearance;
     private readonly ComboBox _defaultWorkspaceLayout;
+    private readonly ComboBox _sshTerminalName;
+    private readonly TextBox _sshStartupCommand;
+    private readonly NumericUpDown _sshKeepAliveSeconds;
+    private readonly ComboBox _sshFontFamily;
+    private readonly NumericUpDown _sshFontSize;
+    private readonly NumericUpDown _sshScrollbackLines;
+    private readonly NumericUpDown _sshRefreshInterval;
+    private readonly CheckBox _sshRenderBoldText;
     private readonly Button _apply;
     private DesktopAppearance _appliedAppearance;
 
@@ -50,8 +61,8 @@ public sealed class SettingsForm : Form
         AccessibleName = "StorageHub Settings";
         AccessibleDescription = "Configure StorageHub behavior, connection trust, and updates.";
         StartPosition = FormStartPosition.CenterParent;
-        MinimumSize = new Size(840, 600);
-        Size = new Size(980, 700);
+        MinimumSize = new Size(1080, 720);
+        Size = new Size(1160, 780);
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
@@ -107,6 +118,7 @@ public sealed class SettingsForm : Form
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
             Width = 260,
+            FormattingEnabled = true,
             AccessibleName = "Application appearance"
         };
         _appearance.Items.AddRange([DesktopAppearance.Light, DesktopAppearance.Dark, DesktopAppearance.System]);
@@ -115,6 +127,7 @@ public sealed class SettingsForm : Form
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
             Width = 260,
+            FormattingEnabled = true,
             AccessibleName = "Default workspace layout"
         };
         _defaultWorkspaceLayout.Items.AddRange([WorkspaceLayout.SideBySide, WorkspaceLayout.TopAndBottom]);
@@ -124,6 +137,72 @@ public sealed class SettingsForm : Form
             _ => "Side by side"
         };
         _defaultWorkspaceLayout.SelectedItem = preferences.DefaultWorkspaceLayout;
+
+        var terminalPreferences = SshTerminalPreferences.Resolve(preferences.SshTerminal);
+        _sshTerminalName = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDown,
+            Width = 360,
+            MaxLength = SshTerminalIpcContract.MaximumTerminalNameLength,
+            Text = terminalPreferences.TerminalName,
+            AccessibleName = "SSH terminal type"
+        };
+        _sshTerminalName.Items.AddRange([
+            "xterm-256color", "xterm", "screen-256color", "tmux-256color", "linux", "vt220", "vt100"
+        ]);
+        _sshStartupCommand = new TextBox
+        {
+            Width = 390,
+            MaxLength = SshTerminalPreferences.MaximumStartupCommandLength,
+            Text = terminalPreferences.StartupCommand ?? string.Empty,
+            PlaceholderText = "Server default (examples: bash -l, zsh -l, pwsh -NoLogo)",
+            AccessibleName = "SSH startup shell or command"
+        };
+        _sshKeepAliveSeconds = CreateProviderNumberDefault(
+            terminalPreferences.KeepAliveSeconds,
+            0,
+            3_600);
+        _sshKeepAliveSeconds.AccessibleName = "SSH keepalive interval in seconds";
+        _sshFontFamily = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDown,
+            Width = 360,
+            MaxLength = 128,
+            Text = terminalPreferences.FontFamily,
+            AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+            AutoCompleteSource = AutoCompleteSource.ListItems,
+            AccessibleName = "SSH terminal font family"
+        };
+        _sshFontFamily.Items.AddRange(FontFamily.Families
+            .Select(family => family.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Cast<object>()
+            .ToArray());
+        _sshFontSize = new NumericUpDown
+        {
+            Minimum = 6,
+            Maximum = 32,
+            DecimalPlaces = 1,
+            Increment = 0.5M,
+            Value = (decimal)terminalPreferences.FontSize,
+            Width = 150,
+            AccessibleName = "SSH terminal font size"
+        };
+        _sshScrollbackLines = CreateProviderNumberDefault(
+            terminalPreferences.ScrollbackLines,
+            100,
+            20_000);
+        _sshScrollbackLines.AccessibleName = "SSH terminal scrollback lines";
+        _sshRefreshInterval = CreateProviderNumberDefault(
+            terminalPreferences.RefreshIntervalMilliseconds,
+            16,
+            500);
+        _sshRefreshInterval.AccessibleName = "SSH terminal output refresh interval in milliseconds";
+        _sshRenderBoldText = CreateOption(
+            "Render ANSI bold text",
+            "Uses a bold terminal font for server output which requests the ANSI bold attribute.",
+            terminalPreferences.RenderBoldText);
 
         _sshDiscovery = new ComboBox
         {
@@ -152,7 +231,7 @@ public sealed class SettingsForm : Form
         _sshDiscoveryDescription = new Label
         {
             AutoSize = true,
-            MaximumSize = new Size(610, 0),
+            MaximumSize = new Size(ContentWidth - 40, 0),
             ForeColor = StorageHubTheme.TextMuted,
             Padding = new Padding(0, 8, 0, 0),
             AccessibleName = "SSH host-key discovery description"
@@ -162,24 +241,24 @@ public sealed class SettingsForm : Form
         _categories = new TreeView
         {
             Dock = DockStyle.Fill,
-            ItemHeight = 30,
+            ItemHeight = 32,
+            Indent = 18,
             FullRowSelect = true,
             HideSelection = false,
-            ShowLines = true,
+            ShowLines = false,
             ShowPlusMinus = true,
             ShowRootLines = false,
-            Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point),
+            BorderStyle = BorderStyle.None,
+            Font = new Font("Segoe UI", 10F, FontStyle.Bold, GraphicsUnit.Point),
             BackColor = StorageHubTheme.SurfaceMuted,
             AccessibleName = "Settings categories"
         };
         var work = new TreeNode("Transfers & sync") { Name = "Performance" };
-        work.Nodes.Add(new TreeNode("Concurrency") { Name = "Performance" });
         _categories.Nodes.Add(work);
         _categories.Nodes.Add(new TreeNode("Editing") { Name = "Editing" });
         _categories.Nodes.Add(new TreeNode("Appearance") { Name = "Appearance" });
         _categories.Nodes.Add(new TreeNode("Workspace") { Name = "Workspace" });
-        var connections = new TreeNode("Connections") { Name = "Connections & trust" };
-        connections.Nodes.Add(new TreeNode("Overview & trust") { Name = "Connections & trust" });
+        var connections = new TreeNode("Connections & trust") { Name = "Connections & trust" };
         foreach (var type in new[] { ConnectionProfileType.Storage, ConnectionProfileType.Client })
         {
             var typeName = type == ConnectionProfileType.Storage ? "Storage" : "Clients";
@@ -194,13 +273,17 @@ public sealed class SettingsForm : Form
         connections.Expand();
         _categories.Nodes.Add(connections);
         _categories.Nodes.Add(new TreeNode("Updates") { Name = "Updates" });
-        work.Expand();
+        _categoryItemFont = new Font(_categories.Font, FontStyle.Regular);
+        foreach (TreeNode rootNode in _categories.Nodes)
+        {
+            ApplyCategoryItemFont(rootNode.Nodes, _categoryItemFont);
+        }
 
         var pageHost = new Panel
         {
             Dock = DockStyle.Fill,
             BackColor = StorageHubTheme.Surface,
-            Padding = new Padding(28, 24, 28, 18)
+            Padding = new Padding(32, 26, 32, 20)
         };
         AddPage(pageHost, "Performance", BuildPerformancePage());
         AddPage(pageHost, "Editing", BuildEditingPage());
@@ -221,7 +304,7 @@ public sealed class SettingsForm : Form
         {
             Dock = DockStyle.Fill,
             BackColor = StorageHubTheme.SurfaceMuted,
-            Padding = new Padding(12, 18, 8, 12)
+            Padding = new Padding(16, 22, 12, 14)
         };
         var navigationTitle = UiControlFactory.CreateSectionTitle("Settings");
         navigationTitle.Dock = DockStyle.Top;
@@ -232,11 +315,11 @@ public sealed class SettingsForm : Form
         var split = new SplitContainer
         {
             Dock = DockStyle.Fill,
-            Size = new Size(900, 600),
+            Size = new Size(1060, 650),
             FixedPanel = FixedPanel.Panel1,
-            SplitterDistance = 220,
-            Panel1MinSize = 190,
-            Panel2MinSize = 500,
+            SplitterDistance = NavigationWidth,
+            Panel1MinSize = NavigationWidth,
+            Panel2MinSize = ContentWidth + 64,
             IsSplitterFixed = true,
             BackColor = StorageHubTheme.Border
         };
@@ -246,10 +329,10 @@ public sealed class SettingsForm : Form
         var footer = new FlowLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            Height = 58,
+            Height = 64,
             FlowDirection = FlowDirection.RightToLeft,
             WrapContents = false,
-            Padding = new Padding(12, 9, 12, 8),
+            Padding = new Padding(16, 12, 16, 10),
             BackColor = StorageHubTheme.Surface
         };
         var ok = new Button { Text = "OK" };
@@ -283,12 +366,17 @@ public sealed class SettingsForm : Form
         _maximumSyncConcurrency.ValueChanged += ConcurrencyChanged;
         _appearance.SelectedIndexChanged += AppearanceSelectionChanged;
         _defaultWorkspaceLayout.SelectedIndexChanged += MarkDirty;
+        _sshTerminalName.TextChanged += MarkDirty;
+        _sshStartupCommand.TextChanged += MarkDirty;
+        _sshFontFamily.TextChanged += MarkDirty;
+        _sshFontSize.ValueChanged += MarkDirty;
+        _sshRenderBoldText.CheckedChanged += MarkDirty;
         foreach (var option in UpdateOptions())
         {
             option.CheckedChanged += MarkDirty;
         }
 
-        _categories.SelectedNode = work.Nodes[0];
+        _categories.SelectedNode = work;
         UpdateDependencies(this, EventArgs.Empty);
         StorageHubTheme.Apply(this);
     }
@@ -321,6 +409,11 @@ public sealed class SettingsForm : Form
             _maximumSyncConcurrency.ValueChanged -= ConcurrencyChanged;
             _appearance.SelectedIndexChanged -= AppearanceSelectionChanged;
             _defaultWorkspaceLayout.SelectedIndexChanged -= MarkDirty;
+            _sshTerminalName.TextChanged -= MarkDirty;
+            _sshStartupCommand.TextChanged -= MarkDirty;
+            _sshFontFamily.TextChanged -= MarkDirty;
+            _sshFontSize.ValueChanged -= MarkDirty;
+            _sshRenderBoldText.CheckedChanged -= MarkDirty;
             foreach (var option in UpdateOptions())
             {
                 option.CheckedChanged -= MarkDirty;
@@ -332,6 +425,7 @@ public sealed class SettingsForm : Form
             }
 
             _categories.Font.Dispose();
+            _categoryItemFont.Dispose();
         }
 
         base.Dispose(disposing);
@@ -341,17 +435,18 @@ public sealed class SettingsForm : Form
     {
         var page = CreatePage(
             "Concurrency",
-            "One provider-neutral policy controls Local, S3, FTP, FTPS, and SFTP transfers plus background synchronization work.");
+            "Control how many transfers and synchronization jobs run at once.");
         page.Controls.Add(_adaptiveConcurrency);
         var table = new TableLayoutPanel
         {
             AutoSize = true,
-            Width = 650,
+            Width = ContentWidth,
             ColumnCount = 2,
             Padding = new Padding(0, 12, 0, 0)
         };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 72));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
+        StyleSettingsSection(table);
         AddConcurrencyRow(table, "Start with", _minimumConcurrency,
             "The adaptive controller begins conservatively at this many jobs.");
         AddConcurrencyRow(table, "Maximum transfers", _maximumTransferConcurrency,
@@ -360,10 +455,9 @@ public sealed class SettingsForm : Form
             "Prevents one server, bucket, or local connection from consuming every worker.");
         AddConcurrencyRow(table, "Maximum synchronizations", _maximumSyncConcurrency,
             "Separate ceiling for scheduled and manually approved synchronization runs.");
+        table.AutoSize = false;
+        table.Height = 300;
         page.Controls.Add(table);
-        page.Controls.Add(CreateInformationCard(
-            "How automatic tuning works",
-            "StorageHub measures completed work, raises concurrency only after sustained throughput, and lowers it immediately after significant slowdown or a provider failure. Changes apply when the background Agent safely restarts."));
         return page;
     }
 
@@ -371,12 +465,12 @@ public sealed class SettingsForm : Form
     {
         var page = CreatePage(
             "Connections & trust",
-            "Choose when StorageHub may contact a new SFTP endpoint to retrieve its presented SSH host key.");
+            "Choose how SSH host keys are discovered before you verify and trust them.");
         var layout = new TableLayoutPanel
         {
             AutoSize = true,
-            Width = 650,
-            MinimumSize = new Size(650, 0),
+            Width = ContentWidth,
+            MinimumSize = new Size(ContentWidth, 0),
             ColumnCount = 1,
             Padding = new Padding(0, 14, 0, 0)
         };
@@ -390,6 +484,7 @@ public sealed class SettingsForm : Form
         layout.Controls.Add(_sshDiscovery);
         layout.Controls.Add(_sshDiscoveryDescription);
         layout.Controls.Add(CreateSecurityNotice());
+        StyleSettingsSection(layout);
         page.Controls.Add(layout);
         return page;
     }
@@ -398,11 +493,11 @@ public sealed class SettingsForm : Form
     {
         var page = CreatePage(
             "External editing",
-            "Download a bounded remote file into StorageHub's private temporary workspace, open it in your editor, and ask before uploading detected changes.");
+            "Choose how remote files open in an external editor.");
         var layout = new TableLayoutPanel
         {
             AutoSize = true,
-            Width = 650,
+            Width = ContentWidth,
             ColumnCount = 2,
             Padding = new Padding(0, 12, 0, 0)
         };
@@ -423,9 +518,9 @@ public sealed class SettingsForm : Form
         layout.Controls.Add(browse, 1, 1);
         layout.Controls.Add(new Label
         {
-            Text = "Leave blank to use the Windows file association. StorageHub passes only the temporary file path to the editor.",
+            Text = "Leave blank to use the Windows default app.",
             AutoSize = true,
-            MaximumSize = new Size(620, 0),
+            MaximumSize = new Size(ContentWidth - 44, 0),
             ForeColor = StorageHubTheme.TextMuted,
             Padding = new Padding(0, 4, 0, 12)
         }, 0, 2);
@@ -441,9 +536,9 @@ public sealed class SettingsForm : Form
         layout.Controls.Add(_maximumEditableKilobytes, 0, 4);
         layout.Controls.Add(new Label
         {
-            Text = "Hard limit: 1,024 KiB (1 MiB). Larger files are rejected before download and before re-upload.",
+            Text = "Maximum: 1,024 KiB (1 MiB).",
             AutoSize = true,
-            MaximumSize = new Size(620, 0),
+            MaximumSize = new Size(ContentWidth - 44, 0),
             ForeColor = StorageHubTheme.Warning,
             Padding = new Padding(0, 5, 0, 0)
         }, 0, 5);
@@ -451,6 +546,7 @@ public sealed class SettingsForm : Form
         _warnBeforeUnsafeExternalEdit.Padding = new Padding(0, 12, 0, 0);
         layout.Controls.Add(_warnBeforeUnsafeExternalEdit, 0, 6);
         layout.SetColumnSpan(_warnBeforeUnsafeExternalEdit, 2);
+        StyleSettingsSection(layout);
         page.Controls.Add(layout);
         return page;
     }
@@ -474,12 +570,12 @@ public sealed class SettingsForm : Form
     {
         var page = CreatePage(
             "Updates",
-            "StorageHub checks the fixed official GitHub release feed and uses the same package lifecycle as the verified installer pipeline.");
+            "Choose how StorageHub checks for and installs updates.");
         var options = new FlowLayoutPanel
         {
             AutoSize = true,
-            Width = 650,
-            MinimumSize = new Size(650, 0),
+            Width = ContentWidth,
+            MinimumSize = new Size(ContentWidth, 0),
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
             Padding = new Padding(0, 10, 0, 0)
@@ -488,7 +584,6 @@ public sealed class SettingsForm : Form
         {
             options.Controls.Add(option);
         }
-
         options.Controls.Add(new Label
         {
             AutoSize = true,
@@ -497,6 +592,7 @@ public sealed class SettingsForm : Form
             Padding = new Padding(0, 12, 0, 0),
             AccessibleName = "Update source and installed version"
         });
+        StyleSettingsSection(options);
         page.Controls.Add(options);
         return page;
     }
@@ -512,16 +608,97 @@ public sealed class SettingsForm : Form
             WrapContents = false
         };
         var heading = UiControlFactory.CreateSectionTitle(title);
-        heading.Width = 650;
-        heading.MinimumSize = new Size(650, 0);
-        heading.Height = 32;
+        heading.Width = ContentWidth;
+        heading.MinimumSize = new Size(ContentWidth, 0);
+        heading.Font = new Font("Segoe UI Semibold", 16F, FontStyle.Bold, GraphicsUnit.Point);
+        heading.Height = 40;
         var summary = UiControlFactory.CreateDescription(description);
-        summary.Width = 650;
-        summary.MinimumSize = new Size(650, 0);
-        summary.Padding = new Padding(0, 0, 0, 12);
+        summary.Width = ContentWidth;
+        summary.MinimumSize = new Size(ContentWidth, 0);
+        summary.MaximumSize = new Size(ContentWidth, 0);
+        summary.Padding = new Padding(0, 0, 0, 14);
         page.Controls.Add(heading);
         page.Controls.Add(summary);
+        page.Layout += FitSettingsPageContent;
         return page;
+    }
+
+    private static void FitSettingsPageContent(object? sender, LayoutEventArgs e)
+    {
+        if (sender is FlowLayoutPanel page)
+        {
+            FitSettingsPageContent(page);
+        }
+    }
+
+    private static void FitSettingsPageContent(FlowLayoutPanel page)
+    {
+        if (!page.Visible || !page.IsHandleCreated ||
+            page.ClientSize.Width <= SystemInformation.VerticalScrollBarWidth + 1)
+        {
+            return;
+        }
+
+        var scrollbarWidth = page.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0;
+        var availableWidth = Math.Max(1, page.ClientSize.Width - scrollbarWidth - 1);
+        foreach (Control control in page.Controls)
+        {
+            if (control is Button or CheckBox || control.Width == availableWidth)
+            {
+                continue;
+            }
+
+            control.MinimumSize = new Size(0, control.MinimumSize.Height);
+            if (control is Label && control.MaximumSize.Width > 0)
+            {
+                control.MaximumSize = new Size(availableWidth, control.MaximumSize.Height);
+            }
+            control.Width = availableWidth;
+        }
+    }
+
+    private static void ApplyCategoryItemFont(TreeNodeCollection nodes, Font itemFont)
+    {
+        foreach (TreeNode node in nodes)
+        {
+            node.NodeFont = itemFont;
+            ApplyCategoryItemFont(node.Nodes, itemFont);
+        }
+    }
+
+    private static void StyleSettingsSection(Control section)
+    {
+        section.Width = ContentWidth;
+        section.MinimumSize = new Size(ContentWidth, 0);
+        section.BackColor = StorageHubTheme.SurfaceMuted;
+        section.Padding = new Padding(18);
+        section.Margin = new Padding(0, 4, 0, 12);
+        section.Paint += DrawSettingsSectionBorder;
+        if (section is TableLayoutPanel table)
+        {
+            table.AutoSize = true;
+            table.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            table.GrowStyle = TableLayoutPanelGrowStyle.AddRows;
+        }
+        var preferredHeight = section.GetPreferredSize(new Size(ContentWidth, 0)).Height;
+        section.AutoSize = false;
+        section.Height = preferredHeight;
+        if (string.IsNullOrEmpty(section.Name))
+        {
+            section.Name = "SettingsSection";
+        }
+    }
+
+    private static void DrawSettingsSectionBorder(object? sender, PaintEventArgs e)
+    {
+        if (sender is not Control section || section.ClientRectangle.Width <= 1 || section.ClientRectangle.Height <= 1)
+        {
+            return;
+        }
+
+        var bounds = Rectangle.Inflate(section.ClientRectangle, -1, -1);
+        using var pen = new Pen(StorageHubTheme.Border);
+        e.Graphics.DrawRectangle(pen, bounds);
     }
 
     private static TableLayoutPanel CreateInformationCard(string title, string text)
@@ -530,14 +707,14 @@ public sealed class SettingsForm : Form
         {
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Width = 650,
-            MinimumSize = new Size(650, 0),
+            Width = ContentWidth,
+            MinimumSize = new Size(ContentWidth, 0),
             ColumnCount = 1,
             RowCount = 2,
             GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
             BackColor = StorageHubTheme.SurfaceMuted,
             Padding = new Padding(14),
-            Margin = new Padding(0, 10, 0, 0),
+            Margin = new Padding(0, 4, 0, 12),
             Name = "InformationCard",
             AccessibleName = $"{title} settings card"
         };
@@ -556,13 +733,16 @@ public sealed class SettingsForm : Form
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
-            MaximumSize = new Size(620, 0),
+            MaximumSize = new Size(ContentWidth - 40, 0),
             Text = text,
             ForeColor = StorageHubTheme.TextMuted,
             Padding = new Padding(0, 6, 0, 0)
         };
         card.Controls.Add(heading, 0, 0);
         card.Controls.Add(description, 0, 1);
+        card.Height = card.GetPreferredSize(new Size(ContentWidth, 0)).Height;
+        card.AutoSize = false;
+        card.Paint += DrawSettingsSectionBorder;
         return card;
     }
 
@@ -572,8 +752,9 @@ public sealed class SettingsForm : Form
         {
             AutoSize = true,
             BackColor = StorageHubTheme.SurfaceMuted,
-            Width = 650,
-            MinimumSize = new Size(650, 0),
+            Width = ContentWidth - 36,
+            MinimumSize = new Size(ContentWidth - 36, 0),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             Padding = new Padding(12),
             Margin = new Padding(0, 18, 0, 0)
         };
@@ -608,8 +789,9 @@ public sealed class SettingsForm : Form
             Text = text,
             Checked = isChecked,
             AutoSize = true,
-            MaximumSize = new Size(650, 0),
+            MaximumSize = new Size(ContentWidth, 0),
             Margin = new Padding(0, 8, 0, 8),
+            ForeColor = StorageHubTheme.Text,
             AccessibleName = text,
             AccessibleDescription = description
         };
@@ -631,6 +813,7 @@ public sealed class SettingsForm : Form
         string description)
     {
         var row = table.RowCount++;
+        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var text = new Label
         {
             Text = label,
@@ -645,22 +828,23 @@ public sealed class SettingsForm : Form
         {
             Text = description,
             AutoSize = true,
-            MaximumSize = new Size(610, 0),
+            MaximumSize = new Size(ContentWidth - 40, 0),
             ForeColor = StorageHubTheme.TextMuted,
             Padding = new Padding(0, 2, 0, 10)
         };
         table.Controls.Add(help, 0, row + 1);
         table.SetColumnSpan(help, 2);
         table.RowCount++;
+        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     }
 
     private FlowLayoutPanel BuildAppearancePage()
     {
-        var page = CreatePage("Appearance", "Choose the color theme used throughout StorageHub.");
+        var page = CreatePage("Appearance", "Choose the application color theme.");
         var layout = new TableLayoutPanel
         {
             AutoSize = true,
-            Width = 650,
+            Width = ContentWidth,
             ColumnCount = 1,
             Padding = new Padding(0, 12, 0, 0)
         };
@@ -673,7 +857,8 @@ public sealed class SettingsForm : Form
         });
         layout.Controls.Add(_appearance);
         layout.Controls.Add(UiControlFactory.CreateDescription(
-            "System follows the Windows app theme. Choices preview immediately; Apply or OK remembers the choice, while Cancel restores the last applied theme."));
+            "System follows Windows. Changes preview immediately."));
+        StyleSettingsSection(layout);
         page.Controls.Add(layout);
         return page;
     }
@@ -682,11 +867,11 @@ public sealed class SettingsForm : Form
     {
         var page = CreatePage(
             "Workspace",
-            "Choose how the two panes are arranged when a new workspace is created. Every workspace can still switch layouts from its own toolbar.");
+            "Choose the default arrangement for new workspaces.");
         var layout = new TableLayoutPanel
         {
             AutoSize = true,
-            Width = 650,
+            Width = ContentWidth,
             ColumnCount = 1,
             Padding = new Padding(0, 12, 0, 0)
         };
@@ -699,7 +884,8 @@ public sealed class SettingsForm : Form
         });
         layout.Controls.Add(_defaultWorkspaceLayout);
         layout.Controls.Add(UiControlFactory.CreateDescription(
-            "Side by side is the classic left/right file-manager layout. Top and bottom works especially well with an SSH terminal above a storage browser."));
+            "You can switch layouts from each workspace toolbar."));
+        StyleSettingsSection(layout);
         page.Controls.Add(layout);
         return page;
     }
@@ -710,8 +896,8 @@ public sealed class SettingsForm : Form
         var page = CreatePage(
             isStorage ? "Storage connections" : "Client connections",
             isStorage
-                ? "Browsable endpoints used by file operations, transfers, synchronization, and schedules."
-                : "Interactive remote clients. Client profiles share Connection Manager labels, folders, vault references, and trust records without appearing in storage pickers.");
+                ? "Providers available for browsing, transfers, and synchronization."
+                : "Interactive remote client providers.");
         var providers = ConnectionProviderCatalog.All.Where(provider => provider.Type == type).ToArray();
         foreach (var provider in providers)
         {
@@ -728,14 +914,16 @@ public sealed class SettingsForm : Form
     {
         var page = CreatePage(
             $"{provider.DisplayName} defaults",
-            $"Defaults applied when you create a new {provider.DisplayName} profile. Existing saved profiles are never changed.");
+            provider.Kind == StorageProviderKind.Ssh
+                ? "Defaults for new SSH profiles and terminal sessions."
+                : $"Defaults for new {provider.DisplayName} profiles.");
         var defaults = ConnectionDefaultSettings.Get(provider.Kind, preferences.ConnectionDefaults);
         var editor = new TableLayoutPanel
         {
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Width = 650,
-            MinimumSize = new Size(650, 0),
+            Width = ContentWidth,
+            MinimumSize = new Size(ContentWidth, 0),
             ColumnCount = 2,
             Padding = new Padding(0, 8, 0, 6),
             Name = $"ProviderSettings:{provider.Kind}",
@@ -743,39 +931,68 @@ public sealed class SettingsForm : Form
         };
         editor.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
         editor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        AddProviderDefaultRow(
-            editor,
-            provider.Kind,
-            ConnectionDefaultSettings.ConnectTimeoutKey,
-            "Connection timeout (seconds)",
-            CreateProviderNumberDefault(defaults.ConnectTimeoutSeconds, 1, 600));
-        AddProviderDefaultRow(
-            editor,
-            provider.Kind,
-            ConnectionDefaultSettings.OperationTimeoutKey,
-            "Operation timeout (seconds)",
-            CreateProviderNumberDefault(defaults.OperationTimeoutSeconds, 1, 86_400));
-        AddProviderDefaultRow(
-            editor,
-            provider.Kind,
-            ConnectionDefaultSettings.RetryAttemptsKey,
-            "Retry attempts",
-            CreateProviderNumberDefault(defaults.MaximumRetryAttempts, 0, 20));
-        foreach (var field in ConnectionDefaultSettings.EditableFields(provider))
+        AddProviderSectionTitle(editor, "Basic defaults");
+        var editableFields = ConnectionDefaultSettings.EditableFields(provider);
+        if (editableFields.Count == 0)
+        {
+            AddProviderSectionNote(
+                editor,
+                "This provider has no reusable basic defaults. Its root path remains specific to each connection.");
+        }
+        foreach (var field in editableFields)
         {
             AddProviderDefaultRow(
                 editor,
                 provider.Kind,
                 field.Key,
-                $"Default {field.Label.ToLowerInvariant()}",
-                CreateProviderFieldDefault(field, defaults.FieldValues[field.Key]));
+                ProviderDefaultLabel(field),
+                CreateProviderFieldDefault(field, defaults.FieldValues[field.Key]),
+                ProviderFieldDescription(field));
         }
 
-        page.Controls.Add(editor);
-        page.Controls.Add(CreateInformationCard(
-            "Profile-specific values stay in Connection Manager",
-            "Names, folders, labels, hosts, buckets, usernames, passwords, passphrases, access keys, certificate pins, and SSH fingerprints stay per connection. An imported SSH private key is the one reusable credential exception: Settings stores only its encrypted-vault reference."));
+        AddProviderSectionTitle(editor, "Advanced connection behavior");
+        var connectionTimeout = CreateProviderNumberDefault(defaults.ConnectTimeoutSeconds, 1, 600);
+        AddProviderDefaultRow(
+            editor,
+            provider.Kind,
+            ConnectionDefaultSettings.ConnectTimeoutKey,
+            "Connection timeout (seconds)",
+            connectionTimeout,
+            description: null);
+        var operationTimeout = CreateProviderNumberDefault(defaults.OperationTimeoutSeconds, 1, 86_400);
+        operationTimeout.Enabled = provider.Kind == StorageProviderKind.Local;
+        if (provider.Kind != StorageProviderKind.Local)
+        {
+            connectionTimeout.ValueChanged += (_, _) => operationTimeout.Value = connectionTimeout.Value;
+        }
+        AddProviderDefaultRow(
+            editor,
+            provider.Kind,
+            ConnectionDefaultSettings.OperationTimeoutKey,
+            "Operation timeout (seconds)",
+            operationTimeout,
+            provider.Kind == StorageProviderKind.Local
+                ? null
+                : "Uses the connection timeout for this provider.");
+        var retries = CreateProviderNumberDefault(defaults.MaximumRetryAttempts, 0, 20);
+        var retriesSupported = ConnectionDefaultSettings.SupportsConfigurableRetries(provider.Kind);
+        retries.Enabled = retriesSupported;
+        AddProviderDefaultRow(
+            editor,
+            provider.Kind,
+            ConnectionDefaultSettings.RetryAttemptsKey,
+            "Retry attempts",
+            retries,
+            retriesSupported
+                ? null
+                : "Automatic retries are not supported for this provider.");
 
+        StyleSettingsSection(editor);
+        page.Controls.Add(editor);
+        if (provider.Kind == StorageProviderKind.Ssh)
+        {
+            page.Controls.Add(BuildSshTerminalSettingsEditor());
+        }
         var open = new Button
         {
             Text = $"Create a {provider.DisplayName} connection...",
@@ -791,6 +1008,73 @@ public sealed class SettingsForm : Form
         };
         page.Controls.Add(open);
         return page;
+    }
+
+    private TableLayoutPanel BuildSshTerminalSettingsEditor()
+    {
+        var editor = new TableLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Width = ContentWidth,
+            MinimumSize = new Size(ContentWidth, 0),
+            ColumnCount = 2,
+            Padding = new Padding(0, 18, 0, 8),
+            Name = "SshTerminalSettings",
+            AccessibleName = "SSH terminal and shell preferences"
+        };
+        editor.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
+        editor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        var title = UiControlFactory.CreateSectionTitle("Terminal & shell");
+        title.Margin = new Padding(0, 0, 0, 8);
+        editor.Controls.Add(title, 0, editor.RowCount);
+        editor.SetColumnSpan(title, 2);
+        editor.RowCount++;
+        AddSshTerminalRow(editor, "Terminal type (TERM)", _sshTerminalName,
+            "Advertised to the server, for example xterm-256color or vt220.");
+        AddSshTerminalRow(editor, "Startup shell / command", _sshStartupCommand);
+        AddSshTerminalRow(editor, "Keepalive interval (seconds)", _sshKeepAliveSeconds);
+        AddSshTerminalRow(editor, "Font family", _sshFontFamily,
+            "A monospaced font is recommended.");
+        AddSshTerminalRow(editor, "Font size (points)", _sshFontSize);
+        AddSshTerminalRow(editor, "Scrollback lines", _sshScrollbackLines);
+        AddSshTerminalRow(editor, "Output refresh (milliseconds)", _sshRefreshInterval,
+            "Lower is smoother; higher uses fewer resources.");
+        AddSshTerminalRow(editor, "ANSI text", _sshRenderBoldText);
+        StyleSettingsSection(editor);
+        return editor;
+    }
+
+    private static void AddSshTerminalRow(
+        TableLayoutPanel table,
+        string label,
+        Control control,
+        string? description = null)
+    {
+        var row = table.RowCount++;
+        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        table.Controls.Add(new Label
+        {
+            Text = label,
+            AutoSize = true,
+            ForeColor = StorageHubTheme.Text,
+            Padding = new Padding(0, 7, 10, 4)
+        }, 0, row);
+        var host = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Margin = Padding.Empty
+        };
+        control.Margin = Padding.Empty;
+        host.Controls.Add(control);
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            host.Controls.Add(UiControlFactory.CreateDescription(description));
+        }
+        table.Controls.Add(host, 1, row);
     }
 
     private NumericUpDown CreateProviderNumberDefault(int value, int minimum, int maximum)
@@ -949,12 +1233,14 @@ public sealed class SettingsForm : Form
         StorageProviderKind provider,
         string setting,
         string label,
-        Control control)
+        Control control,
+        string? description = null)
     {
         var key = ConnectionDefaultSettings.Key(provider, setting);
         control.AccessibleName = label;
         _connectionDefaultControls.Add(key, control);
         var row = table.RowCount++;
+        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         table.Controls.Add(new Label
         {
             Text = label,
@@ -962,8 +1248,63 @@ public sealed class SettingsForm : Form
             ForeColor = StorageHubTheme.Text,
             Padding = new Padding(0, 7, 10, 4)
         }, 0, row);
-        table.Controls.Add(control, 1, row);
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            table.Controls.Add(control, 1, row);
+            return;
+        }
+
+        var host = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Margin = Padding.Empty
+        };
+        control.Margin = Padding.Empty;
+        host.Controls.Add(control);
+        host.Controls.Add(UiControlFactory.CreateDescription(description));
+        table.Controls.Add(host, 1, row);
     }
+
+    private static void AddProviderSectionTitle(TableLayoutPanel table, string text)
+    {
+        var title = UiControlFactory.CreateSectionTitle(text);
+        title.Margin = new Padding(0, table.RowCount == 0 ? 0 : 14, 0, 6);
+        var row = table.RowCount++;
+        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        table.Controls.Add(title, 0, row);
+        table.SetColumnSpan(title, 2);
+    }
+
+    private static void AddProviderSectionNote(TableLayoutPanel table, string text)
+    {
+        var note = UiControlFactory.CreateDescription(text);
+        note.MaximumSize = new Size(ContentWidth - 40, 0);
+        note.Margin = new Padding(0, 0, 0, 6);
+        var row = table.RowCount++;
+        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        table.Controls.Add(note, 0, row);
+        table.SetColumnSpan(note, 2);
+    }
+
+    private static string? ProviderFieldDescription(ConnectionFieldDescriptor field)
+    {
+        return field.Key switch
+        {
+            "authenticationMode" => "Selects the authentication fields shown for new profiles.",
+            "privateKeyReference" => "Stored securely in the encrypted vault.",
+            "tlsMode" or "trustMode" => field.HelpText,
+            _ => null
+        };
+    }
+
+    private static string ProviderDefaultLabel(ConnectionFieldDescriptor field) => field.Key switch
+    {
+        "privateKeyReference" => "Default private key",
+        _ => $"Default {field.Label.ToLowerInvariant()}"
+    };
 
     private static void AddProviderFact(TableLayoutPanel table, string label, string value)
     {
@@ -1013,6 +1354,11 @@ public sealed class SettingsForm : Form
             if (page.Value.Visible)
             {
                 page.Value.BringToFront();
+                if (page.Value is FlowLayoutPanel settingsPage)
+                {
+                    settingsPage.PerformLayout();
+                    FitSettingsPageContent(settingsPage);
+                }
             }
         }
     }
@@ -1098,6 +1444,17 @@ public sealed class SettingsForm : Form
         return ConnectionDefaultSettings.Normalize(values);
     }
 
+    private SshTerminalPreferences ReadSshTerminalPreferences() =>
+        SshTerminalPreferences.Resolve(new SshTerminalPreferences(
+            _sshTerminalName.Text,
+            _sshStartupCommand.Text,
+            decimal.ToInt32(_sshKeepAliveSeconds.Value),
+            _sshFontFamily.Text,
+            decimal.ToSingle(_sshFontSize.Value),
+            decimal.ToInt32(_sshScrollbackLines.Value),
+            decimal.ToInt32(_sshRefreshInterval.Value),
+            _sshRenderBoldText.Checked));
+
     private bool TrySave()
     {
         try
@@ -1137,7 +1494,8 @@ public sealed class SettingsForm : Form
                 ReadConnectionDefaults(),
                 _defaultWorkspaceLayout.SelectedItem is WorkspaceLayout layout
                     ? layout
-                    : WorkspaceLayout.SideBySide);
+                    : WorkspaceLayout.SideBySide,
+                ReadSshTerminalPreferences());
             if (_saved is null)
             {
                 _store.Save(preferences);

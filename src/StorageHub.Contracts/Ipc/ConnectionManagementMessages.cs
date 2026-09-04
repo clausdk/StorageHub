@@ -5,7 +5,7 @@ namespace StorageHub.Contracts.Ipc;
 /// <summary>The independently versioned saved-connection management contract.</summary>
 public static class ConnectionProfileIpcContract
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     public static bool IsSupported(int version) => version == CurrentVersion;
 }
@@ -72,7 +72,8 @@ public enum ConnectionAuthenticationKind
     CredentialReference = 3,
     UsernamePassword = 4,
     S3AccessKey = 5,
-    SftpPrivateKey = 6
+    SftpPrivateKey = 6,
+    SshPrivateKeyPassword = 7
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<ConnectionSftpPrivateKeyFormat>))]
@@ -275,6 +276,9 @@ public sealed record ConnectionAuthenticationDocument(
             ConnectionAuthenticationKind.SftpPrivateKey =>
                 hasUsername && !hasCredential && !hasPassword && !hasAccess && !hasSecret &&
                 !hasToken && hasKey && hasPassphrase,
+            ConnectionAuthenticationKind.SshPrivateKeyPassword =>
+                hasUsername && !hasCredential && hasPassword && !hasAccess && !hasSecret &&
+                !hasToken && hasKey && hasPassphrase,
             _ => false
         };
     }
@@ -346,7 +350,8 @@ public sealed record ConnectionProfileDraft(
         StorageConnectionProvider.Sftp => Authentication.Kind is
             ConnectionAuthenticationKind.UsernamePassword or ConnectionAuthenticationKind.SftpPrivateKey,
         StorageConnectionProvider.Ssh => Authentication.Kind is
-            ConnectionAuthenticationKind.UsernamePassword or ConnectionAuthenticationKind.SftpPrivateKey,
+            ConnectionAuthenticationKind.UsernamePassword or ConnectionAuthenticationKind.SftpPrivateKey or
+            ConnectionAuthenticationKind.SshPrivateKeyPassword,
         _ => false
     };
 }

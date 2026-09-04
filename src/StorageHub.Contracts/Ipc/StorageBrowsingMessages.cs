@@ -6,11 +6,14 @@ namespace StorageHub.Contracts.Ipc;
 public static class StorageIpcContract
 {
     public const int LegacyVersion = 1;
-    public const int CurrentVersion = 2;
+    public const int StableIdentityVersion = 2;
+    public const int CurrentVersion = 3;
 
-    public static bool IsSupported(int version) => version is LegacyVersion or CurrentVersion;
+    public static bool IsSupported(int version) => version is >= LegacyVersion and <= CurrentVersion;
 
-    public static bool SupportsStableItemIdentities(int version) => version == CurrentVersion;
+    public static bool SupportsStableItemIdentities(int version) => version >= StableIdentityVersion;
+
+    public static bool SupportsConnectionHealth(int version) => version >= CurrentVersion;
 }
 
 /// <summary>
@@ -118,7 +121,38 @@ public sealed record ConnectionSummary(
     string? IconKey,
     string? AccentColor,
     long Version,
-    ConnectionProfileType Type = ConnectionProfileType.Storage);
+    ConnectionProfileType Type = ConnectionProfileType.Storage,
+    ConnectionHealthSnapshot? Health = null);
+
+[JsonConverter(typeof(JsonStringEnumConverter<ConnectionHealthState>))]
+public enum ConnectionHealthState
+{
+    Healthy = 1,
+    NeedsAttention = 2,
+    Unavailable = 3
+}
+
+public sealed record ConnectionHealthSnapshot(
+    ConnectionHealthState State,
+    DateTimeOffset CheckedUtc,
+    long ElapsedMilliseconds,
+    string Status,
+    bool RequiresCredentialAction = false,
+    bool RequiresTrustAction = false)
+{
+    public bool HasValidBounds =>
+        Enum.IsDefined(State) &&
+        CheckedUtc != default &&
+        CheckedUtc.Offset == TimeSpan.Zero &&
+        ElapsedMilliseconds >= 0 &&
+        ConnectionProfileMetadataDocument.IsSafeText(
+            Status,
+            StorageIpcLimits.MaximumFailureMessageLength,
+            required: true) &&
+        !(RequiresCredentialAction && RequiresTrustAction) &&
+        (State == ConnectionHealthState.NeedsAttention ||
+            !RequiresCredentialAction && !RequiresTrustAction);
+}
 
 public sealed record ConnectionListResponse(
     int ContractVersion,

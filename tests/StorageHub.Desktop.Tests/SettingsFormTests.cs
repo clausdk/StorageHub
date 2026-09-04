@@ -23,9 +23,9 @@ public sealed class SettingsFormTests
             Assert.NotEmpty(cards);
             Assert.All(cards, card =>
             {
-                Assert.True(card.AutoSize);
-                Assert.Equal(AutoSizeMode.GrowAndShrink, card.AutoSizeMode);
-                Assert.True(card.MinimumSize.Width >= 650);
+                Assert.False(card.AutoSize);
+                Assert.True(card.Height > 0);
+                Assert.True(card.Width >= 650);
                 Assert.Equal(2, card.RowCount);
                 Assert.All(card.Controls.Cast<Control>(), child =>
                     Assert.Equal(DockStyle.Fill, child.Dock));
@@ -43,13 +43,13 @@ public sealed class SettingsFormTests
 
             Assert.Contains(navigation.Nodes.Cast<TreeNode>(), node => node.Text == "Transfers & sync");
             Assert.Contains(navigation.Nodes.Cast<TreeNode>(), node => node.Text == "Appearance");
-            var connections = Assert.Single(navigation.Nodes.Cast<TreeNode>(), node => node.Text == "Connections");
+            var connections = Assert.Single(navigation.Nodes.Cast<TreeNode>(), node => node.Text == "Connections & trust");
             Assert.Contains(connections.Nodes.Cast<TreeNode>(), node => node.Text == "Storage");
             Assert.Contains(connections.Nodes.Cast<TreeNode>(), node => node.Text == "Clients");
             Assert.DoesNotContain(navigation.Nodes.Cast<TreeNode>(), node => node.Text == "General");
-            Assert.Contains(
-                navigation.Nodes.Cast<TreeNode>().SelectMany(node => node.Nodes.Cast<TreeNode>()),
-                node => node.Text == "Concurrency");
+            Assert.Empty(navigation.Nodes.Cast<TreeNode>()
+                .Where(node => node.Text == "Transfers & sync")
+                .SelectMany(node => node.Nodes.Cast<TreeNode>()));
             Assert.DoesNotContain(navigation.Nodes.Cast<TreeNode>(), node => node.Text.Contains("About", StringComparison.Ordinal));
         });
     }
@@ -62,7 +62,7 @@ public sealed class SettingsFormTests
             using var settings = new SettingsForm();
             var navigation = GetField<TreeView>(settings, "_categories");
             var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
-            var connections = Assert.Single(navigation.Nodes.Cast<TreeNode>(), node => node.Text == "Connections");
+            var connections = Assert.Single(navigation.Nodes.Cast<TreeNode>(), node => node.Text == "Connections & trust");
 
             foreach (var type in new[] { ConnectionProfileType.Storage, ConnectionProfileType.Client })
             {
@@ -228,8 +228,9 @@ public sealed class SettingsFormTests
                     key.Contains("fingerprint", StringComparison.OrdinalIgnoreCase));
                 Assert.IsType<NumericUpDown>(controls["Ftp.port"]).Value = 2121;
                 Assert.IsType<TextBox>(controls["Ftp.initialPath"]).Text = "/incoming";
-                Assert.IsType<NumericUpDown>(controls["Ftp.operationTimeoutSeconds"]).Value = 90;
-                Assert.IsType<NumericUpDown>(controls["Ftp.maximumRetryAttempts"]).Value = 4;
+                Assert.IsType<NumericUpDown>(controls["Ftp.connectTimeoutSeconds"]).Value = 90;
+                Assert.False(Assert.IsType<NumericUpDown>(controls["Ftp.operationTimeoutSeconds"]).Enabled);
+                Assert.False(Assert.IsType<NumericUpDown>(controls["Ftp.maximumRetryAttempts"]).Enabled);
                 Assert.IsType<TableLayoutPanel>(controls["Ssh.privateKeyReference"])
                     .Controls.OfType<TextBox>().Single().Text = sshKeyReference;
 
@@ -240,8 +241,9 @@ public sealed class SettingsFormTests
             var ftp = ConnectionDefaultSettings.Get(StorageProviderKind.Ftp, saved.ConnectionDefaults);
             Assert.Equal("2121", ftp.FieldValues["port"]);
             Assert.Equal("/incoming", ftp.FieldValues["initialPath"]);
+            Assert.Equal(90, ftp.ConnectTimeoutSeconds);
             Assert.Equal(90, ftp.OperationTimeoutSeconds);
-            Assert.Equal(4, ftp.MaximumRetryAttempts);
+            Assert.Equal(0, ftp.MaximumRetryAttempts);
             var ssh = ConnectionDefaultSettings.Get(StorageProviderKind.Ssh, saved.ConnectionDefaults);
             Assert.Equal(sshKeyReference, ssh.FieldValues["privateKeyReference"]);
             SyncRunReviewControlTests.RunOnSta(() =>
@@ -296,6 +298,170 @@ public sealed class SettingsFormTests
         }
     }
 
+    [Fact]
+    public void Every_settings_page_fits_at_supported_window_sizes()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var settings = new SettingsForm();
+            Assert.False(settings.MinimumSize.IsEmpty);
+
+            var supportedSizes = new[]
+            {
+                new Size(Math.Min(settings.MinimumSize.Width, 1022), settings.MinimumSize.Height),
+                new Size(1120, 780)
+            };
+            settings.MinimumSize = Size.Empty;
+            settings.Size = supportedSizes[0];
+            settings.Show();
+            var navigation = GetField<TreeView>(settings, "_categories");
+            var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
+            var screenshotDirectory = Environment.GetEnvironmentVariable("STORAGEHUB_SETTINGS_SCREENSHOT_DIR");
+            if (!string.IsNullOrWhiteSpace(screenshotDirectory))
+            {
+                Directory.CreateDirectory(screenshotDirectory);
+            }
+
+            foreach (var size in supportedSizes)
+            {
+                settings.Size = size;
+                System.Windows.Forms.Application.DoEvents();
+                foreach (var button in settings.Controls.Cast<Control>()
+                             .SelectMany(DescendantsAndSelf)
+                             .OfType<Button>()
+                             .Where(button => button.Text is "OK" or "Cancel" or "Apply"))
+                {
+                    var bounds = settings.RectangleToClient(
+                        button.Parent!.RectangleToScreen(button.Bounds));
+                    Assert.True(
+                        settings.ClientRectangle.Contains(bounds),
+                        $"The {button.Text} button was clipped at {size}. Client={settings.ClientRectangle}; Button={bounds}.");
+                }
+
+                var index = 0;
+                foreach (var node in DescendantNodes(navigation.Nodes))
+                {
+                    if (!pages.ContainsKey(node.Name))
+                    {
+                        continue;
+                    }
+
+                    navigation.SelectedNode = node;
+                    System.Windows.Forms.Application.DoEvents();
+                    var page = Assert.IsType<FlowLayoutPanel>(pages[node.Name]);
+                    var children = string.Join(", ", page.Controls.Cast<Control>()
+                        .Select(control => $"{control.Name}:{control.Bounds}"));
+                    Assert.False(
+                        page.HorizontalScroll.Visible,
+                        $"{node.Text} displayed a horizontal scrollbar at {size}. Client={page.ClientSize}; Display={page.DisplayRectangle}; Children={children}");
+                    Assert.All(
+                        page.Controls.Cast<Control>().Where(control => control is TableLayoutPanel or FlowLayoutPanel),
+                        control => Assert.True(
+                            page.ClientSize.Width - control.Width <= SystemInformation.VerticalScrollBarWidth + 2,
+                            $"{node.Text} content did not fill the page. Page={page.ClientSize.Width}; Content={control.Width}."));
+
+                    if (!string.IsNullOrWhiteSpace(screenshotDirectory) && size.Width == 1120)
+                    {
+                        using var bitmap = new Bitmap(settings.ClientSize.Width, settings.ClientSize.Height);
+                        settings.DrawToBitmap(bitmap, settings.ClientRectangle);
+                        var safeName = string.Concat(node.Text.Select(character =>
+                            Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));
+                        bitmap.Save(Path.Combine(screenshotDirectory, $"{index++:00}-{safeName}.png"));
+                    }
+                }
+            }
+
+            var workspaceLayout = GetField<ComboBox>(settings, "_defaultWorkspaceLayout");
+            Assert.Equal("Top and bottom", workspaceLayout.GetItemText(WorkspaceLayout.TopAndBottom));
+        });
+    }
+
+    [Fact]
+    public void StorageProviderPagesExposeBasicAndEnforceableAdvancedDefaults()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var settings = new SettingsForm();
+            var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
+            var controls = GetField<Dictionary<string, Control>>(settings, "_connectionDefaultControls");
+
+            foreach (var provider in ConnectionProviderCatalog.All.Where(
+                provider => provider.Type == ConnectionProfileType.Storage))
+            {
+                var page = pages[$"Provider:{provider.Kind}"];
+                var text = page.Controls.Cast<Control>()
+                    .SelectMany(DescendantsAndSelf)
+                    .Select(control => control.Text)
+                    .ToArray();
+                Assert.Contains("Basic defaults", text);
+                Assert.Contains("Advanced connection behavior", text);
+                Assert.Contains(ConnectionDefaultSettings.Key(
+                    provider.Kind,
+                    ConnectionDefaultSettings.ConnectTimeoutKey), controls.Keys);
+                Assert.Contains(ConnectionDefaultSettings.Key(
+                    provider.Kind,
+                    ConnectionDefaultSettings.OperationTimeoutKey), controls.Keys);
+                Assert.Contains(ConnectionDefaultSettings.Key(
+                    provider.Kind,
+                    ConnectionDefaultSettings.RetryAttemptsKey), controls.Keys);
+            }
+
+            Assert.Contains("S3.prefix", controls.Keys);
+            Assert.Contains("S3.endpoint", controls.Keys);
+            Assert.Contains("S3.region", controls.Keys);
+            Assert.Contains("Ftps.tlsMode", controls.Keys);
+            Assert.Contains("Ftps.trustMode", controls.Keys);
+            Assert.Contains("Sftp.authenticationMode", controls.Keys);
+        });
+    }
+
+    [Fact]
+    public void SshProviderPagePersistsTerminalAndStartupShellPreferences()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"storagehub-ssh-settings-{Guid.NewGuid():N}");
+        try
+        {
+            var store = new DesktopUpdatePreferencesStore(Path.Combine(root, "settings.json"));
+            SyncRunReviewControlTests.RunOnSta(() =>
+            {
+                using var settings = new SettingsForm(store, saved: null);
+                var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
+                var sshPage = pages["Provider:Ssh"];
+                Assert.Contains(
+                    sshPage.Controls.Cast<Control>().SelectMany(DescendantsAndSelf),
+                    control => control.Name == "SshTerminalSettings");
+
+                GetField<ComboBox>(settings, "_sshTerminalName").Text = "screen-256color";
+                GetField<TextBox>(settings, "_sshStartupCommand").Text = "bash -l";
+                GetField<NumericUpDown>(settings, "_sshKeepAliveSeconds").Value = 75;
+                GetField<ComboBox>(settings, "_sshFontFamily").Text = "Consolas";
+                GetField<NumericUpDown>(settings, "_sshFontSize").Value = 12.5M;
+                GetField<NumericUpDown>(settings, "_sshScrollbackLines").Value = 6_000;
+                GetField<NumericUpDown>(settings, "_sshRefreshInterval").Value = 100;
+                GetField<CheckBox>(settings, "_sshRenderBoldText").Checked = false;
+
+                Assert.True(InvokeTrySave(settings));
+            });
+
+            var saved = Assert.IsType<SshTerminalPreferences>(store.Load().SshTerminal);
+            Assert.Equal("screen-256color", saved.TerminalName);
+            Assert.Equal("bash -l", saved.StartupCommand);
+            Assert.Equal(75, saved.KeepAliveSeconds);
+            Assert.Equal("Consolas", saved.FontFamily);
+            Assert.Equal(12.5F, saved.FontSize);
+            Assert.Equal(6_000, saved.ScrollbackLines);
+            Assert.Equal(100, saved.RefreshIntervalMilliseconds);
+            Assert.False(saved.RenderBoldText);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static bool InvokeTrySave(SettingsForm settings)
     {
         var method = typeof(SettingsForm).GetMethod("TrySave", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -317,6 +483,18 @@ public sealed class SettingsFormTests
         foreach (Control child in root.Controls)
         {
             foreach (var descendant in DescendantsAndSelf(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
+    private static IEnumerable<TreeNode> DescendantNodes(TreeNodeCollection nodes)
+    {
+        foreach (TreeNode node in nodes)
+        {
+            yield return node;
+            foreach (var descendant in DescendantNodes(node.Nodes))
             {
                 yield return descendant;
             }

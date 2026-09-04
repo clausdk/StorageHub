@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using StorageHub.Contracts.Ipc;
 using StorageHub.Contracts.Results;
 
@@ -552,6 +553,16 @@ public sealed class BrowserPaneControl : UserControl
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<bool>? CanPaste { get; set; }
+
+    /// <summary>Creates an inert Explorer marker; StorageHub performs the eventual transfer.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<PaneSelectionSnapshot, CancellationToken, Task<ExplorerDropBeginResponse>>? BeginExplorerDropAsync { get; set; }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<string, CancellationToken, Task<ExplorerDropCommitResponse>>? CommitExplorerDropAsync { get; set; }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string? ExplorerDropUnavailableReason { get; set; }
 
     /// <summary>Raised when an immutable selection from another pane is dropped onto this pane.</summary>
     public event EventHandler<PaneTransferDropRequestedEventArgs>? TransferDropRequested;
@@ -1321,7 +1332,7 @@ public sealed class BrowserPaneControl : UserControl
                     connection.DisplayName,
                     MapProvider(connection.Provider),
                     connection.FolderPath ?? "Saved connection",
-                    connection.IsEnabled ? "Ready to test" : "Disabled",
+                    connection.IsEnabled ? DescribeConnectionHealth(connection.Health) : "Disabled",
                     connection.IsFavorite,
                     connection.ConnectionId,
                     connection.IsEnabled,
@@ -1583,8 +1594,16 @@ public sealed class BrowserPaneControl : UserControl
         var filter = _filterBox.Text;
         var filteredItems = _listingIndex.CreateView(_sortColumn, _sortAscending, filter);
         _items = ComposeVisibleItems(filteredItems, CanNavigateUpInCurrentSurface());
+        _shellIcons.Prime(_items, IsLocalConnectionSelected);
         _fileList.VirtualListSize = _items.Count;
-        _fileList.Invalidate();
+        // VirtualListSize can remain unchanged when one folder replaces another. Force the
+        // native list to discard its old visual cache and repaint all newly supplied rows.
+        if (_fileList.IsHandleCreated && _items.Count > 0)
+        {
+            _fileList.RedrawItems(0, _items.Count - 1, invalidateOnly: true);
+        }
+        _fileList.Invalidate(invalidateChildren: true);
+        _fileList.Update();
         RestoreSelectedLocations(selectedLocations);
         UpdateSummaryText();
     }
@@ -1820,6 +1839,7 @@ public sealed class BrowserPaneControl : UserControl
 
     private void ShowError(string message)
     {
+        _errorBanner.ForeColor = StorageHubTheme.Warning;
         _errorBanner.Text = $"⚠ {message}";
         _errorBanner.AccessibleDescription = message;
         _errorBanner.Visible = true;
@@ -1952,7 +1972,20 @@ public sealed class BrowserPaneControl : UserControl
 
     private void FilterTextChanged(object? sender, EventArgs e) => ApplyFilter();
 
-    private void FileListDoubleClick(object? sender, EventArgs e) => OpenOrEditSelected();
+    private void FileListDoubleClick(object? sender, EventArgs e)
+    {
+        OpenOrEditSelected();
+    }
+
+    private static string DescribeConnectionHealth(ConnectionHealthSnapshot? health) => health switch
+    {
+        null => "Not tested",
+        { State: ConnectionHealthState.Healthy } => $"Healthy · {health.ElapsedMilliseconds:N0} ms",
+        { RequiresCredentialAction: true } => "Credentials need attention",
+        { RequiresTrustAction: true } => "Trust decision required",
+        { State: ConnectionHealthState.Unavailable } => "Unavailable",
+        _ => "Needs attention"
+    };
 
     private void FileListMouseDown(object? sender, MouseEventArgs e)
     {
@@ -1974,23 +2007,16 @@ public sealed class BrowserPaneControl : UserControl
         }
     }
 
-    private void FileListItemDrag(object? sender, ItemDragEventArgs e)
+    private async void FileListItemDrag(object? sender, ItemDragEventArgs e)
     {
-        if (e.Button != MouseButtons.Left)
-        {
-            return;
-        }
-
+        if (e.Button != MouseButtons.Left) return;
         var selection = CaptureSelectionSnapshot();
-        if (selection.IsFailure)
-        {
-            return;
-        }
+        if (selection.IsFailure) return;
 
+        var payload = new PaneDragPayload(this, selection.Value);
         var data = new DataObject();
-        data.SetData(PaneDragDataFormat, autoConvert: false, new PaneDragPayload(this, selection.Value));
-        // Local Explorer items can be handed back to Explorer with the standard format. Saved
-        // connection items retain the internal payload until their virtual-file exporter is used.
+        data.SetData(PaneDragDataFormat, autoConvert: false, payload);
+        ExplorerDropBeginResponse? explorerDrop = null;
         if (selection.Value.Context.Kind == PaneTransferContextKind.ThisPc)
         {
             var paths = _fileList.SelectedIndices.Cast<int>()
@@ -2000,7 +2026,79 @@ public sealed class BrowserPaneControl : UserControl
                 .Cast<string>().ToArray();
             if (paths.Length > 0) data.SetData(DataFormats.FileDrop, paths);
         }
-        _ = _fileList.DoDragDrop(data, DragDropEffects.Copy | DragDropEffects.Move);
+        else if (selection.Value.Context.Kind == PaneTransferContextKind.SavedConnection && BeginExplorerDropAsync is not null)
+        {
+            try
+            {
+                explorerDrop = await BeginExplorerDropAsync(selection.Value, CancellationToken.None).ConfigureAwait(true);
+                if (explorerDrop.Failure is not null || string.IsNullOrWhiteSpace(explorerDrop.DropToken) ||
+                    string.IsNullOrWhiteSpace(explorerDrop.MarkerPath) || !Directory.Exists(explorerDrop.MarkerPath))
+                {
+                    ShowError(explorerDrop.Failure?.Message ?? "StorageHub could not initialize the Explorer drop.");
+                    return;
+                }
+                data.SetData(DataFormats.FileDrop, new[] { explorerDrop.MarkerPath });
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
+                InvalidOperationException or TimeoutException or System.Text.Json.JsonException or OperationCanceledException)
+            {
+                ShowError($"StorageHub could not initialize the Explorer drop: {error.Message}");
+                return;
+            }
+        }
+
+        var allowedEffects = selection.Value.Context.Kind == PaneTransferContextKind.SavedConnection
+            ? DragDropEffects.Copy
+            : DragDropEffects.Copy | DragDropEffects.Move;
+        try
+        {
+            _ = _fileList.DoDragDrop(data, allowedEffects);
+        }
+        catch (Exception error) when (error is ExternalException or InvalidOperationException)
+        {
+            ShowError($"Windows could not start the drag operation: {error.Message}");
+            return;
+        }
+
+        if (selection.Value.Context.Kind == PaneTransferContextKind.SavedConnection &&
+            explorerDrop is null && !payload.InternalDropHandled &&
+            !string.IsNullOrWhiteSpace(ExplorerDropUnavailableReason))
+        {
+            ShowError(ExplorerDropUnavailableReason);
+        }
+
+        if (explorerDrop is not null && CommitExplorerDropAsync is not null)
+        {
+            try
+            {
+                var committed = await CommitExplorerDropAsync(explorerDrop.DropToken!, CancellationToken.None).ConfigureAwait(true);
+                if (!payload.InternalDropHandled && committed.Accepted)
+                {
+                    _errorBanner.Text = $"Queued in StorageHub → {committed.DestinationPath}";
+                    _errorBanner.ForeColor = StorageHubTheme.Success;
+                    _errorBanner.Visible = true;
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
+                InvalidOperationException or TimeoutException or System.Text.Json.JsonException or OperationCanceledException)
+            {
+                if (!payload.InternalDropHandled)
+                    ShowError($"StorageHub could not queue the Explorer drop: {error.Message}");
+            }
+        }
+    }
+
+    internal static string CreateShellExportKey(PaneSelectionSnapshot selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return string.Join("\n",
+            new[]
+            {
+                selection.Context.ConnectionId?.ToString("D") ?? string.Empty,
+                selection.Context.RootIdentity ?? string.Empty
+            }.Concat(selection.Items
+                .OrderBy(static item => item.RelativePath, StringComparer.Ordinal)
+                .Select(item => string.Join("|", item.RelativePath, item.VersionId, item.EntityTag))));
     }
 
     private void ConfigureDropTarget(Control control)
@@ -2063,6 +2161,7 @@ public sealed class BrowserPaneControl : UserControl
         var operation = effect == DragDropEffects.Move
             ? TransferQueueOperation.Move
             : TransferQueueOperation.Copy;
+        payload.InternalDropHandled = true;
         TransferDropRequested?.Invoke(
             this,
             new PaneTransferDropRequestedEventArgs(payload.SourcePane, payload.Selection, operation));
@@ -3076,7 +3175,12 @@ public sealed class PaneSelectionStagedEventArgs(
     public TransferQueueOperation Operation { get; } = operation;
 }
 
-internal sealed record PaneDragPayload(BrowserPaneControl SourcePane, PaneSelectionSnapshot Selection);
+internal sealed class PaneDragPayload(BrowserPaneControl sourcePane, PaneSelectionSnapshot selection)
+{
+    public BrowserPaneControl SourcePane { get; } = sourcePane;
+    public PaneSelectionSnapshot Selection { get; } = selection;
+    public bool InternalDropHandled { get; set; }
+}
 
 internal enum BrowserSortColumn
 {

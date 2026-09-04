@@ -422,7 +422,7 @@ internal sealed class ConnectionSidebarItem : Control
         Cursor = Cursors.Hand;
         TabStop = true;
         AccessibleName = connection.Name;
-        AccessibleDescription = $"{connection.Descriptor.DisplayName} saved connection";
+        AccessibleDescription = $"{connection.Descriptor.DisplayName} saved connection. {connection.State}";
         DoubleBuffered = true;
     }
 
@@ -478,7 +478,9 @@ internal sealed class ConnectionSidebarItem : Control
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         TextRenderer.DrawText(e.Graphics, Connection.Name, Font, new Rectangle(55, 7, Math.Max(20, Width - 65), 22),
             StorageHubTheme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        var detail = Connection.IsEnabled ? Connection.Endpoint : $"{Connection.Endpoint} · Disabled";
+        var detail = Connection.IsEnabled
+            ? $"{Connection.Endpoint} · {Connection.State}"
+            : $"{Connection.Endpoint} · Disabled";
         TextRenderer.DrawText(e.Graphics, detail, Font, new Rectangle(55, 29, Math.Max(20, Width - 65), 20),
             Connection.IsEnabled ? StorageHubTheme.TextMuted : StorageHubTheme.Warning,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);

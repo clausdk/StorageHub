@@ -79,6 +79,69 @@ public sealed class StorageIpcCommandServiceTests
         Assert.Equal(1, opener.OpenCount);
         Assert.False(service.CanHandle("storage.delete.request"));
         Assert.False(service.CanHandle("storage.write.request"));
+
+        var listed = await service.HandleAsync(IpcEnvelope.Create(
+            StorageIpcMessageTypes.ConnectionListRequest,
+            Guid.NewGuid(),
+            1,
+            new ConnectionListRequest(StorageIpcContract.CurrentVersion, IncludeDisabled: true)));
+        var health = Assert.Single(Assert.IsType<ConnectionListResponse>(
+            listed.Payload.Deserialize<ConnectionListResponse>()).Connections).Health;
+        Assert.NotNull(health);
+        Assert.Equal(ConnectionHealthState.NeedsAttention, health.State);
+        Assert.True(health.RequiresCredentialAction);
+        Assert.False(health.RequiresTrustAction);
+        Assert.Equal("The provider rejected the saved credentials.", health.Status);
+        Assert.DoesNotContain(rawSecret, listed.Payload.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SuccessfulConnectionTestIsReturnedAsARevisionBoundHealthSnapshot()
+    {
+        var profile = CreateLocalProfile();
+        var session = new FakeSession(
+            profile.Id,
+            "root-test",
+            StorageResult<StoragePage>.Success(new StoragePage([])));
+        var repository = new FakeProfileRepository(profile);
+        var service = new StorageIpcCommandService(
+            repository,
+            new FakeSessionOpener(StorageResult<IStorageIpcSessionLease>.Success(
+                new FakeSessionLease(session))));
+
+        var tested = await service.HandleAsync(IpcEnvelope.Create(
+            StorageIpcMessageTypes.ConnectionTestRequest,
+            Guid.NewGuid(),
+            1,
+            new ConnectionTestRequest(StorageIpcContract.CurrentVersion, profile.Id.Value)));
+        Assert.True(Assert.IsType<ConnectionTestResponse>(
+            tested.Payload.Deserialize<ConnectionTestResponse>()).Succeeded);
+
+        var listed = await service.HandleAsync(IpcEnvelope.Create(
+            StorageIpcMessageTypes.ConnectionListRequest,
+            Guid.NewGuid(),
+            1,
+            new ConnectionListRequest(StorageIpcContract.CurrentVersion, IncludeDisabled: true)));
+        var health = Assert.Single(Assert.IsType<ConnectionListResponse>(
+            listed.Payload.Deserialize<ConnectionListResponse>()).Connections).Health;
+
+        Assert.NotNull(health);
+        Assert.True(health.HasValidBounds);
+        Assert.Equal(ConnectionHealthState.Healthy, health.State);
+        Assert.Equal("Connection healthy", health.Status);
+
+        repository.Replace(profile with
+        {
+            Version = profile.Version + 1,
+            UpdatedUtc = profile.UpdatedUtc.AddMinutes(1)
+        });
+        var revisedList = await service.HandleAsync(IpcEnvelope.Create(
+            StorageIpcMessageTypes.ConnectionListRequest,
+            Guid.NewGuid(),
+            1,
+            new ConnectionListRequest(StorageIpcContract.CurrentVersion, IncludeDisabled: true)));
+        Assert.Null(Assert.Single(Assert.IsType<ConnectionListResponse>(
+            revisedList.Payload.Deserialize<ConnectionListResponse>()).Connections).Health);
     }
 
     [Fact]
@@ -288,7 +351,9 @@ public sealed class StorageIpcCommandServiceTests
 
     private sealed class FakeProfileRepository(params ConnectionProfile[] profiles) : IConnectionProfileRepository
     {
-        private readonly ConnectionProfile[] _profiles = profiles;
+        private ConnectionProfile[] _profiles = profiles;
+
+        internal void Replace(params ConnectionProfile[] profiles) => _profiles = profiles;
 
         public ValueTask<ConnectionProfile?> GetAsync(
             ConnectionProfileId id,

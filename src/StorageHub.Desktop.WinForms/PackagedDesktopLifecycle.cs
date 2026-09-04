@@ -458,6 +458,16 @@ public sealed class DesktopPackageLifecycleHooks(PackagedDesktopLifecycle lifecy
 {
     private readonly PackagedDesktopLifecycle _lifecycle = lifecycle ??
         throw new ArgumentNullException(nameof(lifecycle));
+    private readonly Func<bool> _unregisterExplorerDropBroker = ExplorerDropBrokerInstaller.Unregister;
+
+    internal DesktopPackageLifecycleHooks(
+        PackagedDesktopLifecycle lifecycle,
+        Func<bool> unregisterExplorerDropBroker)
+        : this(lifecycle)
+    {
+        _unregisterExplorerDropBroker = unregisterExplorerDropBroker ??
+            throw new ArgumentNullException(nameof(unregisterExplorerDropBroker));
+    }
 
     public void AfterInstall() => _ = _lifecycle.ConfigureAutostart();
 
@@ -469,6 +479,7 @@ public sealed class DesktopPackageLifecycleHooks(PackagedDesktopLifecycle lifecy
     {
         StopSynchronously(AgentShutdownReason.Uninstall);
         _ = _lifecycle.RemoveAutostart();
+        _ = _unregisterExplorerDropBroker();
     }
 
     private void StopSynchronously(AgentShutdownReason reason)

@@ -10,7 +10,7 @@ public sealed class TransferQueueControl : UserControl
 {
     private static readonly QueueTabDefinition[] QueueTabs =
     [
-        new("Active",
+        new("Active", UiGlyph.Run,
         [
             TransferQueueState.Preparing,
             TransferQueueState.Connecting,
@@ -19,17 +19,17 @@ public sealed class TransferQueueControl : UserControl
             TransferQueueState.Finalizing,
             TransferQueueState.CleanupPending
         ]),
-        new("Queued", [TransferQueueState.Pending, TransferQueueState.Retrying]),
-        new("Paused",
+        new("Queued", UiGlyph.More, [TransferQueueState.Pending, TransferQueueState.Retrying]),
+        new("Paused", UiGlyph.Pause,
         [
             TransferQueueState.Paused,
             TransferQueueState.BlockedCredential,
             TransferQueueState.BlockedTrust,
             TransferQueueState.RestartRequired
         ]),
-        new("Failed", [TransferQueueState.Failed]),
-        new("Completed", [TransferQueueState.Completed, TransferQueueState.Cancelled]),
-        new("Conflicts", [TransferQueueState.Interrupted, TransferQueueState.NeedsReconciliation])
+        new("Failed", UiGlyph.Warning, [TransferQueueState.Failed]),
+        new("Completed", UiGlyph.Test, [TransferQueueState.Completed, TransferQueueState.Cancelled]),
+        new("Conflicts", UiGlyph.Compare, [TransferQueueState.Interrupted, TransferQueueState.NeedsReconciliation])
     ];
 
     private readonly ITransferQueueAgentClient _client;
@@ -37,6 +37,8 @@ public sealed class TransferQueueControl : UserControl
     private readonly CancellationTokenSource _lifetime = new();
     private readonly System.Windows.Forms.Timer _pollTimer;
     private readonly TabControl _tabs;
+    private readonly ImageList _tabImages;
+    private readonly List<Image> _ownedImages = [];
     private readonly ToolStripButton _cancelButton;
     private readonly ToolStripButton _retryButton;
     private readonly ToolStripButton _reconcileButton;
@@ -61,8 +63,8 @@ public sealed class TransferQueueControl : UserControl
         _ownsClient = ownsClient;
         Dock = DockStyle.Fill;
         BackColor = StorageHubTheme.Surface;
-        AccessibleName = "Transfer and sync queue";
-        AccessibleDescription = "Durable background transfers, reconciliation actions, sync runs, and logs.";
+        AccessibleName = "Transfer queue";
+        AccessibleDescription = "Durable background transfers, reconciliation actions, and activity logs.";
 
         var toolbar = new ToolStrip
         {
@@ -71,20 +73,22 @@ public sealed class TransferQueueControl : UserControl
             BackColor = StorageHubTheme.Surface,
             ForeColor = StorageHubTheme.Text,
             AccessibleName = "Transfer queue commands",
-            Padding = new Padding(4, 2, 4, 2)
+            Padding = new Padding(6, 4, 6, 4),
+            ImageScalingSize = new Size(18, 18),
+            AutoSize = true
         };
-        var refresh = CreateButton("↻", "Refresh queue", RefreshButtonClicked);
-        _cancelButton = CreateButton("■", "Cancel selected transfer", CancelButtonClicked);
-        _retryButton = CreateButton("▶", "Retry selected transfer", RetryButtonClicked);
-        _reconcileButton = CreateButton("✓", "Apply reconciliation action", ReconcileButtonClicked);
-        _nextButton = CreateButton("Next ›", "Show the next queue page", NextButtonClicked);
+        var refresh = CreateButton(UiGlyph.Refresh, "Refresh", "Refresh queue", RefreshButtonClicked);
+        _cancelButton = CreateButton(UiGlyph.Delete, "Cancel", "Cancel selected transfer", CancelButtonClicked);
+        _retryButton = CreateButton(UiGlyph.Run, "Retry", "Retry selected transfer", RetryButtonClicked);
+        _reconcileButton = CreateButton(UiGlyph.Test, "Apply", "Apply reconciliation action", ReconcileButtonClicked);
+        _nextButton = CreateButton(UiGlyph.Forward, "Next", "Show the next queue page", NextButtonClicked);
         _reconcileAction = new ToolStripComboBox
         {
             Name = "ReconciliationAction",
             DropDownStyle = ComboBoxStyle.DropDownList,
             AccessibleName = "Reconciliation action",
             AutoSize = false,
-            Width = 128
+            Width = 150
         };
         _reconcileAction.Items.AddRange(Enum.GetNames<TransferReconciliationAction>());
         _reconcileAction.SelectedItem = nameof(TransferReconciliationAction.Review);
@@ -99,24 +103,32 @@ public sealed class TransferQueueControl : UserControl
         toolbar.Items.Add(_cancelButton);
         toolbar.Items.Add(_retryButton);
         toolbar.Items.Add(new ToolStripSeparator());
+        toolbar.Items.Add(new ToolStripLabel("Reconcile:")
+        {
+            ForeColor = StorageHubTheme.TextMuted
+        });
         toolbar.Items.Add(_reconcileAction);
         toolbar.Items.Add(_reconcileButton);
         toolbar.Items.Add(new ToolStripSeparator());
         toolbar.Items.Add(_nextButton);
         toolbar.Items.Add(_status);
 
+        _tabImages = CreateTabImages();
         _tabs = new TabControl
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Transfer queue views",
+            ImageList = _tabImages,
+            SizeMode = TabSizeMode.Fixed
         };
         foreach (var definition in QueueTabs)
         {
             AddQueueTab(definition);
         }
 
-        AddSyncRunsTab();
         AddLogsTab();
+        StorageHubTheme.ConfigureTabs(_tabs);
+        ConfigureTabSize();
         _tabs.SelectedIndex = 0;
         _tabs.SelectedIndexChanged += SelectedTabChanged;
         Controls.Add(_tabs);
@@ -130,15 +142,6 @@ public sealed class TransferQueueControl : UserControl
     /// <summary>Refreshes the selected transfer view. Public for host commands and UI tests.</summary>
     public Task RefreshQueueAsync(CancellationToken cancellationToken = default) =>
         RefreshQueueCoreAsync(resetPage: true, cancellationToken);
-
-    /// <summary>Selects the genuine run review surface hosted by the main window.</summary>
-    public void SelectSyncRunsTab()
-    {
-        var page = _tabs.TabPages
-            .Cast<TabPage>()
-            .First(static candidate => string.Equals(candidate.Text, "Sync Runs", StringComparison.Ordinal));
-        _tabs.SelectedTab = page;
-    }
 
     protected override void OnHandleCreated(EventArgs e)
     {
@@ -177,13 +180,24 @@ public sealed class TransferQueueControl : UserControl
         }
 
         base.Dispose(disposing);
+        if (disposing)
+        {
+            foreach (var image in _ownedImages)
+            {
+                image.Dispose();
+            }
+            _ownedImages.Clear();
+            _tabImages.Dispose();
+        }
     }
 
     private void AddQueueTab(QueueTabDefinition definition)
     {
         var page = new TabPage(definition.Name)
         {
-            AccessibleName = $"{definition.Name} transfers"
+            Name = definition.Name,
+            AccessibleName = $"{definition.Name} transfers",
+            ImageKey = definition.Name
         };
         var grid = CreateGrid(definition.Name);
         grid.SelectionChanged += (_, _) => UpdateActionState();
@@ -197,20 +211,10 @@ public sealed class TransferQueueControl : UserControl
     {
         var page = new TabPage("Logs")
         {
-            AccessibleName = "Durable activity log"
+            AccessibleName = "Durable activity log",
+            ImageKey = "Logs"
         };
-        StorageHubTheme.ConfigureTabs(_tabs);
         page.Controls.Add(new ActivityLogControl());
-        _tabs.TabPages.Add(page);
-    }
-
-    private void AddSyncRunsTab()
-    {
-        var page = new TabPage("Sync Runs")
-        {
-            AccessibleName = "Synchronization runs"
-        };
-        page.Controls.Add(new SyncRunsControl());
         _tabs.TabPages.Add(page);
     }
 
@@ -252,11 +256,21 @@ public sealed class TransferQueueControl : UserControl
         return grid;
     }
 
-    private static ToolStripButton CreateButton(string text, string description, EventHandler handler)
+    private ToolStripButton CreateButton(
+        UiGlyph glyph,
+        string text,
+        string description,
+        EventHandler handler)
     {
+        var image = UiIconFactory.Create(glyph, StorageHubTheme.Text, 18, DeviceDpi / 96F);
+        _ownedImages.Add(image);
         var button = new ToolStripButton(text)
         {
-            DisplayStyle = ToolStripItemDisplayStyle.Text,
+            Image = image,
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            ImageAlign = ContentAlignment.MiddleLeft,
+            TextAlign = ContentAlignment.MiddleRight,
+            Padding = new Padding(4, 1, 4, 1),
             ToolTipText = description,
             AccessibleName = description,
             AccessibleDescription = description,
@@ -264,6 +278,39 @@ public sealed class TransferQueueControl : UserControl
         };
         button.Click += handler;
         return button;
+    }
+
+    private static ImageList CreateTabImages()
+    {
+        var images = new ImageList
+        {
+            ColorDepth = ColorDepth.Depth32Bit,
+            ImageSize = new Size(18, 18),
+            TransparentColor = Color.Transparent
+        };
+        images.Images.Add("Active", UiIconFactory.Create(UiGlyph.Run, StorageHubTheme.Success, 18));
+        images.Images.Add("Queued", UiIconFactory.Create(UiGlyph.More, StorageHubTheme.Primary, 18));
+        images.Images.Add("Paused", UiIconFactory.Create(UiGlyph.Pause, StorageHubTheme.Warning, 18));
+        images.Images.Add("Failed", UiIconFactory.Create(UiGlyph.Warning, StorageHubTheme.Danger, 18));
+        images.Images.Add("Completed", UiIconFactory.Create(UiGlyph.Test, StorageHubTheme.Success, 18));
+        images.Images.Add("Conflicts", UiIconFactory.Create(UiGlyph.Compare, StorageHubTheme.Warning, 18));
+        images.Images.Add("Logs", UiIconFactory.Create(UiGlyph.File, StorageHubTheme.TextMuted, 18));
+        return images;
+    }
+
+    private void ConfigureTabSize()
+    {
+        var widestText = _tabs.TabPages.Cast<TabPage>()
+            .Select(page => TextRenderer.MeasureText(
+                page.Text,
+                _tabs.Font,
+                Size.Empty,
+                TextFormatFlags.NoPadding).Width)
+            .DefaultIfEmpty(70)
+            .Max();
+        _tabs.ItemSize = new Size(
+            widestText + _tabImages.ImageSize.Width + 36,
+            Math.Max(34, _tabImages.ImageSize.Height + 12));
     }
 
     private async void RefreshButtonClicked(object? sender, EventArgs e) =>
@@ -398,6 +445,8 @@ public sealed class TransferQueueControl : UserControl
             }
 
             PopulateGrid(_grids[selectedTab], response.Transfers);
+            selectedTab.Text = FormatQueueTabTitle(definition.Name, response.Transfers);
+            ConfigureTabSize();
             _nextCursor = response.ContinuationToken;
             _nextButton.Enabled = _nextCursor is not null;
             _status.Text = response.Transfers.Length == 0
@@ -452,6 +501,20 @@ public sealed class TransferQueueControl : UserControl
         0 => "100%",
         _ => FormatBytes(progress)
     };
+
+    internal static string FormatQueueTabTitle(string name, IReadOnlyCollection<TransferQueueSummary> transfers)
+    {
+        if (transfers.Count == 0) return name;
+        var knownTotal = transfers.Where(static transfer => transfer.ExpectedBytes.HasValue)
+            .Sum(static transfer => transfer.ExpectedBytes!.Value);
+        var progress = transfers.Sum(static transfer => transfer.ProgressBytes);
+        var size = knownTotal > 0
+            ? name == "Active" && progress < knownTotal
+                ? $"{FormatBytes(progress)}/{FormatBytes(knownTotal)}"
+                : FormatBytes(knownTotal)
+            : progress > 0 ? FormatBytes(progress) : null;
+        return size is null ? $"{name} · {transfers.Count}" : $"{name} · {transfers.Count} · {size}";
+    }
 
     private static string FormatBytes(long value) => value switch
     {
@@ -553,5 +616,5 @@ public sealed class TransferQueueControl : UserControl
         }
     }
 
-    private sealed record QueueTabDefinition(string Name, TransferQueueState[] States);
+    private sealed record QueueTabDefinition(string Name, UiGlyph Glyph, TransferQueueState[] States);
 }

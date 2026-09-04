@@ -47,6 +47,20 @@ public sealed class SqliteTransferJobStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Agent_owned_local_endpoints_do_not_require_saved_connection_rows()
+    {
+        var fixture = await CreateFixtureAsync();
+        var source = Address(ConnectionProfileId.New(), "remote-root", "folder/source.bin");
+        var destination = Address(ConnectionProfileId.New(), "localstage:v1:test", "folder/source.bin");
+        var intent = new TransferIntent(TransferJobId.New(), TransferOperationKind.Copy,
+            source, destination, 100, TransferVerificationPolicy.Size, Now);
+
+        Assert.True(await fixture.Store.TryEnqueueAsync(intent));
+        var stored = Assert.IsType<DurableTransferJob>(await fixture.Store.FindAsync(intent.TransferJobId));
+        Assert.Equal(destination, stored.Intent.Destination);
+    }
+
+    [Fact]
     public async Task Queue_query_uses_bounded_stable_keyset_pages_without_duplicates()
     {
         var fixture = await CreateFixtureAsync();
@@ -162,7 +176,7 @@ public sealed class SqliteTransferJobStoreTests : IDisposable
         var legacyJob = Assert.IsType<DurableTransferJob>(await store.FindAsync(jobId));
 
         Assert.True(upgraded.IsReady, upgraded.Message);
-        Assert.Equal(NonAtomicSyncWritesSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
+        Assert.Equal(LocalTransferEndpointsSchemaMigration.SchemaVersion, upgraded.SchemaVersion);
         Assert.Equal(TransferState.NeedsReconciliation, legacyJob.State.State);
         Assert.Equal(TransferStatusCode.StateUncertain, legacyJob.State.StatusCode);
         Assert.Equal(1, legacyJob.State.Attempt);

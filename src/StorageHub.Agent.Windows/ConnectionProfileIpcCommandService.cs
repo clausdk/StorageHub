@@ -516,6 +516,12 @@ internal static class ConnectionProfileIpcMapper
                 SecretReference.Parse(value.PrivateKeyReference!),
                 SecretReference.Parse(value.PrivateKeyPassphraseReference!),
                 MapPrivateKeyFormat(value.PrivateKeyFormat)),
+            ConnectionAuthenticationKind.SshPrivateKeyPassword => new SshPrivateKeyPasswordAuthentication(
+                value.Username!,
+                SecretReference.Parse(value.PasswordReference!),
+                SecretReference.Parse(value.PrivateKeyReference!),
+                SecretReference.Parse(value.PrivateKeyPassphraseReference!),
+                MapPrivateKeyFormat(value.PrivateKeyFormat)),
             _ => throw new ArgumentOutOfRangeException(nameof(value), "The authentication kind is invalid.")
         };
     }
@@ -541,6 +547,13 @@ internal static class ConnectionProfileIpcMapper
             Username: authentication.Username,
             PrivateKeyReference: authentication.PrivateKeyReference.Value,
             PrivateKeyPassphraseReference: authentication.PassphraseReference?.Value,
+            PrivateKeyFormat: MapPrivateKeyFormat(authentication.KeyFormat)),
+        SshPrivateKeyPasswordAuthentication authentication => new(
+            ConnectionAuthenticationKind.SshPrivateKeyPassword,
+            Username: authentication.Username,
+            PasswordReference: authentication.PasswordReference.Value,
+            PrivateKeyReference: authentication.PrivateKeyReference.Value,
+            PrivateKeyPassphraseReference: authentication.PassphraseReference.Value,
             PrivateKeyFormat: MapPrivateKeyFormat(authentication.KeyFormat)),
         _ => throw new NotSupportedException("The connection authentication type is not supported by IPC.")
     };
@@ -660,6 +673,9 @@ internal static class ConnectionProfileIpcMapper
                 !hasKey && !hasPassphrase,
             ConnectionAuthenticationKind.SftpPrivateKey =>
                 hasUsername && !hasCredential && !hasPassword && !hasAccess && !hasSecret &&
+                !hasToken && hasKey && hasPassphrase,
+            ConnectionAuthenticationKind.SshPrivateKeyPassword =>
+                hasUsername && !hasCredential && hasPassword && !hasAccess && !hasSecret &&
                 !hasToken && hasKey && hasPassphrase,
             _ => false
         };
