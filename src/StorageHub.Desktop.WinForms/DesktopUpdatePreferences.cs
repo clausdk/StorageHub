@@ -100,9 +100,10 @@ internal sealed record DesktopUpdatePreferences(
     SshTerminalPreferences? SshTerminal = null,
     bool ReconnectRemotePanesAutomatically = true,
     bool ConfirmBeforeClearingTransferHistory = true,
-    bool ConfirmBeforeDeletingItems = true)
+    bool ConfirmBeforeDeletingItems = true,
+    IReadOnlyDictionary<string, Keys>? Shortcuts = null)
 {
-    public const int CurrentSchemaVersion = 11;
+    public const int CurrentSchemaVersion = 12;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
@@ -209,7 +210,9 @@ internal sealed class DesktopUpdatePreferencesStore
                         : null,
                     document.SchemaVersion < 9 || document.ReconnectRemotePanesAutomatically,
                     document.SchemaVersion < 10 || document.ConfirmBeforeClearingTransferHistory,
-                    document.SchemaVersion < 11 || document.ConfirmBeforeDeletingItems)
+                    document.SchemaVersion < 11 || document.ConfirmBeforeDeletingItems,
+                    document.SchemaVersion >= 12 && document.Shortcuts is not null
+                        ? ShortcutSettings.Resolve(document.Shortcuts) : null)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -225,6 +228,8 @@ internal sealed class DesktopUpdatePreferencesStore
     internal void Save(DesktopUpdatePreferences preferences)
     {
         ArgumentNullException.ThrowIfNull(preferences);
+        if (preferences.Shortcuts is not null && ShortcutSettings.Validate(preferences.Shortcuts) is { } shortcutError)
+            throw new ArgumentException(shortcutError, nameof(preferences));
         if (!IsValidEditorPath(preferences.ExternalEditorPath) ||
             preferences.MaximumEditableFileBytes is < 1 or > EditableFileIpcContract.MaximumContentBytes ||
             preferences.MinimumConcurrency is < 1 or > 8 ||
@@ -273,7 +278,8 @@ internal sealed class DesktopUpdatePreferencesStore
                     : SshTerminalPreferences.Resolve(preferences.SshTerminal),
                 preferences.ReconnectRemotePanesAutomatically,
                 preferences.ConfirmBeforeClearingTransferHistory,
-                preferences.ConfirmBeforeDeletingItems);
+                preferences.ConfirmBeforeDeletingItems,
+                preferences.Shortcuts is null ? null : ShortcutSettings.Resolve(preferences.Shortcuts));
             using (var stream = new FileStream(
                 temporaryPath,
                 FileMode.CreateNew,
@@ -348,5 +354,6 @@ internal sealed class DesktopUpdatePreferencesStore
         SshTerminalPreferences? SshTerminal = null,
         bool ReconnectRemotePanesAutomatically = true,
         bool ConfirmBeforeClearingTransferHistory = true,
-        bool ConfirmBeforeDeletingItems = true);
+        bool ConfirmBeforeDeletingItems = true,
+        Dictionary<string, Keys>? Shortcuts = null);
 }

@@ -43,6 +43,7 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _sshRefreshInterval;
     private readonly CheckBox _sshRenderBoldText;
     private readonly Button _apply;
+    private readonly ShortcutSettingsControl _shortcuts;
     private DesktopAppearance _appliedAppearance;
 
     public SettingsForm()
@@ -72,6 +73,7 @@ public sealed class SettingsForm : Form
         StorageHubTheme.Register(this);
 
         var preferences = _store.Load();
+        _shortcuts = new ShortcutSettingsControl(preferences.Shortcuts);
         _appliedAppearance = preferences.Appearance;
         _checkAutomatically = CreateOption(
             "Check GitHub for updates when StorageHub starts",
@@ -273,6 +275,7 @@ public sealed class SettingsForm : Form
         _categories.Nodes.Add(new TreeNode("Editing") { Name = "Editing" });
         _categories.Nodes.Add(new TreeNode("Appearance") { Name = "Appearance" });
         _categories.Nodes.Add(new TreeNode("Workspace") { Name = "Workspace" });
+        _categories.Nodes.Add(new TreeNode("Shortcuts") { Name = "Shortcuts" });
         var connections = new TreeNode("Connections & trust") { Name = "Connections & trust" };
         foreach (var type in new[] { ConnectionProfileType.Storage, ConnectionProfileType.Client })
         {
@@ -304,6 +307,10 @@ public sealed class SettingsForm : Form
         AddPage(pageHost, "Editing", BuildEditingPage());
         AddPage(pageHost, "Appearance", BuildAppearancePage());
         AddPage(pageHost, "Workspace", BuildWorkspacePage());
+        var shortcutPage = CreatePage("Shortcuts", "Customize keyboard commands. File commands act on the active pane. Shortcuts do not intercept text fields or SSH terminal input. Clear an assignment to disable it, or restore the defaults.");
+        shortcutPage.Controls.Add(_shortcuts);
+        AddPage(pageHost, "Shortcuts", shortcutPage);
+        _shortcuts.Changed += MarkDirty;
         AddPage(pageHost, "Connections & trust", BuildConnectionsPage());
         foreach (var type in new[] { ConnectionProfileType.Storage, ConnectionProfileType.Client })
         {
@@ -1522,7 +1529,8 @@ public sealed class SettingsForm : Form
                 ReadSshTerminalPreferences(),
                 _reconnectRemotePanes.Checked,
                 _confirmBeforeClearingTransferHistory.Checked,
-                _confirmBeforeDeletingItems.Checked);
+                _confirmBeforeDeletingItems.Checked,
+                _shortcuts.ReadShortcuts());
             if (_saved is null)
             {
                 _store.Save(preferences);

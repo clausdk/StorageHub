@@ -207,6 +207,17 @@ protocols cannot provide StorageHub's required atomic create-if-absent guarantee
 
 ## Run the current milestone
 
+Use **Tools > Settings > Shortcuts** to assign keyboard commands, clear a binding,
+or restore the defaults. Apply saves changes immediately; Cancel discards unapplied
+edits. Conflicting shortcuts must be cleared before reassignment.
+
+File commands use the pane marked **Active**, outlined in the theme accent color.
+Defaults include Ctrl+C/Ctrl+X/Ctrl+V for copy/cut/paste, Ctrl+A for select all,
+F2 for rename, Delete for delete, Ctrl+Shift+N for a folder, Ctrl+Alt+N for an empty
+file, F5 for refresh, Ctrl+L for the address, and F6 for the next pane. Text fields
+and SSH terminal input retain their own keyboard behavior; file shortcuts never
+operate on SSH panes.
+
 Start the background agent first:
 
 ```powershell

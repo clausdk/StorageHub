@@ -882,11 +882,31 @@ public sealed class BrowserPaneControl : UserControl
     /// <summary>Reloads the current location or the saved-connections home.</summary>
     public void Reload() => RefreshClicked(this, EventArgs.Empty);
 
+    internal bool IsSshClient => IsSshClientSelected;
+
+    internal void FocusAddress()
+    {
+        if (IsSshClientSelected) return;
+        _addressBox.Focus();
+        _addressBox.SelectAll();
+    }
+
+    internal void FocusContent()
+    {
+        if (_embeddedTerminal is not null) _embeddedTerminal.Select();
+        else _fileList.Focus();
+    }
+
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string PaneDisplayName => _connectionNameLabel.Text;
 
     public void RefreshCommandState()
     {
+        if (FindForm() is MainForm main)
+        {
+            if (_fileList.ContextMenuStrip is { } context) RefreshContextShortcuts(context.Items, main);
+            RefreshContextShortcuts(_moreButton.DropDownItems, main);
+        }
         var storageVisible = !IsSshClientSelected;
         var hasSelection = storageVisible && HasTransferableSelection();
         _copyButton.Enabled = hasSelection;
@@ -2386,6 +2406,22 @@ public sealed class BrowserPaneControl : UserControl
 
     private void FileListKeyDown(object? sender, KeyEventArgs e)
     {
+        // The shell owns configurable shortcuts. Keep Enter as native file activation,
+        // and retain defaults for standalone panes used by other windows.
+        if (FindForm() is MainForm main)
+        {
+            if (main.TryDispatchShortcut(e.KeyData))
+            {
+                e.Handled = e.SuppressKeyPress = true;
+                return;
+            }
+            if (e.KeyData == Keys.Enter)
+            {
+                e.Handled = e.SuppressKeyPress = true;
+                OpenOrEditSelected();
+            }
+            return;
+        }
         if (e.Control && e.KeyCode is Keys.C or Keys.X)
         {
             e.Handled = true;
@@ -2498,9 +2534,19 @@ public sealed class BrowserPaneControl : UserControl
         return new ToolStripMenuItem(text)
         {
             Image = image,
-            ShortcutKeyDisplayString = shortcut,
+            ShortcutKeyDisplayString = FindForm() is MainForm main && FindShortcutCommand(text) is { } command
+                ? main.ShortcutDisplay(command.Id) : shortcut,
             AccessibleName = text
         };
+    }
+
+    private static UiCommandDefinition? FindShortcutCommand(string text) => ShortcutSettings.Commands.FirstOrDefault(command =>
+        string.Equals(command.Label.TrimEnd('.'), (text == "Move" ? "Cut" : text).TrimEnd('.'), StringComparison.OrdinalIgnoreCase));
+
+    private static void RefreshContextShortcuts(ToolStripItemCollection items, MainForm main)
+    {
+        foreach (var item in items.OfType<ToolStripMenuItem>())
+            if (FindShortcutCommand(item.Text ?? string.Empty) is { } command) item.ShortcutKeyDisplayString = main.ShortcutDisplay(command.Id);
     }
 
     private void RaiseTransferRequested(TransferQueueOperation operation)

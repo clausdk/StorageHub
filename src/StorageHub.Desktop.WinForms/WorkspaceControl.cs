@@ -155,6 +155,7 @@ public sealed class WorkspaceControl : UserControl
             foreach (var paneId in LayoutModel.PaneIds)
                 await _panes[paneId].RestoreStateAsync(states[paneId], reconnectRemote, cancellationToken).ConfigureAwait(true);
             _activePaneId = activePaneId;
+            RefreshActivePanePresentation();
             ActivePaneChanged?.Invoke(this, EventArgs.Empty);
             IsDirty = false;
         }
@@ -180,10 +181,12 @@ public sealed class WorkspaceControl : UserControl
         return pane;
     }
 
-    private void ActivatePane(Guid id)
+    internal void ActivatePane(Guid id)
     {
+        if (!_panes.ContainsKey(id)) return;
         if (_activePaneId == id) return;
         _activePaneId = id;
+        RefreshActivePanePresentation();
         ActivePaneChanged?.Invoke(this, EventArgs.Empty);
         MarkDirty();
     }
@@ -199,6 +202,8 @@ public sealed class WorkspaceControl : UserControl
         }
         _layoutHost.Controls.Add(BuildNode(LayoutModel.Root));
         RenumberHeaders();
+        RefreshActivePanePresentation();
+        ActivePaneChanged?.Invoke(this, EventArgs.Empty);
         if (markDirty) MarkDirty();
     }
 
@@ -231,7 +236,8 @@ public sealed class WorkspaceControl : UserControl
 
     private Panel BuildPaneFrame(Guid paneId)
     {
-        var frame = new Panel { Dock = DockStyle.Fill, AllowDrop = true, BackColor = StorageHubTheme.Border, Tag = paneId };
+        var frame = new Panel { Dock = DockStyle.Fill, AllowDrop = true, BackColor = StorageHubTheme.Border, Tag = paneId,
+            Padding = new Padding(Math.Max(2, (int)Math.Round(3 * DeviceDpi / 96F))) };
         var header = new ToolStrip
         {
             Dock = DockStyle.Top,
@@ -258,10 +264,24 @@ public sealed class WorkspaceControl : UserControl
         actions.DropDownItems.Add(move);
         header.Items.Add(title);
         header.Items.Add(actions);
+        header.ItemClicked += (_, _) => ActivatePane(paneId);
+        frame.MouseDown += (_, _) => ActivatePane(paneId);
+        Point? dragStart = null;
         header.MouseDown += (_, args) =>
         {
-            if (args.Button == MouseButtons.Left)
+            ActivatePane(paneId);
+            dragStart = args.Button == MouseButtons.Left && header.GetItemAt(args.Location) is not ToolStripDropDownItem
+                ? args.Location : null;
+        };
+        header.MouseUp += (_, _) => dragStart = null;
+        header.MouseMove += (_, args) =>
+        {
+            if (args.Button == MouseButtons.Left && dragStart is { } start)
             {
+                var threshold = new Rectangle(start.X - SystemInformation.DragSize.Width / 2,
+                    start.Y - SystemInformation.DragSize.Height / 2, SystemInformation.DragSize.Width, SystemInformation.DragSize.Height);
+                if (threshold.Contains(args.Location)) return;
+                dragStart = null;
                 var data = new DataObject();
                 data.SetData(PaneHeaderDragFormat, paneId.ToString("D"));
                 header.DoDragDrop(data, DragDropEffects.Move);
@@ -294,7 +314,17 @@ public sealed class WorkspaceControl : UserControl
             var edge = HitEdge(frame.ClientRectangle, point);
             if (edge is null) SwapPanes(moving, paneId); else MovePane(moving, paneId, edge.Value);
         };
-        frame.Paint += (_, args) => PaintDockingCue(frame, paneId, args.Graphics);
+        frame.Paint += (_, args) =>
+        {
+            var thickness = frame.Padding.Left;
+            var color = paneId == _activePaneId ? StorageHubTheme.Primary : StorageHubTheme.Border;
+            using var border = new SolidBrush(color);
+            args.Graphics.FillRectangle(border, 0, 0, frame.Width, thickness);
+            args.Graphics.FillRectangle(border, 0, frame.Height - thickness, frame.Width, thickness);
+            args.Graphics.FillRectangle(border, 0, 0, thickness, frame.Height);
+            args.Graphics.FillRectangle(border, frame.Width - thickness, 0, thickness, frame.Height);
+            PaintDockingCue(frame, paneId, args.Graphics);
+        };
         frame.Controls.Add(_panes[paneId]);
         frame.Controls.Add(header);
         return frame;
@@ -317,7 +347,26 @@ public sealed class WorkspaceControl : UserControl
                 title.Text = label;
                 header.AccessibleName = $"{label} header";
                 _panes[id].AccessibleName = $"{label} browser pane";
+                if (id == _activePaneId) title.Text += " (Active)";
             }
+    }
+
+    private void RefreshActivePanePresentation()
+    {
+        RenumberHeaders();
+        foreach (var frame in Descendants<Panel>(_layoutHost).Where(panel => panel.Tag is Guid))
+        {
+            frame.AccessibleDescription = Equals(frame.Tag, _activePaneId) ? "Active pane" : "Inactive pane";
+            frame.Invalidate();
+        }
+    }
+
+    internal void FocusNextPane()
+    {
+        var ids = LayoutModel.PaneIds;
+        var index = ids.ToList().IndexOf(_activePaneId);
+        ActivatePane(ids[(index + 1) % ids.Count]);
+        ActivePane?.FocusContent();
     }
 
     private static IEnumerable<T> Descendants<T>(Control root) where T : Control

@@ -88,7 +88,7 @@ public sealed class DesktopUpdaterTests
         fixture.Store.Save(DesktopUpdatePreferences.Defaults with { Appearance = appearance });
 
         Assert.Equal(appearance, fixture.Store.Load().Appearance);
-        Assert.Contains("\"schemaVersion\": 11", File.ReadAllText(fixture.Path), StringComparison.Ordinal);
+        Assert.Contains($"\"schemaVersion\": {DesktopUpdatePreferences.CurrentSchemaVersion}", File.ReadAllText(fixture.Path), StringComparison.Ordinal);
     }
 
     [Theory]

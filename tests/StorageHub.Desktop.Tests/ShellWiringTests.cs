@@ -223,12 +223,12 @@ public sealed class ShellWiringTests
             System.Windows.Forms.Application.DoEvents();
             var categories = GetField<TreeView>(settings, "_categories");
             Assert.Equal(
-                ["Transfers & sync", "Editing", "Appearance", "Workspace", "Connections & trust", "Updates"],
+                ["Transfers & sync", "Editing", "Appearance", "Workspace", "Shortcuts", "Connections & trust", "Updates"],
                 categories.Nodes.Cast<TreeNode>().Select(static node => node.Text));
             var transfers = categories.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Transfers & sync");
             Assert.Empty(transfers.Nodes.Cast<TreeNode>());
             var pages = GetField<Dictionary<string, Control>>(settings, "_pages");
-            Assert.Equal(8 + ConnectionProviderCatalog.All.Count, pages.Count);
+            Assert.Equal(9 + ConnectionProviderCatalog.All.Count, pages.Count);
             var pageNodes = categories.Nodes.Cast<TreeNode>()
                 .SelectMany(FlattenTree)
                 .Where(node => pages.ContainsKey(node.Name))

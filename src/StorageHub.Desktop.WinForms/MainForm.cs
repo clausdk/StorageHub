@@ -217,6 +217,51 @@ public sealed class MainForm : Form
         }
     }
 
+    internal string ShortcutDisplay(string commandId)
+    {
+        var keys = ShortcutSettings.Resolve(_updater.Preferences.Shortcuts).GetValueOrDefault(commandId);
+        return keys == Keys.None ? string.Empty : ShortcutSettings.Format(keys);
+    }
+
+    private void RefreshShortcutPresentation()
+    {
+        foreach (var root in _menu.Items.OfType<ToolStripMenuItem>())
+            foreach (var item in root.DropDownItems.OfType<ToolStripMenuItem>())
+                if (item.Tag is string id) item.ShortcutKeyDisplayString = ShortcutDisplay(id);
+        foreach (var pane in FindControls<BrowserPaneControl>(_workspaceTabs)) pane.RefreshCommandState();
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (TryDispatchShortcut(keyData)) return true;
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    internal bool TryDispatchShortcut(Keys keyData)
+    {
+        var bindings = ShortcutSettings.Resolve(_updater.Preferences.Shortcuts);
+        var command = ShortcutSettings.Commands.FirstOrDefault(candidate => bindings[candidate.Id] == keyData && keyData != Keys.None);
+        if (command is null) return false;
+        var focused = (Control)this;
+        while (focused.Controls.Cast<Control>().FirstOrDefault(child => child.ContainsFocus) is { } child) focused = child;
+        var sshFocused = false;
+        var textFocused = false;
+        for (Control? control = focused; control is not null; control = control.Parent)
+        {
+            sshFocused |= control is SshTerminalForm;
+            textFocused |= control is TextBoxBase or ComboBox or UpDownBase;
+        }
+        var pane = GetActivePane();
+        if (ShortcutSettings.IsPaneCommand(command) && pane?.IsSshClient == true) return false;
+        if (!ShortcutSettings.CanDispatch(command, sshFocused, textFocused, pane is not null)) return false;
+        var item = _menu.Items.OfType<ToolStripMenuItem>()
+            .SelectMany(root => root.DropDownItems.OfType<ToolStripMenuItem>())
+            .FirstOrDefault(candidate => Equals(candidate.Tag, command.Id));
+        if (item?.Enabled != true) return false;
+        item.PerformClick();
+        return true;
+    }
+
     private MenuStrip BuildMenu()
     {
         var menu = new MenuStrip
@@ -247,7 +292,7 @@ public sealed class MainForm : Form
                 var item = new ToolStripMenuItem(command)
                 {
                     Tag = definition.Id,
-                    ShortcutKeys = definition.Shortcut,
+                    ShortcutKeyDisplayString = ShortcutDisplay(definition.Id),
                     ToolTipText = definition.Description,
                     AccessibleName = command,
                     AccessibleDescription = definition.Description
@@ -681,6 +726,12 @@ public sealed class MainForm : Form
                 case "Up":
                     NavigateActivePane(PaneNavigation.Up);
                     break;
+                case "Focus Address":
+                    GetActivePane()?.FocusAddress();
+                    break;
+                case "Next Pane":
+                    GetActiveWorkspace()?.FocusNextPane();
+                    break;
                 case "Run Sync":
                     _workspaceTabs.SelectedIndex = 1;
                     _syncTasks.ShowRunReview();
@@ -692,7 +743,7 @@ public sealed class MainForm : Form
                     var preferencesBefore = _updatePreferencesStore.Load();
                     using (var dialog = new SettingsForm(
                                _updatePreferencesStore,
-                               _updater.SavePreferences))
+                               preferences => { _updater.SavePreferences(preferences); RefreshShortcutPresentation(); }))
                     {
                         _ = dialog.ShowDialog(this);
                     }
@@ -1123,7 +1174,7 @@ public sealed class MainForm : Form
         }
     }
 
-    private static bool IsAvailableCommand(string command) => command is
+    internal static bool IsAvailableCommand(string command) => command is
         "New Workspace..." or
         "Open Workspace..." or
         "Save Workspace" or
@@ -1146,6 +1197,8 @@ public sealed class MainForm : Form
         "Back" or
         "Forward" or
         "Up" or
+        "Focus Address" or
+        "Next Pane" or
         "Connection Manager..." or
         "Review & Run..." or
         "Sync Profiles..." or
