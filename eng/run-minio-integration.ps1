@@ -9,7 +9,9 @@ $ErrorActionPreference = 'Stop'
 
 $minioRelease = 'RELEASE.2025-09-07T16-13-09Z'
 $minioSha256 = 'AF709E6BA68488404E85ACDD22A3030D0F5E56A108D4B27D744F18CEB50861B4'
-$minioUrl = "https://dl.min.io/server/minio/release/windows-amd64/archive/minio.$minioRelease"
+# The former dl.min.io community archive returns HTTP 410. The official GitHub
+# release retains the identical binary; keep verifying the reviewed SHA-256.
+$minioUrl = "https://github.com/minio/minio/releases/download/$minioRelease/minio.windows-amd64.$minioRelease.exe"
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($FixtureRoot)) {
     $FixtureRoot = Join-Path $repositoryRoot 'artifacts\provider-fixtures\minio'
