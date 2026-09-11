@@ -199,7 +199,15 @@ jobs:
           }
 
           $shortSha = $env:GITHUB_SHA.Substring(0, 12).ToLowerInvariant()
-          $version = "0.1.0-rc.$($env:GITHUB_RUN_NUMBER).g$shortSha"
+          $propsPath = Join-Path $env:GITHUB_WORKSPACE 'Directory.Build.props'
+          $propsXml = [xml] (Get-Content -LiteralPath $propsPath -Raw)
+          $versionPrefix = [string] (
+            $propsXml.Project.PropertyGroup.VersionPrefix | Where-Object { $_ } | Select-Object -First 1)
+          if ($versionPrefix -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw "Directory.Build.props does not declare a valid VersionPrefix: '$versionPrefix'."
+          }
+
+          $version = "$versionPrefix-rc.$($env:GITHUB_RUN_NUMBER).g$shortSha"
           if ($version -notmatch `
               '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$') {
             throw "The derived release version '$version' is not valid SemVer."

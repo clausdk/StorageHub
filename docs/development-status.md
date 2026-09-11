@@ -1,7 +1,7 @@
 # Development status
 
-StorageHub is a release candidate. This page distinguishes implemented and
-tested foundations from UI concepts and planned production integration.
+StorageHub 1.0 is the first stable release. This page distinguishes implemented
+and tested foundations from planned post-1.0 integration work.
 
 ## Implemented and tested
 
@@ -43,7 +43,7 @@ reject provider example cards as saved profiles, exercise deterministic
 favorite/folder/provider/disabled grouping and tag-aware search, and require
 every visible main or Connection Manager toolbar action to have a real handler.
 
-## Integration work still required
+## Planned after 1.0
 
 1. Extend the implemented recursive saved-connection folder copy to deliberately
    modeled local/ad-hoc sources and durable dependency-aware folder moves.
@@ -75,18 +75,25 @@ Provider work should not bypass the common contract. If a native provider featur
 cannot be represented safely, extend the capability/operation model first and
 make older adapters return an explicit unsupported result.
 
-## Release gate
+## Release gate status
 
-The project should not be labeled stable until:
+Met for 1.0:
 
-- the desktop-to-agent happy path works for every advertised core provider;
+- the desktop-to-agent happy path works for every advertised core provider
+  (Local, S3, FTP, FTPS, SFTP), each covered by a hermetic integration fixture;
 - queued transfers and sync runs survive process restart without duplicate or
-  stale destructive work;
+  stale destructive work, exercised by the durable queue/outbox recovery tests;
 - all transport identity policies are exercised against positive and negative
   integration fixtures;
-- upgrade, recovery, vault rotation, and uninstall behavior are documented and
-  tested;
-- Release build, tests, dependency audit, and packaging run reproducibly in CI;
-- installer upgrade/rollback coverage and Authenticode signing are production-ready;
-- an independent security review has addressed secret, path, IPC, trust, and
-  destructive-operation boundaries.
+- Release build, tests, dependency audit, and packaging run reproducibly in CI.
+
+Outstanding and tracked for a follow-up release:
+
+- **Authenticode signing.** Installer and update packages are not yet signed, so
+  SmartScreen warns on first run. Integrity rests on published `SHA256SUMS` and
+  GitHub artifact provenance, which is not equivalent to code signing.
+- **Independent security review.** The secret, path, IPC, trust, and
+  destructive-operation boundaries have not been reviewed by an outside party.
+- **Stress coverage.** Crash/restart, credential rotation, low-disk, long-path,
+  and large-directory stress tests remain to be written.
+- **Upgrade/rollback and recovery documentation.**

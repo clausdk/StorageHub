@@ -24,4 +24,4 @@ Commands and results
 - [ ] Relevant architecture, security-model, development-status, or operator documentation is updated.
 - [ ] No documentation change is needed; explain why below.
 
-StorageHub is a release candidate. This pull request does not imply stable support for a provider or workflow beyond the behavior covered by the repository's tests and documentation.
+This pull request does not imply support for a provider or workflow beyond the behavior covered by the repository's tests and documentation.
