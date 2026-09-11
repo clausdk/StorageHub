@@ -170,7 +170,10 @@ public sealed class LocalFileBrowserDataSource : IPagedLocalFileBrowserDataSourc
         cancellationToken.ThrowIfCancellationRequested();
         if (location.IsThisPc)
         {
-            return new LocalBrowserSnapshot(location, EnumerateDrives(cancellationToken), IndexedEntryCount: DriveInfo.GetDrives().Length);
+            // One enumeration only: DriveInfo.GetDrives() probes every volume, and a
+            // disconnected network drive can block for seconds per call.
+            var drives = EnumerateDrives(cancellationToken);
+            return new LocalBrowserSnapshot(location, drives, IndexedEntryCount: drives.Length);
         }
 
         DirectoryEnumerationSession session;

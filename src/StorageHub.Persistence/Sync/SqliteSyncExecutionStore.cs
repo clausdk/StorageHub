@@ -396,18 +396,18 @@ public sealed class SqliteSyncExecutionStore : ISyncExecutionStore
                 transaction,
                 request.ProfileId,
                 cancellationToken).ConfigureAwait(false);
-            foreach (var (path, observation) in request.Items.OrderBy(
-                         static pair => pair.Key,
-                         StringComparer.Ordinal))
+            using (var inserter = new SqliteSyncBaselineStore.BaselineItemInserter(
+                       writer.Connection,
+                       transaction,
+                       baselineRequest))
             {
-                await SqliteSyncBaselineStore.InsertItemAsync(
-                    writer.Connection,
-                    transaction,
-                    baselineRequest,
-                    path,
-                    observation,
-                    nextBaselineRevision,
-                    cancellationToken).ConfigureAwait(false);
+                foreach (var (path, observation) in request.Items.OrderBy(
+                             static pair => pair.Key,
+                             StringComparer.Ordinal))
+                {
+                    await inserter.InsertAsync(path, observation, nextBaselineRevision, cancellationToken)
+                        .ConfigureAwait(false);
+                }
             }
 
             var next = SyncStateMachine.Transition(

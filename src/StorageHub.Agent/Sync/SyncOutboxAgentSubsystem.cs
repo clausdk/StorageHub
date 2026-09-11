@@ -350,11 +350,15 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
 
         var currentLease = leaseContext.Current;
         var now = _timeProvider.GetUtcNow();
+        // A terminal outbox write must not observe the host token: abandoning it would leave the
+        // event ambiguously claimed. It carries its own deadline so a wedged store cannot hang
+        // the worker or block shutdown.
+        using var storeWriteTimeout = new CancellationTokenSource(_options.StoreWriteTimeout);
         SyncPersistenceMutationStatus terminal;
         switch (result.Outcome)
         {
             case SyncOutboxProcessingOutcome.Completed:
-                terminal = await _outbox.CompleteAsync(currentLease, now, CancellationToken.None)
+                terminal = await _outbox.CompleteAsync(currentLease, now, storeWriteTimeout.Token)
                     .ConfigureAwait(false);
                 if (terminal is SyncPersistenceMutationStatus.Applied or
                     SyncPersistenceMutationStatus.AlreadyApplied)
@@ -375,7 +379,7 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
                     result.ErrorCode ?? "sync.outbox.retry",
                     result.SafeErrorSummary ?? "The sync event will be retried.",
                     deadLetter,
-                    CancellationToken.None).ConfigureAwait(false);
+                    storeWriteTimeout.Token).ConfigureAwait(false);
                 if (terminal == SyncPersistenceMutationStatus.Applied)
                 {
                     _ = deadLetter
@@ -394,7 +398,7 @@ public sealed class SyncOutboxAgentSubsystem : IAgentSubsystem, IAsyncDisposable
                     result.ErrorCode ?? "sync.outbox.rejected",
                     result.SafeErrorSummary ?? "The sync event was rejected safely.",
                     deadLetter: true,
-                    CancellationToken.None).ConfigureAwait(false);
+                    storeWriteTimeout.Token).ConfigureAwait(false);
                 if (terminal is SyncPersistenceMutationStatus.Applied or
                     SyncPersistenceMutationStatus.AlreadyApplied)
                 {

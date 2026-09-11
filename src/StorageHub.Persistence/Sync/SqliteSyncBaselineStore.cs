@@ -80,16 +80,13 @@ public sealed class SqliteSyncBaselineStore(SingleWriterSqliteDatabase database)
                 transaction,
                 request.ProfileId,
                 cancellationToken).ConfigureAwait(false);
-            foreach (var (path, observation) in request.Items.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+            using (var inserter = new BaselineItemInserter(writer.Connection, transaction, request))
             {
-                await InsertItemAsync(
-                    writer.Connection,
-                    transaction,
-                    request,
-                    path,
-                    observation,
-                    nextRevision,
-                    cancellationToken).ConfigureAwait(false);
+                foreach (var (path, observation) in request.Items.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+                {
+                    await inserter.InsertAsync(path, observation, nextRevision, cancellationToken)
+                        .ConfigureAwait(false);
+                }
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -263,6 +260,10 @@ public sealed class SqliteSyncBaselineStore(SingleWriterSqliteDatabase database)
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Inserts a single baseline row. Prefer <see cref="BaselineItemInserter"/> when writing
+    /// more than one row: it parses the statement and allocates its parameters once.
+    /// </summary>
     internal static async Task InsertItemAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -272,9 +273,18 @@ public sealed class SqliteSyncBaselineStore(SingleWriterSqliteDatabase database)
         long revision,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
+        using var inserter = new BaselineItemInserter(connection, transaction, request);
+        await inserter.InsertAsync(path, observation, revision, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reusable INSERT for baseline rows. A replace can carry up to
+    /// <see cref="SyncPersistenceUtilities.MaximumBaselineItems"/> items, so the statement is
+    /// prepared once and only the parameter values change per row.
+    /// </summary>
+    internal sealed class BaselineItemInserter : IDisposable
+    {
+        private const string InsertSql = """
             INSERT INTO sync_item_state
             (
                 sync_profile_id, relative_path, baseline_generation,
@@ -294,21 +304,72 @@ public sealed class SqliteSyncBaselineStore(SingleWriterSqliteDatabase database)
                 $revision, $updatedAt
             );
             """;
-        command.Parameters.AddWithValue("$profileId", request.ProfileId.ToString());
-        command.Parameters.AddWithValue("$path", path);
-        command.Parameters.AddWithValue("$generation", request.Generation);
-        command.Parameters.AddWithValue("$leftVersion", (object?)observation.LeftVersionId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$rightVersion", (object?)observation.RightVersionId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$leftSize", observation.Exists ? observation.Length : DBNull.Value);
-        command.Parameters.AddWithValue("$rightSize", observation.Exists ? observation.Length : DBNull.Value);
-        command.Parameters.AddWithValue("$digestAlgorithm", (object?)observation.Digest?.Algorithm ?? DBNull.Value);
-        command.Parameters.AddWithValue("$digestValue", (object?)observation.Digest?.Value ?? DBNull.Value);
-        command.Parameters.AddWithValue("$tombstone", observation.Exists ? DBNull.Value : "both");
-        command.Parameters.AddWithValue("$exists", observation.Exists ? 1 : 0);
-        command.Parameters.AddWithValue("$length", observation.Length);
-        command.Parameters.AddWithValue("$revision", revision);
-        command.Parameters.AddWithValue("$updatedAt", SyncPersistenceUtilities.FormatTimestamp(request.UpdatedAtUtc));
-        _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        private readonly SqliteCommand _command;
+        private readonly SqliteParameter _path;
+        private readonly SqliteParameter _leftVersion;
+        private readonly SqliteParameter _rightVersion;
+        private readonly SqliteParameter _leftSize;
+        private readonly SqliteParameter _rightSize;
+        private readonly SqliteParameter _digestAlgorithm;
+        private readonly SqliteParameter _digestValue;
+        private readonly SqliteParameter _tombstone;
+        private readonly SqliteParameter _exists;
+        private readonly SqliteParameter _length;
+        private readonly SqliteParameter _revision;
+
+        internal BaselineItemInserter(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            SyncBaselineReplaceRequest request)
+        {
+            _command = connection.CreateCommand();
+            _command.Transaction = transaction;
+            _command.CommandText = InsertSql;
+
+            // Constant for the whole replace.
+            _ = _command.Parameters.AddWithValue("$profileId", request.ProfileId.ToString());
+            _ = _command.Parameters.AddWithValue("$generation", request.Generation);
+            _ = _command.Parameters.AddWithValue(
+                "$updatedAt",
+                SyncPersistenceUtilities.FormatTimestamp(request.UpdatedAtUtc));
+
+            // Rebound per row.
+            _path = _command.Parameters.Add("$path", SqliteType.Text);
+            _leftVersion = _command.Parameters.Add("$leftVersion", SqliteType.Text);
+            _rightVersion = _command.Parameters.Add("$rightVersion", SqliteType.Text);
+            _leftSize = _command.Parameters.Add("$leftSize", SqliteType.Integer);
+            _rightSize = _command.Parameters.Add("$rightSize", SqliteType.Integer);
+            _digestAlgorithm = _command.Parameters.Add("$digestAlgorithm", SqliteType.Text);
+            _digestValue = _command.Parameters.Add("$digestValue", SqliteType.Text);
+            _tombstone = _command.Parameters.Add("$tombstone", SqliteType.Text);
+            _exists = _command.Parameters.Add("$exists", SqliteType.Integer);
+            _length = _command.Parameters.Add("$length", SqliteType.Integer);
+            _revision = _command.Parameters.Add("$revision", SqliteType.Integer);
+            _command.Prepare();
+        }
+
+        internal async Task InsertAsync(
+            string path,
+            SyncBaselineObservation observation,
+            long revision,
+            CancellationToken cancellationToken)
+        {
+            _path.Value = path;
+            _leftVersion.Value = (object?)observation.LeftVersionId ?? DBNull.Value;
+            _rightVersion.Value = (object?)observation.RightVersionId ?? DBNull.Value;
+            _leftSize.Value = observation.Exists ? observation.Length : DBNull.Value;
+            _rightSize.Value = observation.Exists ? observation.Length : DBNull.Value;
+            _digestAlgorithm.Value = (object?)observation.Digest?.Algorithm ?? DBNull.Value;
+            _digestValue.Value = (object?)observation.Digest?.Value ?? DBNull.Value;
+            _tombstone.Value = observation.Exists ? DBNull.Value : "both";
+            _exists.Value = observation.Exists ? 1 : 0;
+            _length.Value = observation.Length;
+            _revision.Value = revision;
+            _ = await _command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        public void Dispose() => _command.Dispose();
     }
 
     internal static SyncBaselineSnapshot CreateSnapshot(

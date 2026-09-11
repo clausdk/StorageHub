@@ -91,16 +91,17 @@ public sealed class AgentStatusMonitor : IAsyncDisposable
     {
         try
         {
-            await using var client = new NamedPipeIpcClient(new NamedPipeIpcClientOptions
-            {
-                PipeName = DefaultPipeName,
-                ClientName = "StorageHub.Desktop",
-                ClientVersion = typeof(AgentStatusMonitor).Assembly.GetName().Version?.ToString() ?? "0.1.0",
-                ConnectTimeout = _connectTimeout,
-                MaxConnectAttempts = 3,
-                InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
-                MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
-            });
+            // The 8s poll cadence is itself the retry, so a status poll takes a single
+            // attempt. Retrying here would spend seconds per cycle re-probing a pipe
+            // that is simply absent while the agent is stopped.
+            await using var client = new NamedPipeIpcClient(
+                DesktopAgentIpcOptions.Create(
+                    DefaultPipeName,
+                    "StorageHub.Desktop",
+                    _connectTimeout) with
+                {
+                    MaxConnectAttempts = 1
+                });
             _ = await client.ConnectAsync(cancellationToken).ConfigureAwait(false);
             var requestId = Guid.NewGuid();
             await client.SendAsync(

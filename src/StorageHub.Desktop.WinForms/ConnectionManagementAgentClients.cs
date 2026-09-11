@@ -449,17 +449,10 @@ public sealed class NamedPipeRemoteConnectionProfileClient : IRemoteConnectionPr
 
     private static ProfileNamedPipeTransport CreateTransport(RemoteStorageAgentClientOptions options)
     {
-        var version = typeof(NamedPipeRemoteConnectionProfileClient).Assembly.GetName().Version?.ToString() ?? "0.1.0";
-        return new ProfileNamedPipeTransport(new NamedPipeIpcClient(new NamedPipeIpcClientOptions
-        {
-            PipeName = options.PipeName,
-            ClientName = "StorageHub.Desktop.ConnectionManager",
-            ClientVersion = version,
-            ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 3,
-            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
-            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
-        }));
+        return new ProfileNamedPipeTransport(new NamedPipeIpcClient(DesktopAgentIpcOptions.Create(
+            options.PipeName,
+            "StorageHub.Desktop.ConnectionManager",
+            options.ConnectTimeout)));
     }
 
     private sealed class ProfileNamedPipeTransport(NamedPipeIpcClient client) : IStorageIpcTransport
@@ -765,18 +758,14 @@ public sealed class NamedPipeRemoteSecretVaultClient : IRemoteSecretVaultClient
             throw new ArgumentOutOfRangeException(nameof(options));
         }
 
-        var version = typeof(NamedPipeRemoteSecretVaultClient).Assembly.GetName().Version?.ToString() ?? "0.1.0";
-        return new SecretNamedPipeTransport(new NamedPipeIpcClient(new NamedPipeIpcClientOptions
-        {
-            PipeName = options.PipeName,
-            ClientName = "StorageHub.Desktop.SecretEnrollment",
-            ClientVersion = version,
-            ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 3,
-            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
-            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400),
-            FrameKind = IpcFrameKind.Secret
-        }));
+        return new SecretNamedPipeTransport(new NamedPipeIpcClient(
+            DesktopAgentIpcOptions.Create(
+                options.PipeName,
+                "StorageHub.Desktop.SecretEnrollment",
+                options.ConnectTimeout) with
+            {
+                FrameKind = IpcFrameKind.Secret
+            }));
     }
 
     private sealed class SecretNamedPipeTransport(NamedPipeIpcClient client) : ISecretIpcTransport

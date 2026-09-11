@@ -156,7 +156,7 @@ try {
     if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf) -or
         (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -cne $pyftpdlibSha256) {
         Write-Host "Downloading pinned pyftpdlib $pyftpdlibVersion fixture source."
-        Invoke-WebRequest -Uri $pyftpdlibUrl -OutFile $downloadPath -UseBasicParsing
+        Invoke-WebRequest -Uri $pyftpdlibUrl -OutFile $downloadPath -UseBasicParsing -TimeoutSec 120 -MaximumRetryCount 3 -RetryIntervalSec 5
         $downloadHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash
         if ($downloadHash -cne $pyftpdlibSha256) {
             throw 'The pyftpdlib fixture SHA-256 did not match the reviewed release.'

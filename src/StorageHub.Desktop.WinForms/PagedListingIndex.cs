@@ -109,13 +109,19 @@ internal sealed class PagedListingIndex : IDisposable
         }
     }
 
-    public int? FindIndex(
+    /// <summary>
+    /// Resolves row indexes for several locations in a single ranking pass. <see cref="FindIndex"/>
+    /// ranks the whole table per call, so restoring a large selection one location at a time is
+    /// quadratic; this ranks once and returns only the rows asked for.
+    /// </summary>
+    public IReadOnlyDictionary<string, int> FindIndexes(
         BrowserSortColumn sortColumn,
         bool ascending,
         string? filter,
-        string location)
+        IReadOnlyCollection<string> locations)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(location);
+        ArgumentNullException.ThrowIfNull(locations);
+        if (locations.Count == 0) return new Dictionary<string, int>(StringComparer.Ordinal);
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -123,20 +129,33 @@ internal sealed class PagedListingIndex : IDisposable
             var where = WhereClause(filter?.Trim(), command);
             var direction = ascending ? "ASC" : "DESC";
             var sort = SortExpression(sortColumn, direction);
+            var parameters = new List<string>(locations.Count);
+            var parameterIndex = 0;
+            foreach (var location in locations.Distinct(StringComparer.Ordinal))
+            {
+                var parameterName = "$location" + parameterIndex++;
+                parameters.Add(parameterName);
+                command.Parameters.AddWithValue(parameterName, location);
+            }
+
             command.CommandText = $"""
-                SELECT row_index FROM (
+                SELECT location, row_index FROM (
                     SELECT location,
                            ROW_NUMBER() OVER (
                                ORDER BY is_container DESC, {sort},
                                         name COLLATE NOCASE {direction}, sequence) - 1 AS row_index
                     FROM item{where}
                 ) ranked
-                WHERE location = $location
-                LIMIT 1;
+                WHERE location IN ({string.Join(",", parameters)});
                 """;
-            command.Parameters.AddWithValue("$location", location);
-            var value = command.ExecuteScalar();
-            return value is long index ? checked((int)index) : null;
+            using var reader = command.ExecuteReader();
+            var found = new Dictionary<string, int>(StringComparer.Ordinal);
+            while (reader.Read())
+            {
+                found[reader.GetString(0)] = checked((int)reader.GetInt64(1));
+            }
+
+            return found;
         }
     }
 

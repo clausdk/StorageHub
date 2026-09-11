@@ -454,17 +454,10 @@ public sealed class NamedPipeRemoteStorageAgentClient : IRemoteStorageAgentClien
     private static NamedPipeStorageIpcTransport CreateTransport(RemoteStorageAgentClientOptions options)
     {
         ValidateOptions(options);
-        var version = typeof(NamedPipeRemoteStorageAgentClient).Assembly.GetName().Version?.ToString() ?? "0.1.0";
-        return new NamedPipeStorageIpcTransport(new NamedPipeIpcClient(new NamedPipeIpcClientOptions
-        {
-            PipeName = options.PipeName,
-            ClientName = "StorageHub.Desktop.StorageBrowser",
-            ClientVersion = version,
-            ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 3,
-            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
-            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
-        }));
+        return new NamedPipeStorageIpcTransport(new NamedPipeIpcClient(DesktopAgentIpcOptions.Create(
+            options.PipeName,
+            "StorageHub.Desktop.StorageBrowser",
+            options.ConnectTimeout)));
     }
 
     private static void ValidateOptions(RemoteStorageAgentClientOptions options)

@@ -7,6 +7,10 @@ namespace StorageHub.Desktop;
 
 public sealed class BrowserPaneControl : UserControl
 {
+    /// <summary>Bounds the agent handshake that brackets an Explorer drag. The gesture runs on the
+    /// UI thread, so an unresponsive agent must surface an error rather than freeze the drag.</summary>
+    private static readonly TimeSpan ExplorerDropHandshakeTimeout = TimeSpan.FromSeconds(10);
+
     private const string PaneDragDataFormat = "StorageHub.PaneSelection.v1";
     private const int DragShiftKeyState = 4;
     private const int MaximumCachedConnections = 32;
@@ -1824,14 +1828,17 @@ public sealed class BrowserPaneControl : UserControl
         _fileList.BeginUpdate();
         try
         {
+            var indexes = _listingIndex.FindIndexes(
+                _sortColumn,
+                _sortAscending,
+                _filterBox.Text,
+                locations);
             foreach (var location in locations)
             {
-                var index = _listingIndex.FindIndex(
-                    _sortColumn,
-                    _sortAscending,
-                    _filterBox.Text,
-                    location);
-                if (index is { } found) _fileList.SelectedIndices.Add(found + parentOffset);
+                if (indexes.TryGetValue(location, out var found))
+                {
+                    _fileList.SelectedIndices.Add(found + parentOffset);
+                }
             }
         }
         finally
@@ -1843,7 +1850,10 @@ public sealed class BrowserPaneControl : UserControl
     private void UpdateSummaryText()
     {
         var filter = _filterBox.Text;
-        var visibleItemCount = _items.Count(static item => !item.IsParentNavigation);
+        // _items is a virtualized view backed by the SQLite listing index, so a LINQ walk
+        // would page every row in from disk on each keystroke. The parent-navigation row is
+        // only ever index 0 (see ParentPrefixedReadOnlyList), so the count is arithmetic.
+        var visibleItemCount = _items is ParentPrefixedReadOnlyList ? _items.Count - 1 : _items.Count;
         var countText = visibleItemCount == _allItems.Count
             ? $"{visibleItemCount:N0} items"
             : $"{visibleItemCount:N0} of {_allItems.Count:N0} items";
@@ -2236,7 +2246,8 @@ public sealed class BrowserPaneControl : UserControl
         {
             try
             {
-                explorerDrop = await BeginExplorerDropAsync(selection.Value, CancellationToken.None).ConfigureAwait(true);
+                using var beginTimeout = new CancellationTokenSource(ExplorerDropHandshakeTimeout);
+                explorerDrop = await BeginExplorerDropAsync(selection.Value, beginTimeout.Token).ConfigureAwait(true);
                 if (explorerDrop.Failure is not null || string.IsNullOrWhiteSpace(explorerDrop.DropToken) ||
                     string.IsNullOrWhiteSpace(explorerDrop.MarkerPath) || !Directory.Exists(explorerDrop.MarkerPath))
                 {
@@ -2277,7 +2288,9 @@ public sealed class BrowserPaneControl : UserControl
         {
             try
             {
-                var committed = await CommitExplorerDropAsync(explorerDrop.DropToken!, CancellationToken.None).ConfigureAwait(true);
+                using var commitTimeout = new CancellationTokenSource(ExplorerDropHandshakeTimeout);
+                var committed = await CommitExplorerDropAsync(explorerDrop.DropToken!, commitTimeout.Token)
+                    .ConfigureAwait(true);
                 if (!payload.InternalDropHandled && committed.Accepted)
                 {
                     _errorBanner.Text = $"Queued in StorageHub → {committed.DestinationPath}";

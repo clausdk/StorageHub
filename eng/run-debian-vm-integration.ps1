@@ -128,7 +128,7 @@ Assert-Tool $qemuSystem 'QEMU bootstrap executable'
 [IO.Directory]::CreateDirectory($keyRoot) | Out-Null
 
 if (-not (Test-Path -LiteralPath $checksumFile -PathType Leaf)) {
-    Invoke-WebRequest -Uri ($debianBaseUri + 'SHA512SUMS') -OutFile $checksumFile -UseBasicParsing
+    Invoke-WebRequest -Uri ($debianBaseUri + 'SHA512SUMS') -OutFile $checksumFile -UseBasicParsing -TimeoutSec 120 -MaximumRetryCount 3 -RetryIntervalSec 5
 }
 if (-not (Test-Path -LiteralPath $baseImage -PathType Leaf)) {
     Write-Host "Downloading official Debian 13 cloud image to $baseImage"

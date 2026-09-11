@@ -606,17 +606,10 @@ public sealed class NamedPipeTransferQueueAgentClient : ITransferQueueAgentClien
     private static NamedPipeTransferIpcTransport CreateTransport(RemoteStorageAgentClientOptions options)
     {
         ValidateOptions(options);
-        var version = typeof(NamedPipeTransferQueueAgentClient).Assembly.GetName().Version?.ToString() ?? "0.1.0";
-        return new NamedPipeTransferIpcTransport(new NamedPipeIpcClient(new NamedPipeIpcClientOptions
-        {
-            PipeName = options.PipeName,
-            ClientName = "StorageHub.Desktop.TransferQueue",
-            ClientVersion = version,
-            ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 3,
-            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
-            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
-        }));
+        return new NamedPipeTransferIpcTransport(new NamedPipeIpcClient(DesktopAgentIpcOptions.Create(
+            options.PipeName,
+            "StorageHub.Desktop.TransferQueue",
+            options.ConnectTimeout)));
     }
 
     private static void ValidateOptions(RemoteStorageAgentClientOptions options)

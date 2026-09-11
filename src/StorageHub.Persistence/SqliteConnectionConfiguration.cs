@@ -11,7 +11,7 @@ internal static class SqliteConnectionConfiguration
             DataSource = options.DatabasePath,
             Mode = mode,
             Pooling = options.Pooling,
-            DefaultTimeout = Math.Max(1, (int)Math.Ceiling(options.BusyTimeoutMilliseconds / 1_000d))
+            DefaultTimeout = options.CommandTimeoutSeconds
         }.ToString();
 
     internal static async Task ApplyPerConnectionSettingsAsync(

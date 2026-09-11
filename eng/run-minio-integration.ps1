@@ -77,7 +77,7 @@ try {
     if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf) -or
         (Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256).Hash -cne $minioSha256) {
         Write-Host "Downloading pinned MinIO $minioRelease fixture."
-        Invoke-WebRequest -Uri $minioUrl -OutFile $downloadPath
+        Invoke-WebRequest -Uri $minioUrl -OutFile $downloadPath -TimeoutSec 120 -MaximumRetryCount 3 -RetryIntervalSec 5
         $downloadHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash
         if ($downloadHash -cne $minioSha256) {
             throw "The MinIO fixture SHA-256 did not match the reviewed release."

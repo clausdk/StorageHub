@@ -434,17 +434,10 @@ public sealed class NamedPipeScheduleManagementAgentClient : IScheduleManagement
     private static NamedPipeScheduleIpcTransport CreateTransport(ScheduleManagementAgentClientOptions options)
     {
         ValidateOptions(options);
-        var version = typeof(NamedPipeScheduleManagementAgentClient).Assembly.GetName().Version?.ToString() ?? "0.1.0";
-        return new NamedPipeScheduleIpcTransport(new NamedPipeIpcClient(new NamedPipeIpcClientOptions
-        {
-            PipeName = options.PipeName,
-            ClientName = "StorageHub.Desktop.ScheduleManagement",
-            ClientVersion = version,
-            ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 3,
-            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
-            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
-        }));
+        return new NamedPipeScheduleIpcTransport(new NamedPipeIpcClient(DesktopAgentIpcOptions.Create(
+            options.PipeName,
+            "StorageHub.Desktop.ScheduleManagement",
+            options.ConnectTimeout)));
     }
 
     private static void ValidateOptions(ScheduleManagementAgentClientOptions options)

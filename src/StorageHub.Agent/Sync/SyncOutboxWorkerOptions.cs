@@ -11,6 +11,13 @@ public sealed record SyncOutboxWorkerOptions
     public TimeSpan DefaultRetryDelay { get; init; } = TimeSpan.FromSeconds(30);
     public int MaximumAttempts { get; init; } = 5;
 
+    /// <summary>
+    /// Upper bound for a terminal outbox write. Such a write deliberately ignores the host
+    /// cancellation token so an event never stops in an ambiguous state, so it needs its own
+    /// deadline; without one a wedged store would hang the worker and block shutdown.
+    /// </summary>
+    public TimeSpan StoreWriteTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
     internal void Validate()
     {
         if (MaximumConcurrency is < 1 or > 8)
@@ -29,6 +36,7 @@ public sealed record SyncOutboxWorkerOptions
         ValidatePositive(LeaseDuration, nameof(LeaseDuration));
         ValidatePositive(LeaseRenewalInterval, nameof(LeaseRenewalInterval));
         ValidatePositive(DefaultRetryDelay, nameof(DefaultRetryDelay));
+        ValidatePositive(StoreWriteTimeout, nameof(StoreWriteTimeout));
         if (LeaseDuration > TimeSpan.FromHours(1))
         {
             throw new ArgumentOutOfRangeException(nameof(LeaseDuration), "An outbox lease cannot exceed one hour.");

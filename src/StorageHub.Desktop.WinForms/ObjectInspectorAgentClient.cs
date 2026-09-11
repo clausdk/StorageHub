@@ -554,19 +554,11 @@ public sealed class NamedPipeObjectInspectorAgentClient : IObjectInspectorAgentC
         ObjectInspectorAgentClientOptions options)
     {
         ValidateOptions(options);
-        var version = typeof(NamedPipeObjectInspectorAgentClient).Assembly
-            .GetName().Version?.ToString() ?? "0.1.0";
         return new NamedPipeObjectInspectorIpcTransport(new NamedPipeIpcClient(
-            new NamedPipeIpcClientOptions
-            {
-                PipeName = options.PipeName,
-                ClientName = "StorageHub.Desktop.ObjectInspector",
-                ClientVersion = version,
-                ConnectTimeout = options.ConnectTimeout,
-                MaxConnectAttempts = 3,
-                InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
-                MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
-            }));
+            DesktopAgentIpcOptions.Create(
+                options.PipeName,
+                "StorageHub.Desktop.ObjectInspector",
+                options.ConnectTimeout)));
     }
 
     private static void ValidateOptions(ObjectInspectorAgentClientOptions options)

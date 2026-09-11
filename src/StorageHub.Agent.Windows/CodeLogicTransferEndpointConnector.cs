@@ -72,6 +72,16 @@ internal sealed class CodeLogicTransferEndpointConnector(
         {
             throw;
         }
+        catch (Exception error) when (ConnectionOpenFailureClassifier.IsConnectivityFailure(error))
+        {
+            // The network is unreachable rather than the request being wrong. Report it as
+            // transient so the caller's retry policy parks the work instead of retiring it.
+            return Fail(
+                "storage.connection.unavailable",
+                StorageFailureKind.Unavailable,
+                "The provider could not be reached.",
+                isTransient: true);
+        }
         catch (Exception)
         {
             return Fail(

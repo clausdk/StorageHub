@@ -702,17 +702,10 @@ public sealed class NamedPipeSyncManagementAgentClient : ISyncManagementAgentCli
     private static NamedPipeSyncIpcTransport CreateTransport(SyncManagementAgentClientOptions options)
     {
         ValidateOptions(options);
-        var version = typeof(NamedPipeSyncManagementAgentClient).Assembly.GetName().Version?.ToString() ?? "0.1.0";
-        return new NamedPipeSyncIpcTransport(new NamedPipeIpcClient(new NamedPipeIpcClientOptions
-        {
-            PipeName = options.PipeName,
-            ClientName = "StorageHub.Desktop.SyncManagement",
-            ClientVersion = version,
-            ConnectTimeout = options.ConnectTimeout,
-            MaxConnectAttempts = 3,
-            InitialReconnectDelay = TimeSpan.FromMilliseconds(100),
-            MaximumReconnectDelay = TimeSpan.FromMilliseconds(400)
-        }));
+        return new NamedPipeSyncIpcTransport(new NamedPipeIpcClient(DesktopAgentIpcOptions.Create(
+            options.PipeName,
+            "StorageHub.Desktop.SyncManagement",
+            options.ConnectTimeout)));
     }
 
     private static void ValidateOptions(SyncManagementAgentClientOptions options)

@@ -17,6 +17,13 @@ public sealed record TransferQueueWorkerOptions
     public int MaximumAttempts { get; init; } = 3;
     public int BufferSize { get; init; } = BoundedStreamCopier.DefaultBufferSize;
 
+    /// <summary>
+    /// Upper bound for a terminal state write. Such a write deliberately ignores the host
+    /// cancellation token so a job never stops in an ambiguous state, so it needs its own
+    /// deadline; without one a wedged store would hang the worker and block shutdown.
+    /// </summary>
+    public TimeSpan StoreWriteTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
     internal void Validate()
     {
         if (MaximumConcurrency is < 1 or > 32)
@@ -42,6 +49,7 @@ public sealed record TransferQueueWorkerOptions
         ValidatePositive(CheckpointInterval, nameof(CheckpointInterval));
         ValidatePositive(InitialRetryDelay, nameof(InitialRetryDelay));
         ValidatePositive(MaximumRetryDelay, nameof(MaximumRetryDelay));
+        ValidatePositive(StoreWriteTimeout, nameof(StoreWriteTimeout));
         if (LeaseDuration > TimeSpan.FromHours(24))
         {
             throw new ArgumentOutOfRangeException(nameof(LeaseDuration), "A transfer lease cannot exceed 24 hours.");

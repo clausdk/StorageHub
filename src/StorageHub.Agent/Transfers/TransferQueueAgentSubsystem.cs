@@ -513,7 +513,8 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
                 return false;
             }
 
-            if (!await SaveLatestCheckpointAsync(context, progress.BytesTransferred, CancellationToken.None)
+            using var completionTimeout = CreateStoreWriteTimeout();
+            if (!await SaveLatestCheckpointAsync(context, progress.BytesTransferred, completionTimeout.Token)
                     .ConfigureAwait(false))
             {
                 RecordLeaseLoss();
@@ -523,15 +524,15 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
             if (!await TryTransitionAsync(
                     context,
                     TransferState.Verifying,
-                    cancellationToken: CancellationToken.None).ConfigureAwait(false) ||
+                    cancellationToken: completionTimeout.Token).ConfigureAwait(false) ||
                 !await TryTransitionAsync(
                     context,
                     TransferState.Finalizing,
-                    cancellationToken: CancellationToken.None).ConfigureAwait(false) ||
+                    cancellationToken: completionTimeout.Token).ConfigureAwait(false) ||
                 !await TryTransitionAsync(
                     context,
                     TransferState.Completed,
-                    cancellationToken: CancellationToken.None).ConfigureAwait(false))
+                    cancellationToken: completionTimeout.Token).ConfigureAwait(false))
             {
                 RecordLeaseLoss();
                 return false;
@@ -679,12 +680,13 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
 
     private async Task TransitionInterruptedAsync(ClaimContext context)
     {
+        using var storeWriteTimeout = CreateStoreWriteTimeout();
         if (await TryTransitionAsync(
                 context,
                 TransferState.Interrupted,
                 TransferStatusCode.Interrupted,
                 SafeError("transfer.worker.stopped", "The transfer owner stopped before completion."),
-                cancellationToken: CancellationToken.None).ConfigureAwait(false))
+                cancellationToken: storeWriteTimeout.Token).ConfigureAwait(false))
         {
             _ = Interlocked.Increment(ref _interrupted);
         }
@@ -696,10 +698,11 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
 
     private async Task TransitionCancelledAsync(ClaimContext context)
     {
+        using var storeWriteTimeout = CreateStoreWriteTimeout();
         if (await TryTransitionAsync(
                 context,
                 TransferState.Cancelled,
-                cancellationToken: CancellationToken.None).ConfigureAwait(false))
+                cancellationToken: storeWriteTimeout.Token).ConfigureAwait(false))
         {
             _ = Interlocked.Increment(ref _cancelled);
         }
@@ -711,12 +714,13 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
 
     private async Task TransitionUncertainAsync(ClaimContext context, string summary)
     {
+        using var storeWriteTimeout = CreateStoreWriteTimeout();
         if (await TryTransitionAsync(
                 context,
                 TransferState.NeedsReconciliation,
                 TransferStatusCode.StateUncertain,
                 SafeError("transfer.state.uncertain", summary),
-                cancellationToken: CancellationToken.None).ConfigureAwait(false))
+                cancellationToken: storeWriteTimeout.Token).ConfigureAwait(false))
         {
             _ = Interlocked.Increment(ref _failed);
         }
@@ -930,6 +934,13 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
         var now = _timeProvider.GetUtcNow();
         return now < current.TransitionedAtUtc ? current.TransitionedAtUtc : now;
     }
+
+    /// <summary>
+    /// Deadline for a terminal state write. These writes intentionally do not observe the host
+    /// token — abandoning one would leave the job in an ambiguous state — so they carry their own
+    /// bound to keep a wedged store from hanging the worker and blocking shutdown.
+    /// </summary>
+    private CancellationTokenSource CreateStoreWriteTimeout() => new(_options.StoreWriteTimeout);
 
     private void RecordLeaseLoss()
     {

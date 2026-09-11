@@ -38,4 +38,49 @@ public sealed class PagedListingIndexTests
         }
         Assert.InRange(index.CachedPageCount, 1, 16);
     }
+
+    [Fact]
+    public void FindIndexesResolvesEveryRequestedLocationInOneRankingPass()
+    {
+        using var index = new PagedListingIndex();
+        index.Reset(Enumerable.Range(0, 1_000).Select(number => new BrowserListItem(
+            $"file-{number:D4}.txt",
+            number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "TXT file",
+            string.Empty,
+            string.Empty,
+            $"folder/file-{number:D4}.txt",
+            Kind: StorageItemKind.File,
+            Length: number)));
+
+        var ascending = index.FindIndexes(
+            BrowserSortColumn.Name,
+            ascending: true,
+            filter: null,
+            ["folder/file-0000.txt", "folder/file-0999.txt", "folder/missing.txt"]);
+
+        Assert.Equal(0, ascending["folder/file-0000.txt"]);
+        Assert.Equal(999, ascending["folder/file-0999.txt"]);
+        Assert.False(ascending.ContainsKey("folder/missing.txt"));
+
+        var descending = index.FindIndexes(
+            BrowserSortColumn.Name,
+            ascending: false,
+            filter: null,
+            ["folder/file-0999.txt"]);
+
+        Assert.Equal(0, descending["folder/file-0999.txt"]);
+
+        // A filtered ranking numbers rows within the filtered set, not the whole listing.
+        var filtered = index.FindIndexes(
+            BrowserSortColumn.Name,
+            ascending: true,
+            "file-099?.txt",
+            ["folder/file-0990.txt", "folder/file-0000.txt"]);
+
+        Assert.Equal(0, filtered["folder/file-0990.txt"]);
+        Assert.False(filtered.ContainsKey("folder/file-0000.txt"));
+
+        Assert.Empty(index.FindIndexes(BrowserSortColumn.Name, ascending: true, filter: null, []));
+    }
 }
