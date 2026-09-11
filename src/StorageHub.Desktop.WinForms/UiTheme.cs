@@ -270,10 +270,20 @@ public static class StorageHubTheme
         {
             item.BackColor = palette.Surface;
             item.ForeColor = item.Enabled ? palette.Text : palette.DisabledText;
+            item.EnabledChanged -= ToolStripItemEnabledChanged;
+            item.EnabledChanged += ToolStripItemEnabledChanged;
             if (item is ToolStripDropDownItem dropDown)
             {
                 ApplyToolStripItems(dropDown.DropDownItems, palette);
             }
+        }
+    }
+
+    private static void ToolStripItemEnabledChanged(object? sender, EventArgs e)
+    {
+        if (sender is ToolStripItem item)
+        {
+            item.ForeColor = item.Enabled ? CurrentPalette.Text : CurrentPalette.DisabledText;
         }
     }
 

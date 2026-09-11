@@ -67,7 +67,7 @@ public static class UiCommandCatalog
             ["Pause All"] = (Keys.F8, UiGlyph.Pause, "Pause active transfers at safe checkpoints."),
             ["Compare Panes"] = (Keys.Control | Keys.D, UiGlyph.Compare, "Compare the visible source and destination."),
             ["Review & Run..."] = (Keys.Control | Keys.Shift | Keys.P, UiGlyph.Compare, "Review an exact sync plan, then run it when its safety checks pass."),
-            ["Schedules..."] = (Keys.Control | Keys.Shift | Keys.S, UiGlyph.Run, "Manage durable review-only or safety-gated automatic synchronization schedules."),
+            ["Schedules..."] = (Keys.Control | Keys.Alt | Keys.S, UiGlyph.Run, "Manage durable review-only or safety-gated automatic synchronization schedules."),
             ["Search..."] = (Keys.Control | Keys.F, UiGlyph.Search, "Search within the focused endpoint."),
             ["Settings..."] = (Keys.Control | Keys.Oemcomma, UiGlyph.Settings, "Configure automatic StorageHub updates."),
             ["Check for Updates..."] = (Keys.None, UiGlyph.Refresh, "Check the official StorageHub GitHub releases for an update."),

@@ -2,6 +2,47 @@ namespace StorageHub.Desktop.Tests;
 
 public sealed class ThemeTests
 {
+    [Theory]
+    [InlineData(DesktopAppearance.Light)]
+    [InlineData(DesktopAppearance.Dark)]
+    public void Workspace_menu_colors_follow_command_availability(DesktopAppearance appearance)
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            var previous = DesktopAppearanceService.Appearance;
+            try
+            {
+                DesktopAppearanceService.SetAppearance(appearance);
+                using var main = new MainForm();
+                main.CreateControl();
+                var tabs = DescendantsAndSelf(main).OfType<TabControl>().Single(tab => tab.AccessibleName == "Workspace tabs");
+                _ = tabs.Handle;
+                StorageHubTheme.Apply(main);
+                var menu = Assert.Single(main.Controls.OfType<MenuStrip>());
+                var workspaceMenu = menu.Items.OfType<ToolStripMenuItem>().Single(item => item.Text == "Workspace");
+                var save = workspaceMenu.DropDownItems.OfType<ToolStripMenuItem>().Single(item => item.Text == "Save Workspace");
+                Assert.False(save.Enabled);
+                Assert.Equal(StorageHubTheme.CurrentPalette.DisabledText, save.ForeColor);
+
+                main.AddWorkspace(2);
+
+                Assert.True(save.Enabled);
+                Assert.Equal(StorageHubTheme.Text, save.ForeColor);
+
+                tabs.SelectedIndex = 0;
+                Assert.False(save.Enabled);
+                Assert.Equal(StorageHubTheme.CurrentPalette.DisabledText, save.ForeColor);
+                tabs.SelectedIndex = 2;
+                Assert.True(save.Enabled);
+                Assert.Equal(StorageHubTheme.Text, save.ForeColor);
+            }
+            finally
+            {
+                DesktopAppearanceService.SetAppearance(previous);
+            }
+        });
+    }
+
     private static readonly string[] MajorWindowNames =
         ["Main", "Connections", "Settings", "Sync profiles", "Schedules"];
 

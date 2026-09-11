@@ -172,7 +172,7 @@ library.
 
 - Windows and PowerShell
 - Visual Studio C++ build tools with the Desktop development workload (required for the Explorer drag/drop broker)
-- [.NET SDK 10.0.302](global.json), or a later 10.0 patch accepted by
+- [.NET SDK 10.0.401](global.json), or a later 10.0 patch accepted by
   `global.json`
 - Git
 - CPython 3.12 when running the local FTP/FTPS or SFTP fixtures; CI pins 3.12.10

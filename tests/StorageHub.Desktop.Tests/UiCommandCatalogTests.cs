@@ -32,6 +32,8 @@ public sealed class UiCommandCatalogTests
 
     [Theory]
     [InlineData("Workspace", "New Workspace...", Keys.Control | Keys.T)]
+    [InlineData("Workspace", "Save Workspace As...", Keys.Control | Keys.Shift | Keys.S)]
+    [InlineData("Sync", "Schedules...", Keys.Control | Keys.Alt | Keys.S)]
     [InlineData("Workspace", "Open Workspace...", Keys.Control | Keys.O)]
     [InlineData("Workspace", "Save Workspace", Keys.Control | Keys.S)]
     [InlineData("View", "Refresh", Keys.F5)]
@@ -44,5 +46,17 @@ public sealed class UiCommandCatalogTests
     public void CriticalCommandsExposeKeyboardShortcuts(string menu, string command, Keys shortcut)
     {
         Assert.Equal(shortcut, UiCommandCatalog.GetDefinition(menu, command).Shortcut);
+    }
+
+    [Fact]
+    public void KeyboardShortcutsDoNotInvokeCompetingCommands()
+    {
+        var conflicts = UiCommandCatalog.Definitions
+            .Where(definition => definition.Shortcut != Keys.None)
+            .GroupBy(definition => definition.Shortcut)
+            .Where(group => group.Count() > 1)
+            .Select(group => string.Join(", ", group.Select(definition => definition.Label)));
+
+        Assert.Empty(conflicts);
     }
 }
