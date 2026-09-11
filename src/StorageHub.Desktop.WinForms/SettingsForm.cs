@@ -88,8 +88,8 @@ public sealed class SettingsForm : Form
             "Closes StorageHub after download, applies the update, and reopens it. Disabled by default to avoid interrupting work.",
             preferences.RestartAutomatically);
         _includePrereleases = CreateOption(
-            "Include engineering preview releases",
-            "Keep enabled while using StorageHub preview builds. Disable it later to receive stable releases only.",
+            "Include release candidate builds",
+            "Keep enabled while using StorageHub release candidates. Disable it later to receive stable releases only.",
             preferences.IncludePrereleases);
         _externalEditor = new TextBox
         {

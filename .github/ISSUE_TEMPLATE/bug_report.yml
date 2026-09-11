@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        StorageHub is an engineering preview. Please search existing issues first.
+        StorageHub is a release candidate. Please search existing issues first.
 
         **Never include passwords, access keys, session tokens, private keys, certificates, vault files, private endpoint names, or unsanitized logs.** Report vulnerabilities privately through the repository Security tab instead of this form.
 

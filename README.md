@@ -10,7 +10,7 @@ CodeLogic application lifecycle, and adapts the all-in-one `CL.Storage`
 (`CodeLogic.Storage`) provider library behind a provider-neutral contract.
 
 > [!IMPORTANT]
-> StorageHub is currently an engineering preview, not a finished file-manager
+> StorageHub is currently a release candidate, not a finished file-manager
 > release. Core browsing, saved-pane file transfers, queue execution, sync, and
 > preview scheduling and explicit server-trust management are wired, but provider
 > interoperability, directory jobs, code signing, and production stress/security gates remain. Do not
@@ -18,7 +18,7 @@ CodeLogic application lifecycle, and adapts the all-in-one `CL.Storage`
 
 ## Install
 
-Download the newest engineering preview from
+Download the newest release candidate from
 [GitHub Releases](https://github.com/clausdk/StorageHub/releases). The Windows
 release bundle contains:
 
@@ -29,7 +29,7 @@ release bundle contains:
 The installer does not require elevation, starts the background agent only as
 the signed-in Windows user, and preserves application data under
 `%LOCALAPPDATA%\StorageHub` when the program is updated or uninstalled. Scheduled
-work therefore runs only while that user is signed in. Preview binaries are not
+work therefore runs only while that user is signed in. Release candidate binaries are not
 yet Authenticode-signed, so Windows SmartScreen may show an unrecognized-app
 warning. Verify the files against the included `SHA256SUMS` before running them.
 
@@ -40,7 +40,7 @@ release.
 
 Installed builds check the official StorageHub GitHub release feed at startup
 and silently download integrity-checked updates by default. Settings can disable
-automatic checks or downloads, exclude preview releases, or opt into silent
+automatic checks or downloads, exclude release candidates, or opt into silent
 install-and-restart. Manual **Help > Check for Updates...** remains available
 when automatic checks are disabled. Portable and developer builds never modify
 an installation.

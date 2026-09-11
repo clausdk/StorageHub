@@ -1,6 +1,6 @@
 # Development status
 
-StorageHub is an engineering preview. This page distinguishes implemented and
+StorageHub is a release candidate. This page distinguishes implemented and
 tested foundations from UI concepts and planned production integration.
 
 ## Implemented and tested

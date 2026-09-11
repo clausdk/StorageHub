@@ -187,7 +187,7 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages.lock.json'
 
-      - name: Derive immutable preview version
+      - name: Derive immutable release candidate version
         id: release-version
         shell: pwsh
         run: |
@@ -199,7 +199,7 @@ jobs:
           }
 
           $shortSha = $env:GITHUB_SHA.Substring(0, 12).ToLowerInvariant()
-          $version = "0.1.0-preview.$($env:GITHUB_RUN_NUMBER).g$shortSha"
+          $version = "0.1.0-rc.$($env:GITHUB_RUN_NUMBER).g$shortSha"
           if ($version -notmatch `
               '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$') {
             throw "The derived release version '$version' is not valid SemVer."
@@ -436,7 +436,7 @@ jobs:
 
           $notesPath = Join-Path $env:RUNNER_TEMP 'StorageHub-release-notes.md'
           $notes = @"
-          Automated StorageHub engineering preview for commit $commit.
+          Automated StorageHub release candidate for commit $commit.
 
           This release is built from the exact tested commit and carries GitHub
           artifact provenance. Verify every downloaded file against `SHA256SUMS`.
