@@ -1,4 +1,4 @@
-namespace StorageHub.Desktop;
+﻿namespace StorageHub.Desktop;
 
 public sealed record UiCommandDefinition(
     string Id,
@@ -33,7 +33,7 @@ public static class UiCommandCatalog
             ["Connections"] = ["Connection Manager...", "Key Store...", "Quick Connect...", "Reconnect", "Disconnect", "Test Connection"],
             ["Transfer"] = ["Start Queue", "Pause All", "Resume All", "Cancel Selected", "Speed Limits..."],
             ["Sync"] = ["Compare Panes", "Review & Run...", "Sync Profiles...", "Schedules..."],
-            ["Tools"] = ["Search...", "Checksums...", "Settings...", "Logs...", "Diagnostics..."],
+            ["Tools"] = ["Search...", "Background Agent...", "Checksums...", "Settings...", "Logs...", "Diagnostics..."],
             ["Help"] = ["Check for Updates...", "Keyboard Shortcuts", "Documentation", "Report Issue", "About StorageHub"]
         };
 
@@ -72,6 +72,7 @@ public static class UiCommandCatalog
             ["Review & Run..."] = (Keys.Control | Keys.Shift | Keys.P, UiGlyph.Compare, "Review an exact sync plan, then run it when its safety checks pass."),
             ["Schedules..."] = (Keys.Control | Keys.Alt | Keys.S, UiGlyph.Run, "Manage durable review-only or safety-gated automatic synchronization schedules."),
             ["Search..."] = (Keys.Control | Keys.F, UiGlyph.Search, "Search within the focused endpoint."),
+            ["Background Agent..."] = (Keys.None, UiGlyph.Info, "Check whether the background agent is running and start, stop, or restart it."),
             ["Settings..."] = (Keys.Control | Keys.Oemcomma, UiGlyph.Settings, "Configure automatic StorageHub updates."),
             ["Check for Updates..."] = (Keys.None, UiGlyph.Refresh, "Check the official StorageHub GitHub releases for an update."),
             ["About StorageHub"] = (Keys.None, UiGlyph.Info, "Show StorageHub version and application information.")

@@ -25,6 +25,9 @@ public sealed class MainForm : Form
     private readonly MenuStrip _menu;
     private readonly DesktopUpdater _updater;
     private readonly PackagedDesktopLifecycle? _packagedLifecycle;
+
+    /// <summary>The most recent agent report, so the agent dialog opens with real state.</summary>
+    private AgentMonitorStatus? _lastAgentStatus;
     private readonly bool _explorerDropBrokerAvailable;
     private readonly TabControl _workspaceTabs;
     private readonly TransferQueueControl _transferQueue;
@@ -364,6 +367,11 @@ public sealed class MainForm : Form
         status.Items.Add(new ToolStripSeparator());
         status.Items.Add(_queueStatus);
         status.Items.Add(new ToolStripSeparator());
+        // The agent indicator is where a user looks when something has stopped working, so it is
+        // also the fastest way into the controls that fix it.
+        _agentStatus.IsLink = false;
+        _agentStatus.Click += (_, _) => ShowAgentControl();
+        _agentStatus.ToolTipText = "Open background agent controls";
         status.Items.Add(_agentStatus);
         status.Items.Add(new ToolStripSeparator());
         status.Items.Add(_updateStatus);
@@ -752,6 +760,9 @@ public sealed class MainForm : Form
                     break;
                 case "Key Store...":
                     ShowKeyStore();
+                    break;
+                case "Background Agent...":
+                    ShowAgentControl();
                     break;
                 case "Settings...":
                     var preferencesBefore = _updatePreferencesStore.Load();
@@ -1155,6 +1166,14 @@ public sealed class MainForm : Form
         _ = dialog.ShowDialog(this);
     }
 
+    private void ShowAgentControl()
+    {
+        using var dialog = new AgentControlForm(
+            () => _lastAgentStatus,
+            _packagedLifecycle is { } lifecycle ? new PackagedAgentLifecycleController(lifecycle) : null);
+        _ = dialog.ShowDialog(this);
+    }
+
     private void ShowKeyStore()
     {
         // Two clients: metadata travels on the ordinary pipe, and material is enrolled only on the
@@ -1234,6 +1253,7 @@ public sealed class MainForm : Form
         "Next Pane" or
         "Connection Manager..." or
         "Key Store..." or
+        "Background Agent..." or
         "Review & Run..." or
         "Sync Profiles..." or
         "Schedules..." or
@@ -2114,6 +2134,7 @@ public sealed class MainForm : Form
                     return;
                 }
 
+                _lastAgentStatus = e.Status;
                 ApplyStatus(_status with
                 {
                     AgentState = e.Status.State,
