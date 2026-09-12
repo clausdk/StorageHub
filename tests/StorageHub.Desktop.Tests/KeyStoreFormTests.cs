@@ -14,6 +14,37 @@ public sealed class KeyStoreFormTests
     }
 
     [Fact]
+    public void AnEmptyCertificatePasswordIsRefusedWithAnActionableMessage()
+    {
+        // A password-less .pfx previously reached the vault client and surfaced its raw range
+        // error ("Parameter 'secret'"), which told the user nothing.
+        var message = KeyStoreForm.DescribeMissingPassphrase(KeyStoreMaterialKind.Pkcs12Certificate, "");
+
+        Assert.NotNull(message);
+        Assert.Contains(".pfx", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Parameter", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("range", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AnUnprotectedPrivateKeyIsRefusedWithAnActionableMessage()
+    {
+        var message = KeyStoreForm.DescribeMissingPassphrase(KeyStoreMaterialKind.SshPrivateKey, null);
+
+        Assert.NotNull(message);
+        Assert.Contains("passphrase", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AProvidedSecretIsAccepted()
+    {
+        Assert.Null(KeyStoreForm.DescribeMissingPassphrase(
+            KeyStoreMaterialKind.Pkcs12Certificate, "correct horse"));
+        Assert.Null(KeyStoreForm.DescribeMissingPassphrase(
+            KeyStoreMaterialKind.SshPrivateKey, " "));
+    }
+
+    [Fact]
     public void StillReferencedFailuresNameTheConsumingProfiles()
     {
         // The refusal has to say what is holding the entry, because the user's next step is to go

@@ -293,6 +293,12 @@ public sealed class KeyStoreForm : Form
         using var passphrasePrompt = new SecretPromptForm(passphraseCaption);
         if (passphrasePrompt.ShowDialog(this) != DialogResult.OK) return;
 
+        if (DescribeMissingPassphrase(kind, passphrasePrompt.Value) is { } missing)
+        {
+            ShowStatus(missing, StorageHubTheme.Danger);
+            return;
+        }
+
         using var namePrompt = new TextPromptForm("Name this entry", Path.GetFileNameWithoutExtension(file.Name));
         if (namePrompt.ShowDialog(this) != DialogResult.OK) return;
 
@@ -430,6 +436,21 @@ public sealed class KeyStoreForm : Form
 
         ShowStatus(DescribeFailure(deleted), StorageHubTheme.Danger);
     }
+
+    /// <summary>
+    /// Explains why unprotected material is refused, or null when the secret is usable.
+    ///
+    /// StorageHub requires key material to carry its own password. The profile model enforces it
+    /// too: an FTPS client certificate must have a vault-backed password reference, and the SFTP
+    /// connector rejects an unprotected private key outright. Catching it here turns what would
+    /// otherwise surface as a vault range error into something actionable.
+    /// </summary>
+    internal static string? DescribeMissingPassphrase(KeyStoreMaterialKind kind, string? value) =>
+        !string.IsNullOrEmpty(value)
+            ? null
+            : kind is KeyStoreMaterialKind.Pkcs12Certificate
+                ? "StorageHub cannot store a certificate without a password. Export the .pfx again with one, then import it."
+                : "StorageHub cannot store an unprotected private key. Add a passphrase to the key, then import it.";
 
     internal static string DescribeFailure(KeyStoreWriteResponse response) => response.Outcome switch
     {
