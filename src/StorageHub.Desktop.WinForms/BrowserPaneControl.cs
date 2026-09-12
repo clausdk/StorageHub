@@ -37,6 +37,7 @@ public sealed class BrowserPaneControl : UserControl
     private readonly RemoteBrowserController? _remoteBrowser;
     private readonly Func<Guid, string, SshTerminalForm> _sshTerminalFactory;
     private readonly ComboBox _connectionSelector;
+    private readonly Button _connectionButton;
     private readonly ToolStrip _navigation;
     private readonly ToolStripButton _backButton;
     private readonly ToolStripButton _forwardButton;
@@ -194,6 +195,30 @@ public sealed class BrowserPaneControl : UserControl
         _connectionSelector.DrawItem += DrawConnectionItem;
         _connectionSelector.SelectedIndexChanged += ConnectionSelectionChanged;
 
+        // The combo box stays as the list and selection model that the rest of the pane already
+        // reads and writes, but it is no longer what the user sees: a plain drop-down cannot be
+        // searched, which stops scaling past a handful of saved connections. The button below
+        // renders the current choice and opens a searchable picker instead. Keeping the model
+        // means every existing selection path, reconnect, and index lookup is untouched.
+        _connectionSelector.Visible = false;
+        _connectionSelector.TabStop = false;
+
+        _connectionButton = new Button
+        {
+            Dock = DockStyle.Fill,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = StorageHubTheme.Surface,
+            ForeColor = StorageHubTheme.Text,
+            Margin = new Padding(0, 2, 0, 2),
+            TextAlign = ContentAlignment.MiddleLeft,
+            AccessibleName = $"{title} connection",
+            AccessibleDescription = "Choose the local or remote connection displayed in this pane."
+        };
+        _connectionButton.FlatAppearance.BorderColor = StorageHubTheme.Border;
+        _connectionButton.FlatAppearance.BorderSize = 1;
+        _connectionButton.Paint += DrawConnectionButton;
+        _connectionButton.Click += (_, _) => ShowConnectionPicker();
+
         _connectionState = new Label
         {
             Text = showLocalDefault ? "● Ready" : "○ Choose a connection",
@@ -216,8 +241,10 @@ public sealed class BrowserPaneControl : UserControl
         selectorGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         selectorGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         selectorGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        selectorGrid.Controls.Add(_connectionSelector, 0, 0);
+        selectorGrid.Controls.Add(_connectionButton, 0, 0);
         selectorGrid.Controls.Add(_connectionState, 0, 1);
+        // Still parented so its handle and data model live with the pane, just never shown.
+        selectorGrid.Controls.Add(_connectionSelector, 0, 0);
         var selectorFrame = CreateHeaderFrame(new Padding(6, 2, 6, 2), new Padding(8, 0, 8, 0));
         selectorFrame.AccessibleName = $"{title} connection selection and status";
         selectorFrame.Controls.Add(selectorGrid);
@@ -1593,6 +1620,8 @@ public sealed class BrowserPaneControl : UserControl
         {
             _connectionSelector.EndUpdate();
             _updatingConnectionChoices = false;
+            // A refresh suppresses the selection-changed handler, so repaint the closed picker here.
+            _connectionButton.Invalidate();
         }
     }
 
@@ -3363,6 +3392,66 @@ public sealed class BrowserPaneControl : UserControl
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
 
+    /// <summary>
+    /// Paints the closed picker: the same compact card the drop-down used to show, plus a chevron
+    /// so it still reads as something that opens.
+    /// </summary>
+    private void DrawConnectionButton(object? sender, PaintEventArgs e)
+    {
+        var bounds = _connectionButton.ClientRectangle;
+        using (var background = new SolidBrush(StorageHubTheme.Surface))
+        {
+            e.Graphics.FillRectangle(background, bounds);
+        }
+
+        var chevronWidth = 22;
+        if (_connectionSelector.SelectedItem is ConnectionCardModel card)
+        {
+            DrawCompactConnectionItem(
+                e.Graphics,
+                new Rectangle(bounds.Left, bounds.Top, Math.Max(1, bounds.Width - chevronWidth), bounds.Height),
+                card,
+                _connectionButton.Font);
+        }
+
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var chevron = new Pen(StorageHubTheme.TextMuted, 1.6F);
+        var centerX = bounds.Right - (chevronWidth / 2) - 4;
+        var centerY = bounds.Top + (bounds.Height / 2) - 1;
+        e.Graphics.DrawLines(chevron,
+        [
+            new Point(centerX - 4, centerY - 2),
+            new Point(centerX, centerY + 2),
+            new Point(centerX + 4, centerY - 2)
+        ]);
+    }
+
+    /// <summary>Opens the searchable picker beneath the button and applies whatever is chosen.</summary>
+    private void ShowConnectionPicker()
+    {
+        var cards = _connectionSelector.Items.OfType<ConnectionCardModel>().ToArray();
+        if (cards.Length == 0)
+        {
+            return;
+        }
+
+        var popup = new ConnectionPickerPopup(
+            cards,
+            _connectionSelector.SelectedItem as ConnectionCardModel,
+            GetConnectionGroupLabel,
+            Math.Max(_connectionButton.Width, 340));
+        popup.ConnectionChosen += (_, chosen) =>
+        {
+            var index = _connectionSelector.Items.IndexOf(chosen);
+            if (index >= 0)
+            {
+                _connectionSelector.SelectedIndex = index;
+            }
+        };
+        popup.Closed += (_, _) => popup.Dispose();
+        popup.Show(_connectionButton, new Point(0, _connectionButton.Height));
+    }
+
     private bool IsFirstConnectionInGroup(int index) => index == 0 ||
         _connectionSelector.Items[index - 1] is not ConnectionCardModel previous ||
         _connectionSelector.Items[index] is not ConnectionCardModel current ||
@@ -3472,6 +3561,8 @@ public sealed class BrowserPaneControl : UserControl
 
     private void UpdateConnectionPresentation()
     {
+        // The closed picker paints from the selected item, so it repaints whenever that changes.
+        _connectionButton.Invalidate();
         if (_connectionSelector.SelectedItem is not ConnectionCardModel card)
         {
             return;
