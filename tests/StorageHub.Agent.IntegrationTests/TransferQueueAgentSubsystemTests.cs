@@ -134,7 +134,7 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
     public async Task Active_user_cancel_is_revision_checked_and_worker_records_fenced_cancelled_state()
     {
         var fixture = await CreateFixtureAsync();
-        var blockingStream = new BlockingReadStream();
+        var blockingStream = new BlockingReadStream { HoldUntilReleased = true };
         var source = new FakeSession(
             fixture.Intent.Source.ProfileId,
             fixture.Intent.Source.RootIdentity,
@@ -178,6 +178,10 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
             worker.TryRequestActiveCancellation(
                 fixture.Intent.TransferJobId,
                 active.State.Revision));
+
+        // Only now may the execution unwind. Until this point the job stays registered, so the
+        // assertions above cannot race its deregistration on a loaded machine.
+        blockingStream.ReleaseRead.TrySetResult();
         Assert.True(await execution.WaitAsync(TimeSpan.FromSeconds(5)));
 
         var cancelled = Assert.IsType<DurableTransferJob>(
@@ -671,6 +675,15 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
     private sealed class BlockingReadStream : Stream
     {
         public TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>
+        /// Holds the read open until the test releases it, even after cancellation. Without this the
+        /// read fails the instant the token trips, so the execution can unwind and deregister itself
+        /// before the test has finished asserting against the still-active job.
+        /// </summary>
+        public TaskCompletionSource ReleaseRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool HoldUntilReleased { get; init; }
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
@@ -694,6 +707,13 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
             CancellationToken cancellationToken)
         {
             ReadStarted.TrySetResult();
+            if (HoldUntilReleased)
+            {
+                await ReleaseRead.Task;
+                cancellationToken.ThrowIfCancellationRequested();
+                return 0;
+            }
+
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return 0;
         }
@@ -703,6 +723,13 @@ public sealed class TransferQueueAgentSubsystemTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             ReadStarted.TrySetResult();
+            if (HoldUntilReleased)
+            {
+                await ReleaseRead.Task;
+                cancellationToken.ThrowIfCancellationRequested();
+                return 0;
+            }
+
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return 0;
         }
