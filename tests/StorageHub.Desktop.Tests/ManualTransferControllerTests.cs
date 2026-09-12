@@ -68,10 +68,9 @@ public sealed class ManualTransferControllerTests
     }
 
     [Fact]
-    public async Task ThisPcAndAdHocContextsFailClearlyBeforeQueueIo()
+    public void AThisPcFolderCanBeOneSideOfAQueuedTransfer()
     {
-        var client = new FakeTransferClient();
-        var controller = new ManualTransferController(client);
+        var controller = new ManualTransferController(new FakeTransferClient());
         var thisPc = Context(
             PaneTransferContextKind.ThisPc,
             connectionId: null,
@@ -80,32 +79,109 @@ public sealed class ManualTransferControllerTests
         var localSelection = Selection(thisPc, Item("file.txt", @"C:\Data\file.txt", length: 1));
         var savedDestination = Destination(Saved(Guid.NewGuid(), "destination-root", "destination"));
 
-        var sourceFailure = await controller.EnqueueAsync(
-            localSelection,
-            savedDestination,
-            TransferQueueOperation.Copy);
+        var plan = controller.BuildPlan(localSelection, savedDestination, TransferQueueOperation.Copy);
 
-        Assert.False(sourceFailure.IsSuccess);
-        Assert.Equal("manual_transfer.source.saved_connection_required", sourceFailure.Failure?.Code);
-        Assert.Contains("This PC", sourceFailure.Failure?.Message, StringComparison.Ordinal);
-        Assert.Empty(client.Requests);
+        Assert.True(plan.IsSuccess, plan.IsFailure ? plan.Error.Message : null);
+        var request = Assert.Single(plan.Value.Requests);
 
+        // The folder travels in the root identity, and the item's absolute path becomes relative
+        // to it, because the agent resolves a local endpoint from the identity rather than from a
+        // saved profile.
+        Assert.True(LocalTransferFolder.IsLocalFolder(request.Source.RootIdentity));
+        Assert.Equal(@"C:\Data", LocalTransferFolder.TryReadFolder(request.Source.RootIdentity));
+        Assert.Equal("file.txt", request.Source.RelativePath);
+        Assert.Equal(LocalTransferFolder.CreateConnectionId(@"C:\Data"), request.Source.ConnectionId);
+        Assert.True(request.HasValidBounds);
+    }
+
+    [Fact]
+    public void AThisPcFolderCanReceiveFromASavedConnection()
+    {
+        var controller = new ManualTransferController(new FakeTransferClient());
         var savedSelection = Selection(
             Saved(Guid.NewGuid(), "source-root", "source"),
             Item("file.txt", "source/file.txt", length: 1));
+        var localDestination = Destination(Context(
+            PaneTransferContextKind.ThisPc,
+            connectionId: null,
+            rootIdentity: null,
+            @"C:\Downloads"));
+
+        var plan = controller.BuildPlan(savedSelection, localDestination, TransferQueueOperation.Copy);
+
+        Assert.True(plan.IsSuccess, plan.IsFailure ? plan.Error.Message : null);
+        var request = Assert.Single(plan.Value.Requests);
+
+        // The pane's folder is the address root, so the destination path is the file name alone
+        // rather than the folder joined to it.
+        Assert.Equal(@"C:\Downloads", LocalTransferFolder.TryReadFolder(request.Destination.RootIdentity));
+        Assert.Equal("file.txt", request.Destination.RelativePath);
+        Assert.True(request.HasValidBounds);
+    }
+
+    [Fact]
+    public void TwoLocalFoldersAreRejectedWithAReasonRatherThanQueued()
+    {
+        var controller = new ManualTransferController(new FakeTransferClient());
+        var source = Context(PaneTransferContextKind.ThisPc, null, null, @"C:\Data");
+        var destination = Context(PaneTransferContextKind.ThisPc, null, null, @"C:\Downloads");
+
+        var plan = controller.BuildPlan(
+            Selection(source, Item("file.txt", @"C:\Data\file.txt", length: 1)),
+            Destination(destination),
+            TransferQueueOperation.Copy);
+
+        // Local to local has no atomic create-if-absent guarantee to build overwrite safety on,
+        // so it is refused rather than approximated.
+        Assert.True(plan.IsFailure);
+        Assert.Equal("manual_transfer.local_to_local_unsupported", plan.Error.Code);
+        Assert.Contains("File Explorer", plan.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AdHocAndClientContextsFailClearlyBeforeQueueIo()
+    {
+        var client = new FakeTransferClient();
+        var controller = new ManualTransferController(client);
         var adHoc = Context(
             PaneTransferContextKind.AdHoc,
             connectionId: null,
             rootIdentity: null,
             "temporary.example");
 
+        var sourceFailure = await controller.EnqueueAsync(
+            Selection(adHoc, Item("file.txt", "file.txt", length: 1)),
+            Destination(Saved(Guid.NewGuid(), "destination-root", "destination")),
+            TransferQueueOperation.Copy);
+
+        Assert.False(sourceFailure.IsSuccess);
+        Assert.Equal("manual_transfer.source.queueable_endpoint_required", sourceFailure.Failure?.Code);
+        Assert.Empty(client.Requests);
+
         var destinationFailure = controller.BuildPlan(
-            savedSelection,
+            Selection(Saved(Guid.NewGuid(), "source-root", "source"), Item("file.txt", "source/file.txt", length: 1)),
             Destination(adHoc),
             TransferQueueOperation.Copy);
 
         Assert.True(destinationFailure.IsFailure);
-        Assert.Equal("manual_transfer.destination.saved_connection_required", destinationFailure.Error.Code);
+        Assert.Equal("manual_transfer.destination.queueable_endpoint_required", destinationFailure.Error.Code);
+    }
+
+    [Fact]
+    public void AThisPcPaneWithoutAFullPathIsNotQueueable()
+    {
+        var controller = new ManualTransferController(new FakeTransferClient());
+
+        // A This PC pane showing the drive list has no folder to address.
+        var plan = controller.BuildPlan(
+            Selection(
+                Context(PaneTransferContextKind.ThisPc, null, null, string.Empty),
+                Item("file.txt", @"C:\Data\file.txt", length: 1)),
+            Destination(Saved(Guid.NewGuid(), "destination-root", "destination")),
+            TransferQueueOperation.Copy);
+
+        Assert.True(plan.IsFailure);
+        Assert.Equal("manual_transfer.source.queueable_endpoint_required", plan.Error.Code);
     }
 
     [Fact]

@@ -92,6 +92,28 @@ public sealed class TransferQueueIpcCommandService : IAgentIpcCommandHandler
                 "Move and overwrite operations require immutable source and destination identity evidence."));
         }
 
+        // A local folder may be one side of a transfer, never both. The desktop enforces this too,
+        // but a local path arrives from the UI rather than from a saved profile the agent already
+        // trusts, so the rule is checked here as well rather than assumed upstream.
+        var localSides =
+            (LocalUserPathTransferEndpoint.IsUserPath(source) ? 1 : 0) +
+            (LocalUserPathTransferEndpoint.IsUserPath(destination) ? 1 : 0);
+        if (localSides == 2)
+        {
+            return EnqueueFailure(request.TransferId, ValidationFailure(
+                "A queued transfer cannot have a local folder on both sides."));
+        }
+
+        if (localSides == 1)
+        {
+            var localAddress = LocalUserPathTransferEndpoint.IsUserPath(source) ? source : destination;
+            var approved = LocalUserPathTransferEndpoint.Approve(localAddress);
+            if (approved is not null)
+            {
+                return EnqueueFailure(request.TransferId, ValidationFailure(approved.Message));
+            }
+        }
+
         TransferIntent intent;
         try
         {

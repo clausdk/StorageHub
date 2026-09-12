@@ -472,16 +472,10 @@ public sealed class ManualTransferController : IAsyncDisposable
                 "The transfer operation, verification policy, or priority is invalid.");
         }
 
-        var sourceContextFailure = RequireSavedContext(source.Context, source: true);
-        if (sourceContextFailure is not null)
+        var endpointFailure = RequireQueueableEndpoints(source.Context, destination.Context);
+        if (endpointFailure is not null)
         {
-            return StorageResult<ManualTransferPlan>.Fail(sourceContextFailure);
-        }
-
-        var destinationContextFailure = RequireSavedContext(destination.Context, source: false);
-        if (destinationContextFailure is not null)
-        {
-            return StorageResult<ManualTransferPlan>.Fail(destinationContextFailure);
+            return StorageResult<ManualTransferPlan>.Fail(endpointFailure);
         }
 
         var destinationByName = destination.Entries.ToDictionary(
@@ -506,9 +500,13 @@ public sealed class ManualTransferController : IAsyncDisposable
                     "Moving a file requires its captured version ID or entity tag.");
             }
 
-            var destinationPath = destination.Context.RelativePath.Length == 0
-                ? item.Name
-                : destination.Context.RelativePath + "/" + item.Name;
+            // For a local destination the pane's folder is the address root, so the path is the
+            // file name alone. A saved connection's pane path is already root-relative and the
+            // name is appended to it.
+            var destinationPath = destination.Context.Kind == PaneTransferContextKind.ThisPc ||
+                destination.Context.RelativePath.Length == 0
+                    ? item.Name
+                    : destination.Context.RelativePath + "/" + item.Name;
             if (!RemoteBrowserPath.TryNormalize(destinationPath, out var normalizedDestinationPath, out _) ||
                 !string.Equals(destinationPath, normalizedDestinationPath, StringComparison.Ordinal) ||
                 !destinationPaths.Add(destinationPath))
@@ -533,16 +531,14 @@ public sealed class ManualTransferController : IAsyncDisposable
                     "Replacing an existing file requires captured source and destination version or entity-tag evidence.");
             }
 
-            var sourceAddress = new TransferQueueAddress(
-                source.Context.ConnectionId!.Value,
-                source.Context.RootIdentity!,
+            var sourceAddress = CreateAddress(
+                source.Context,
                 item.RelativePath,
                 item.NativeItemId,
                 item.VersionId,
                 item.EntityTag);
-            var destinationAddress = new TransferQueueAddress(
-                destination.Context.ConnectionId!.Value,
-                destination.Context.RootIdentity!,
+            var destinationAddress = CreateAddress(
+                destination.Context,
                 destinationPath,
                 existing?.NativeItemId,
                 existing?.VersionId,
@@ -712,7 +708,42 @@ public sealed class ManualTransferController : IAsyncDisposable
         }
     }
 
-    private static StorageFailure? RequireSavedContext(PaneTransferContext context, bool source)
+    /// <summary>
+    /// A queued transfer moves between a saved connection and either another saved connection or a
+    /// folder on this PC. A local folder may be one side but not both: a local-to-local copy has
+    /// no atomic create-if-absent guarantee to build overwrite safety on, so it is refused here
+    /// rather than approximated. The agent enforces the same rule, because a local path arrives
+    /// from the UI rather than from a profile it already trusts.
+    /// </summary>
+    private static StorageFailure? RequireQueueableEndpoints(
+        PaneTransferContext source,
+        PaneTransferContext destination)
+    {
+        var sourceFailure = RequireQueueableEndpoint(source, source: true);
+        if (sourceFailure is not null)
+        {
+            return sourceFailure;
+        }
+
+        var destinationFailure = RequireQueueableEndpoint(destination, source: false);
+        if (destinationFailure is not null)
+        {
+            return destinationFailure;
+        }
+
+        if (source.Kind == PaneTransferContextKind.ThisPc &&
+            destination.Kind == PaneTransferContextKind.ThisPc)
+        {
+            return new StorageFailure(
+                "manual_transfer.local_to_local_unsupported",
+                StorageFailureKind.Validation,
+                "Queue transfers move between this PC and a saved connection. Copying between two local folders is not supported yet; use File Explorer for that.");
+        }
+
+        return null;
+    }
+
+    private static StorageFailure? RequireQueueableEndpoint(PaneTransferContext context, bool source)
     {
         if (context.Kind == PaneTransferContextKind.SavedConnection &&
             context.ConnectionId is { } connectionId && connectionId != Guid.Empty &&
@@ -721,14 +752,59 @@ public sealed class ManualTransferController : IAsyncDisposable
             return null;
         }
 
+        if (context.Kind == PaneTransferContextKind.ThisPc &&
+            !string.IsNullOrWhiteSpace(context.RelativePath) &&
+            Path.IsPathFullyQualified(context.RelativePath))
+        {
+            return null;
+        }
+
         return new StorageFailure(
             source
-                ? "manual_transfer.source.saved_connection_required"
-                : "manual_transfer.destination.saved_connection_required",
+                ? "manual_transfer.source.queueable_endpoint_required"
+                : "manual_transfer.destination.queueable_endpoint_required",
             StorageFailureKind.Validation,
             source
-                ? "Queue transfers require the source pane to use a saved connection; This PC and ad-hoc locations cannot be queued."
-                : "Queue transfers require the destination pane to use a saved connection; This PC and ad-hoc locations cannot be queued.");
+                ? "Queue transfers require the source pane to be a saved connection or an open folder on this PC."
+                : "Queue transfers require the destination pane to be a saved connection or an open folder on this PC.");
+    }
+
+    /// <summary>
+    /// Builds the wire address for one side. A This PC pane has no saved profile, so its folder is
+    /// carried in the root identity and its id derived from that folder.
+    /// </summary>
+    private static TransferQueueAddress CreateAddress(
+        PaneTransferContext context,
+        string relativePath,
+        string? nativeItemId,
+        string? versionId,
+        string? entityTag)
+    {
+        if (context.Kind != PaneTransferContextKind.ThisPc)
+        {
+            return new TransferQueueAddress(
+                context.ConnectionId!.Value,
+                context.RootIdentity!,
+                relativePath,
+                nativeItemId,
+                versionId,
+                entityTag);
+        }
+
+        // A This PC pane reports absolute paths, and an address is root-relative, so the item's
+        // path is expressed against the pane's folder. A source item arrives as a full path; a
+        // destination path was already built from the folder plus the file name.
+        var folder = context.RelativePath;
+        var relative = Path.IsPathFullyQualified(relativePath)
+            ? Path.GetRelativePath(folder, relativePath).Replace(Path.DirectorySeparatorChar, '/')
+            : relativePath;
+        return new TransferQueueAddress(
+            LocalTransferFolder.CreateConnectionId(folder),
+            LocalTransferFolder.CreateRootIdentity(folder),
+            relative,
+            nativeItemId,
+            versionId,
+            entityTag);
     }
 
     private ManualTransferEnqueueResult Complete(
