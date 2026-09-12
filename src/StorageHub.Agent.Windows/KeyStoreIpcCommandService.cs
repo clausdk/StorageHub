@@ -22,16 +22,21 @@ namespace StorageHub.Agent.Windows;
 public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
 {
     private readonly IKeyStoreRepository _entries;
-    private readonly ISecretVault _vault;
+    private readonly Func<ISecretVault> _vaultProvider;
     private readonly TimeProvider _timeProvider;
 
+    /// <summary>
+    /// The vault is resolved per request, never at construction. The vault subsystem only creates it
+    /// during initialization, and in recovery-only mode it is never created at all, so binding it
+    /// eagerly would fault the whole agent at composition time instead of failing one command.
+    /// </summary>
     public KeyStoreIpcCommandService(
         IKeyStoreRepository entries,
-        ISecretVault vault,
+        Func<ISecretVault> vaultProvider,
         TimeProvider? timeProvider = null)
     {
         _entries = entries ?? throw new ArgumentNullException(nameof(entries));
-        _vault = vault ?? throw new ArgumentNullException(nameof(vault));
+        _vaultProvider = vaultProvider ?? throw new ArgumentNullException(nameof(vaultProvider));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -186,11 +191,13 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
             cancellationToken).ConfigureAwait(false);
 
         // The vault envelopes are removed only after the row is gone, so a refused delete can never
-        // strand a profile whose reference still resolves.
-        if (written.Status == KeyStoreWriteStatus.Succeeded && written.Entry is { } removed)
+        // strand a profile whose reference still resolves. A vault that is unavailable leaves the
+        // envelopes behind rather than failing a delete that already committed.
+        if (written.Status == KeyStoreWriteStatus.Succeeded && written.Entry is { } removed &&
+            TryGetVault() is { } vault)
         {
-            _ = await _vault.DeleteAsync(removed.MaterialReference, cancellationToken).ConfigureAwait(false);
-            _ = await _vault.DeleteAsync(removed.PassphraseReference, cancellationToken).ConfigureAwait(false);
+            _ = await vault.DeleteAsync(removed.MaterialReference, cancellationToken).ConfigureAwait(false);
+            _ = await vault.DeleteAsync(removed.PassphraseReference, cancellationToken).ConfigureAwait(false);
         }
 
         return WriteResponse(KeyStoreIpcMessageTypes.DeleteResponse, written);
@@ -206,8 +213,16 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
         SecretReference passphrase,
         CancellationToken cancellationToken)
     {
-        if (!await _vault.ExistsAsync(material, cancellationToken).ConfigureAwait(false) ||
-            !await _vault.ExistsAsync(passphrase, cancellationToken).ConfigureAwait(false))
+        if (TryGetVault() is not { } vault)
+        {
+            return StorageResult<KeyMaterialSummary>.Fail(new StorageFailure(
+                "keystore.vault.unavailable",
+                StorageFailureKind.Unavailable,
+                "The credential vault is unavailable, so material cannot be imported."));
+        }
+
+        if (!await vault.ExistsAsync(material, cancellationToken).ConfigureAwait(false) ||
+            !await vault.ExistsAsync(passphrase, cancellationToken).ConfigureAwait(false))
         {
             return StorageResult<KeyMaterialSummary>.Fail(new StorageFailure(
                 "keystore.reference.unresolved",
@@ -215,8 +230,8 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
                 "The enrolled material could not be found in the vault."));
         }
 
-        await using var materialLease = await _vault.OpenAsync(material, cancellationToken).ConfigureAwait(false);
-        await using var passphraseLease = await _vault.OpenAsync(passphrase, cancellationToken).ConfigureAwait(false);
+        await using var materialLease = await vault.OpenAsync(material, cancellationToken).ConfigureAwait(false);
+        await using var passphraseLease = await vault.OpenAsync(passphrase, cancellationToken).ConfigureAwait(false);
         var secret = Encoding.UTF8.GetString(passphraseLease.Memory.Span);
         try
         {
@@ -230,6 +245,22 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
         finally
         {
             secret = string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Resolves the vault if the subsystem has one. Recovery-only startup never creates it, so an
+    /// absent vault is an expected state that must degrade one command rather than fault the agent.
+    /// </summary>
+    private ISecretVault? TryGetVault()
+    {
+        try
+        {
+            return _vaultProvider();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
         }
     }
 

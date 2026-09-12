@@ -130,7 +130,7 @@ var storageCommands = new StorageIpcCommandService(
 var profileCommands = new ConnectionProfileIpcCommandService(databaseOptions);
 var keyStoreCommands = new KeyStoreIpcCommandService(
     new SqliteKeyStoreRepository(databaseOptions),
-    vaultSubsystem.Vault);
+    () => vaultSubsystem.Vault);
 var trustCommands = new ConnectionTrustIpcCommandService(databaseOptions);
 var transferCommands = new TransferQueueIpcCommandService(
     transferStore,

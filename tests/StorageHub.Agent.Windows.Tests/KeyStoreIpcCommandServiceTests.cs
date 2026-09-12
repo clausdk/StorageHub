@@ -19,6 +19,74 @@ public sealed class KeyStoreIpcCommandServiceTests : IDisposable
         Path.GetTempPath(), $"storagehub-key-store-ipc-{Guid.NewGuid():N}");
 
     [Fact]
+    public void Construction_never_resolves_the_vault()
+    {
+        // The vault subsystem only creates the vault during initialization, and never at all in
+        // recovery-only mode. Resolving it at composition time crashed the whole agent on startup.
+        var resolved = 0;
+        var options = new SqliteDatabaseOptions(
+            Path.Combine(_directory, $"{Guid.NewGuid():N}.db"), pooling: false);
+
+        var service = new KeyStoreIpcCommandService(
+            new SqliteKeyStoreRepository(options),
+            () =>
+            {
+                resolved++;
+                throw new InvalidOperationException("The credential vault is not initialized.");
+            });
+
+        Assert.NotNull(service);
+        Assert.Equal(0, resolved);
+    }
+
+    [Fact]
+    public async Task Listing_still_works_when_the_vault_is_unavailable()
+    {
+        // Recovery-only startup has no vault. Browsing stored metadata does not need one, so it
+        // must keep working rather than faulting.
+        var options = new SqliteDatabaseOptions(
+            Path.Combine(_directory, $"{Guid.NewGuid():N}.db"), pooling: false);
+        Assert.True((await new StorageHubDatabaseInitializer(options).InitializeAsync()).IsReady);
+        var service = new KeyStoreIpcCommandService(
+            new SqliteKeyStoreRepository(options),
+            () => throw new InvalidOperationException("The credential vault is not initialized."));
+
+        var listed = await SendAsync<KeyStoreListRequest, KeyStoreListResponse>(
+            service,
+            KeyStoreIpcMessageTypes.ListRequest,
+            new KeyStoreListRequest(KeyStoreIpcContract.CurrentVersion));
+
+        Assert.Null(listed.Failure);
+        Assert.Empty(listed.Entries);
+    }
+
+    [Fact]
+    public async Task Importing_is_refused_rather_than_faulting_when_the_vault_is_unavailable()
+    {
+        var options = new SqliteDatabaseOptions(
+            Path.Combine(_directory, $"{Guid.NewGuid():N}.db"), pooling: false);
+        Assert.True((await new StorageHubDatabaseInitializer(options).InitializeAsync()).IsReady);
+        var service = new KeyStoreIpcCommandService(
+            new SqliteKeyStoreRepository(options),
+            () => throw new InvalidOperationException("The credential vault is not initialized."));
+
+        var response = await SendAsync<KeyStoreCreateRequest, KeyStoreWriteResponse>(
+            service,
+            KeyStoreIpcMessageTypes.CreateRequest,
+            new KeyStoreCreateRequest(
+                KeyStoreIpcContract.CurrentVersion,
+                KeyStoreMaterialKind.Pkcs12Certificate,
+                "Partner certificate",
+                null,
+                [],
+                SecretReference.Create().Value,
+                SecretReference.Create().Value));
+
+        Assert.Equal(KeyStoreWriteOutcome.Rejected, response.Outcome);
+        Assert.NotNull(response.Failure);
+    }
+
+    [Fact]
     public async Task Create_derives_the_certificate_summary_from_the_enrolled_material()
     {
         // The caller supplies references only. Everything descriptive is computed by the agent, so
@@ -251,7 +319,7 @@ public sealed class KeyStoreIpcCommandServiceTests : IDisposable
             new PassthroughProtector());
         return new Fixture(
             vault,
-            new KeyStoreIpcCommandService(new SqliteKeyStoreRepository(options), vault));
+            new KeyStoreIpcCommandService(new SqliteKeyStoreRepository(options), () => vault));
     }
 
     private static async Task<TResponse> SendAsync<TRequest, TResponse>(
