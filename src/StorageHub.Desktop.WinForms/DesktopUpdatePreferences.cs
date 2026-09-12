@@ -103,9 +103,14 @@ internal sealed record DesktopUpdatePreferences(
     bool ConfirmBeforeDeletingItems = true,
     IReadOnlyDictionary<string, Keys>? Shortcuts = null,
     IReadOnlyList<WorkspaceShortcutEntry>? PinnedWorkspaces = null,
-    IReadOnlyList<WorkspaceShortcutEntry>? RecentWorkspaces = null)
+    IReadOnlyList<WorkspaceShortcutEntry>? RecentWorkspaces = null,
+    /// <summary>
+    /// Panes to give a new workspace without asking. Null means ask each time, which is how new
+    /// workspaces have always behaved and what Settings calls "Ask every time".
+    /// </summary>
+    int? DefaultWorkspacePaneCount = null)
 {
-    public const int CurrentSchemaVersion = 13;
+    public const int CurrentSchemaVersion = 14;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
@@ -226,7 +231,11 @@ internal sealed class DesktopUpdatePreferencesStore
                     document.SchemaVersion >= 13 && document.RecentWorkspaces is not null
                         ? WorkspaceShortcutSettings.Resolve(
                             document.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent)
-                        : null)
+                        : null,
+                    document.SchemaVersion >= 14 &&
+                        document.DefaultWorkspacePaneCount is >= 1 and <= WorkspaceLayoutModel.MaximumPanes
+                            ? document.DefaultWorkspacePaneCount
+                            : null)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -250,6 +259,13 @@ internal sealed class DesktopUpdatePreferencesStore
         if (WorkspaceShortcutSettings.Validate(
                 preferences.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent) is { } recentError)
             throw new ArgumentException(recentError, nameof(preferences));
+        if (preferences.DefaultWorkspacePaneCount is { } paneCount &&
+            paneCount is < 1 or > WorkspaceLayoutModel.MaximumPanes)
+        {
+            throw new ArgumentException(
+                $"A workspace can have between 1 and {WorkspaceLayoutModel.MaximumPanes} panes.",
+                nameof(preferences));
+        }
         if (!IsValidEditorPath(preferences.ExternalEditorPath) ||
             preferences.MaximumEditableFileBytes is < 1 or > EditableFileIpcContract.MaximumContentBytes ||
             preferences.MinimumConcurrency is < 1 or > 8 ||
@@ -307,7 +323,8 @@ internal sealed class DesktopUpdatePreferencesStore
                 preferences.RecentWorkspaces is null
                     ? null
                     : [.. WorkspaceShortcutSettings.Resolve(
-                        preferences.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent)]);
+                        preferences.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent)],
+                preferences.DefaultWorkspacePaneCount);
 
             // Load discards a file over this size outright, taking every unrelated setting with
             // it. Serialize into memory first so an oversized document is refused here rather
@@ -396,5 +413,6 @@ internal sealed class DesktopUpdatePreferencesStore
         bool ConfirmBeforeDeletingItems = true,
         Dictionary<string, Keys>? Shortcuts = null,
         List<WorkspaceShortcutEntry>? PinnedWorkspaces = null,
-        List<WorkspaceShortcutEntry>? RecentWorkspaces = null);
+        List<WorkspaceShortcutEntry>? RecentWorkspaces = null,
+        int? DefaultWorkspacePaneCount = null);
 }

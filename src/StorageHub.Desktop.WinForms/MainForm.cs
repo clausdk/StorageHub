@@ -1080,11 +1080,24 @@ public sealed class MainForm : Form
 
     private void ChooseAndAddWorkspace()
     {
-        using var chooser = new NewWorkspaceForm(_updatePreferencesStore.Load().DefaultWorkspaceLayout);
-        if (chooser.ShowDialog(this) == DialogResult.OK)
+        var preferences = LoadPreferences();
+        if (preferences.DefaultWorkspacePaneCount is { } remembered)
         {
-            AddWorkspace(chooser.PaneCount);
+            // The user asked not to be asked. Settings ▸ Workspace is the way back.
+            AddWorkspace(remembered);
+            return;
         }
+
+        using var chooser = new NewWorkspaceForm(preferences.DefaultWorkspaceLayout);
+        if (chooser.ShowDialog(this) != DialogResult.OK) return;
+
+        if (chooser.RememberChoice)
+        {
+            var chosen = chooser.PaneCount;
+            MutatePreferences(current => current with { DefaultWorkspacePaneCount = chosen });
+        }
+
+        AddWorkspace(chooser.PaneCount);
     }
 
     internal TabPage AddWorkspace(int paneCount = 2)
@@ -1269,7 +1282,7 @@ public sealed class MainForm : Form
             MessageBoxDefaultButton.Button2);
         if (answer != DialogResult.Yes) return;
 
-        MutateWorkspaceShortcuts(preferences => preferences with
+        MutatePreferences(preferences => preferences with
         {
             PinnedWorkspaces = WorkspaceShortcutSettings.Remove(
                 preferences.PinnedWorkspaces, path, WorkspaceShortcutSettings.MaximumPinned),
@@ -1294,7 +1307,7 @@ public sealed class MainForm : Form
             return;
         }
 
-        MutateWorkspaceShortcuts(preferences => preferences with
+        MutatePreferences(preferences => preferences with
         {
             RecentWorkspaces = WorkspaceShortcutSettings.Promote(
                 preferences.RecentWorkspaces,
@@ -1304,11 +1317,12 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// Applies a change to the stored workspace lists and republishes them. Settings are shared
-    /// with the Settings dialog, so the file is re-read immediately before the change rather than
-    /// cached. Failures are swallowed: losing a bookmark must never break the save that caused it.
+    /// Applies a change to the settings the shell writes behind the Settings dialog's back, and
+    /// republishes the workspace card. The file is re-read immediately before the change rather
+    /// than cached, because the dialog writes the same file. Failures are swallowed: losing a
+    /// bookmark or a remembered pane count must never break the action that caused it.
     /// </summary>
-    private void MutateWorkspaceShortcuts(Func<DesktopUpdatePreferences, DesktopUpdatePreferences> change)
+    private void MutatePreferences(Func<DesktopUpdatePreferences, DesktopUpdatePreferences> change)
     {
         try
         {
@@ -1369,7 +1383,7 @@ public sealed class MainForm : Form
 
         var pinnedAlready = WorkspaceShortcutSettings.Contains(LoadPreferences().PinnedWorkspaces, path);
         var target = path;
-        MutateWorkspaceShortcuts(preferences => preferences with
+        MutatePreferences(preferences => preferences with
         {
             PinnedWorkspaces = pinnedAlready
                 ? WorkspaceShortcutSettings.Remove(
@@ -1381,7 +1395,7 @@ public sealed class MainForm : Form
         });
     }
 
-    private void ForgetWorkspace(string path) => MutateWorkspaceShortcuts(preferences => preferences with
+    private void ForgetWorkspace(string path) => MutatePreferences(preferences => preferences with
     {
         PinnedWorkspaces = WorkspaceShortcutSettings.Remove(
             preferences.PinnedWorkspaces, path, WorkspaceShortcutSettings.MaximumPinned),

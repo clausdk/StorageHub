@@ -32,7 +32,11 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _perConnectionConcurrency;
     private readonly NumericUpDown _maximumSyncConcurrency;
     private readonly ComboBox _appearance;
+    private const string AskEveryTime = "Ask every time";
+
     private readonly ComboBox _defaultWorkspaceLayout;
+    private readonly ComboBox _defaultWorkspacePaneCount;
+    private readonly DesktopUpdatePreferences _preferences;
     private readonly CheckBox _reconnectRemotePanes;
     private readonly ComboBox _sshTerminalName;
     private readonly TextBox _sshStartupCommand;
@@ -73,6 +77,9 @@ public sealed class SettingsForm : Form
         StorageHubTheme.Register(this);
 
         var preferences = _store.Load();
+        // Held so settings this dialog does not present -- the pinned and recent workspace
+        // lists, which the shell writes -- survive a save from here.
+        _preferences = preferences;
         _shortcuts = new ShortcutSettingsControl(preferences.Shortcuts);
         _appliedAppearance = preferences.Appearance;
         _checkAutomatically = CreateOption(
@@ -150,6 +157,25 @@ public sealed class SettingsForm : Form
             _ => "Side by side"
         };
         _defaultWorkspaceLayout.SelectedItem = preferences.DefaultWorkspaceLayout;
+        _defaultWorkspacePaneCount = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 260,
+            FormattingEnabled = true,
+            AccessibleName = "Panes in a new workspace"
+        };
+        // Zero stands for "ask", so the list is a plain int list rather than a nullable one.
+        _defaultWorkspacePaneCount.Items.AddRange(
+            [.. Enumerable.Range(0, WorkspaceLayoutModel.MaximumPanes + 1).Cast<object>()]);
+        _defaultWorkspacePaneCount.Format += (_, args) => args.Value = args.ListItem switch
+        {
+            int count and >= 1 => $"{count} pane{(count == 1 ? string.Empty : "s")} - " +
+                NewWorkspaceForm.Describe(count, ReadWorkspaceLayout()),
+            _ => AskEveryTime
+        };
+        _defaultWorkspacePaneCount.SelectedItem = preferences.DefaultWorkspacePaneCount ?? 0;
+        // The pane descriptions name the orientation, so they are restated when it changes.
+        _defaultWorkspaceLayout.SelectedIndexChanged += (_, _) => _defaultWorkspacePaneCount.Refresh();
         _reconnectRemotePanes = CreateOption(
             "Reconnect remote panes automatically when opening workspace files",
             "Uses saved profiles to create fresh storage and SSH sessions. Workspace files never contain credentials or terminal contents.",
@@ -390,6 +416,7 @@ public sealed class SettingsForm : Form
         _maximumSyncConcurrency.ValueChanged += ConcurrencyChanged;
         _appearance.SelectedIndexChanged += AppearanceSelectionChanged;
         _defaultWorkspaceLayout.SelectedIndexChanged += MarkDirty;
+        _defaultWorkspacePaneCount.SelectedIndexChanged += MarkDirty;
         _reconnectRemotePanes.CheckedChanged += MarkDirty;
         _sshTerminalName.TextChanged += MarkDirty;
         _sshStartupCommand.TextChanged += MarkDirty;
@@ -436,6 +463,7 @@ public sealed class SettingsForm : Form
             _maximumSyncConcurrency.ValueChanged -= ConcurrencyChanged;
             _appearance.SelectedIndexChanged -= AppearanceSelectionChanged;
             _defaultWorkspaceLayout.SelectedIndexChanged -= MarkDirty;
+            _defaultWorkspacePaneCount.SelectedIndexChanged -= MarkDirty;
             _reconnectRemotePanes.CheckedChanged -= MarkDirty;
             _sshTerminalName.TextChanged -= MarkDirty;
             _sshStartupCommand.TextChanged -= MarkDirty;
@@ -893,11 +921,21 @@ public sealed class SettingsForm : Form
         return page;
     }
 
+    private WorkspaceLayout ReadWorkspaceLayout() =>
+        _defaultWorkspaceLayout.SelectedItem is WorkspaceLayout layout ? layout : WorkspaceLayout.SideBySide;
+
+    /// <summary>The chosen pane count, or null for "Ask every time", which the list stores as zero.</summary>
+    private int? ReadWorkspacePaneCount() =>
+        _defaultWorkspacePaneCount.SelectedItem is int count &&
+            count is >= 1 and <= WorkspaceLayoutModel.MaximumPanes
+                ? count
+                : null;
+
     private FlowLayoutPanel BuildWorkspacePage()
     {
         var page = CreatePage(
             "Workspace",
-            "Choose the default arrangement for new workspaces.");
+            "Choose how new workspaces are arranged, and whether StorageHub asks first.");
         var layout = new TableLayoutPanel
         {
             AutoSize = true,
@@ -915,6 +953,18 @@ public sealed class SettingsForm : Form
         layout.Controls.Add(_defaultWorkspaceLayout);
         layout.Controls.Add(UiControlFactory.CreateDescription(
             "Choose the orientation used by two- and three-pane presets."));
+        layout.Controls.Add(new Label
+        {
+            Text = "Panes in a new workspace",
+            AutoSize = true,
+            Margin = new Padding(0, 14, 0, 0),
+            Font = StorageHubTheme.CreateSectionFont(),
+            ForeColor = StorageHubTheme.Text
+        });
+        layout.Controls.Add(_defaultWorkspacePaneCount);
+        layout.Controls.Add(UiControlFactory.CreateDescription(
+            "\"Ask every time\" shows the pane chooser, which is also where you can tell StorageHub " +
+            "to stop asking. Pick a pane count here to change or undo that choice."));
         layout.Controls.Add(_reconnectRemotePanes);
         StyleSettingsSection(layout);
         page.Controls.Add(layout);
@@ -1523,14 +1573,17 @@ public sealed class SettingsForm : Form
                 _appearance.SelectedItem is DesktopAppearance appearance ? appearance : DesktopAppearance.System,
                 _warnBeforeUnsafeExternalEdit.Checked,
                 ReadConnectionDefaults(),
-                _defaultWorkspaceLayout.SelectedItem is WorkspaceLayout layout
-                    ? layout
-                    : WorkspaceLayout.SideBySide,
+                ReadWorkspaceLayout(),
                 ReadSshTerminalPreferences(),
                 _reconnectRemotePanes.Checked,
                 _confirmBeforeClearingTransferHistory.Checked,
                 _confirmBeforeDeletingItems.Checked,
-                _shortcuts.ReadShortcuts());
+                _shortcuts.ReadShortcuts(),
+                // The pinned and recent lists are written by the shell, not this dialog, and are
+                // carried through untouched so saving settings never drops them.
+                _preferences.PinnedWorkspaces,
+                _preferences.RecentWorkspaces,
+                ReadWorkspacePaneCount());
             if (_saved is null)
             {
                 _store.Save(preferences);

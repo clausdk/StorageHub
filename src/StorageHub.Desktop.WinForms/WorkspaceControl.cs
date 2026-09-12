@@ -462,6 +462,8 @@ public sealed class WorkspacePaneEventArgs(Guid paneId, BrowserPaneControl pane)
 
 internal sealed class NewWorkspaceForm : Form
 {
+    private readonly CheckBox _remember;
+
     internal NewWorkspaceForm(WorkspaceLayout layout)
     {
         Text = "New Workspace";
@@ -470,9 +472,9 @@ internal sealed class NewWorkspaceForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(620, 190);
+        ClientSize = new Size(620, 232);
         var choices = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, Padding = new Padding(14) };
-        for (var count = 1; count <= 4; count++)
+        for (var count = 1; count <= WorkspaceLayoutModel.MaximumPanes; count++)
         {
             choices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             var captured = count;
@@ -486,12 +488,33 @@ internal sealed class NewWorkspaceForm : Form
             button.Click += (_, _) => { PaneCount = captured; DialogResult = DialogResult.OK; Close(); };
             choices.Controls.Add(button, count - 1, 0);
         }
+
+        _remember = new CheckBox
+        {
+            Text = "Use this for new workspaces and stop asking",
+            AutoSize = true,
+            Dock = DockStyle.Bottom,
+            Padding = new Padding(21, 0, 21, 14),
+            AccessibleName = "Remember this pane count",
+            AccessibleDescription =
+                "New workspaces use the arrangement you pick here. Change it later in Settings, under Workspace."
+        };
+        // Bottom-docked controls are laid out in reverse add order, so the checkbox goes in first
+        // for the fill panel to take the space above it.
         Controls.Add(choices);
+        Controls.Add(_remember);
     }
 
     internal int PaneCount { get; private set; }
 
-    private static string Describe(int count, WorkspaceLayout layout) => count switch
+    /// <summary>Whether the chosen pane count should become the stored default.</summary>
+    internal bool RememberChoice => _remember.Checked;
+
+    /// <summary>
+    /// The arrangement a pane count produces under the chosen orientation. Shared with Settings so
+    /// the two describe the same preset the same way.
+    /// </summary>
+    internal static string Describe(int count, WorkspaceLayout layout) => count switch
     {
         1 => "Single",
         2 => layout == WorkspaceLayout.SideBySide ? "Side by side" : "Top / bottom",
