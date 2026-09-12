@@ -89,7 +89,7 @@ public sealed class SyncRunReviewControl : UserControl
         actions.Controls.Add(_approveButton);
         heading.Controls.Add(actions, 1, 0);
 
-        var tabs = new TabControl
+        var tabs = new ThemedTabControl
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Sync plan details"

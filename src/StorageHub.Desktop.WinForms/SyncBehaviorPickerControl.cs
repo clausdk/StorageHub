@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
@@ -202,7 +202,7 @@ internal sealed class SyncBehaviorPickerControl : UserControl
             bounds.Width--;
             bounds.Height--;
             var fill = Selected
-                ? Color.FromArgb(232, 240, 253)
+                ? StorageHubTheme.Selection
                 : _hovered ? StorageHubTheme.SurfaceMuted : StorageHubTheme.Surface;
             var border = Selected ? StorageHubTheme.Primary : StorageHubTheme.Border;
             using var background = new SolidBrush(fill);

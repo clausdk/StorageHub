@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
@@ -603,8 +603,8 @@ public sealed class ScheduleManagerForm : Form
             : "REVIEW ONLY — The schedule scans both locations and prepares a plan without changing either location.";
         _modeNotice.ForeColor = automatic ? StorageHubTheme.Success : StorageHubTheme.Warning;
         _modeNotice.BackColor = automatic
-            ? Color.FromArgb(230, 247, 239)
-            : Color.FromArgb(255, 244, 224);
+            ? StorageHubTheme.SuccessTint
+            : StorageHubTheme.WarningTint;
     }
 
     private void ScheduleBuilderChanged(object? sender, EventArgs e)

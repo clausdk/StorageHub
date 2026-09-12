@@ -1,4 +1,4 @@
-using StorageHub.Contracts.Ipc;
+﻿using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
@@ -472,9 +472,13 @@ internal sealed class ConnectionSidebarItem : Control
         e.Graphics.DrawPath(outline, path);
         var accent = StorageHubTheme.ParseAccent(Connection.AccentHex);
         using var badge = new SolidBrush(accent);
-        e.Graphics.FillRectangle(badge, 9, 10, 36, 36);
+        using (var badgePath = CreatePath(new Rectangle(9, 10, 36, 36), 8))
+        {
+            e.Graphics.FillPath(badge, badgePath);
+        }
+
         using var badgeFont = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold);
-        TextRenderer.DrawText(e.Graphics, Connection.Descriptor.ShortName, badgeFont, new Rectangle(9, 10, 36, 36), Color.White,
+        TextRenderer.DrawText(e.Graphics, Connection.Descriptor.ShortName, badgeFont, new Rectangle(9, 10, 36, 36), StorageHubTheme.ContrastText(accent),
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         TextRenderer.DrawText(e.Graphics, Connection.Name, Font, new Rectangle(55, 7, Math.Max(20, Width - 65), 22),
             StorageHubTheme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);

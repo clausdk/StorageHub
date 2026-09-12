@@ -1,4 +1,4 @@
-using StorageHub.Contracts.Ipc;
+﻿using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
@@ -62,13 +62,12 @@ public sealed class OverviewDashboardControl : UserControl
         _transferClient = transferClient;
         Dock = DockStyle.Fill;
         BackColor = StorageHubTheme.Canvas;
-        AutoScroll = true;
         AccessibleName = "StorageHub overview";
 
         var content = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
-            AutoSize = true,
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
             ColumnCount = 1,
             Padding = new Padding(28, 24, 28, 28),
             BackColor = StorageHubTheme.Canvas
@@ -105,22 +104,18 @@ public sealed class OverviewDashboardControl : UserControl
         actions.Controls.Add(CreateActionButton("Refresh", UiGlyph.Refresh, async (_, _) => await RefreshAsync()));
         content.Controls.Add(actions);
 
-        var metrics = new TableLayoutPanel
+        var metrics = new DashboardRow
         {
             Dock = DockStyle.Top,
             Height = 104,
-            ColumnCount = 4,
-            Margin = new Padding(0, 0, 0, 18)
+            Columns = 4,
+            Margin = new Padding(0, 0, 0, 18),
+            BackColor = Color.Transparent
         };
-        for (var index = 0; index < 4; index++)
-        {
-            metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
-        }
-
-        _agentValue = AddMetric(metrics, 0, "Agent", "Starting", UiGlyph.Connections, StorageHubTheme.Primary);
-        _activeValue = AddMetric(metrics, 1, "Active transfers", "0", UiGlyph.Run, StorageHubTheme.Success);
-        _queuedValue = AddMetric(metrics, 2, "Queued", "0", UiGlyph.More, StorageHubTheme.Primary);
-        _attentionValue = AddMetric(metrics, 3, "Needs attention", "0", UiGlyph.Warning, StorageHubTheme.Warning);
+        _agentValue = AddMetric(metrics, "Agent", "Starting", UiGlyph.Server, UiIconTone.Primary);
+        _activeValue = AddMetric(metrics, "Active transfers", "0", UiGlyph.Run, UiIconTone.Success);
+        _queuedValue = AddMetric(metrics, "Queued", "0", UiGlyph.Queue, UiIconTone.Primary);
+        _attentionValue = AddMetric(metrics, "Needs attention", "0", UiGlyph.Warning, UiIconTone.Warning);
         content.Controls.Add(metrics);
 
         // A full-width row of its own rather than a third column beside the two lists: at the
@@ -141,28 +136,30 @@ public sealed class OverviewDashboardControl : UserControl
         _workspaces.MouseDoubleClick += (_, args) => OpenWorkspaceAt(_workspaces.HitTest(args.Location).Item);
         _workspaces.KeyDown += WorkspaceListKeyDown;
         _workspaces.ContextMenuStrip = BuildWorkspaceMenu();
-        workspaceCard.Dock = DockStyle.Top;
-        workspaceCard.Height = 214;
-        workspaceCard.Margin = new Padding(0, 0, 0, 18);
-        content.Controls.Add(workspaceCard);
+        var workspaceRow = new DashboardRow
+        {
+            Dock = DockStyle.Top,
+            Height = 214,
+            Margin = new Padding(0, 0, 0, 18),
+            BackColor = Color.Transparent
+        };
+        workspaceRow.Controls.Add(workspaceCard);
+        content.Controls.Add(workspaceRow);
 
-        var lists = new TableLayoutPanel
+        var lists = new DashboardRow
         {
             Dock = DockStyle.Top,
             Height = 330,
-            ColumnCount = 2,
-            Margin = Padding.Empty
+            Columns = 2,
+            Margin = Padding.Empty,
+            BackColor = Color.Transparent
         };
-        lists.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-        lists.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
         _connections = CreateList("Recent connections", "Opened this session, followed by saved favorites", UiGlyph.Connections, out var connectionCard);
         _connections.Columns[1].Text = "Provider";
         _connections.Columns[2].Text = "Details";
         _attention = CreateList("Needs attention", "Failed, blocked, or conflicting transfers", UiGlyph.Warning, out var attentionCard);
-        connectionCard.Margin = new Padding(0, 0, 8, 0);
-        attentionCard.Margin = new Padding(8, 0, 0, 0);
-        lists.Controls.Add(connectionCard, 0, 0);
-        lists.Controls.Add(attentionCard, 1, 0);
+        lists.Controls.Add(connectionCard);
+        lists.Controls.Add(attentionCard);
         content.Controls.Add(lists);
 
         _status = new Label
@@ -459,36 +456,39 @@ public sealed class OverviewDashboardControl : UserControl
         }
     }
 
-    private static Label AddMetric(TableLayoutPanel host, int column, string title, string value, UiGlyph glyph, Color accent)
+    private static Label AddMetric(DashboardRow host, string title, string value, UiGlyph glyph, UiIconTone tone)
     {
-        var card = CreateCard();
-        card.Dock = DockStyle.Fill;
-        card.Margin = new Padding(column == 0 ? 0 : 6, 0, column == 3 ? 0 : 6, 0);
+        var accent = StorageHubTheme.ToneColor(tone);
+        var card = CreateCard(accent);
+        // The rail and the rounded corners are painted by the card, so its content has to let
+        // them through rather than covering the whole client area with an opaque panel.
+        card.Padding = new Padding(5, 2, 2, 2);
         var grid = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             RowCount = 2,
-            Padding = new Padding(12, 10, 12, 10),
+            BackColor = Color.Transparent,
+            Padding = new Padding(10, 10, 12, 10),
             Margin = Padding.Empty
         };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 46));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
         var icon = new PictureBox
         {
-            Image = UiIconFactory.Create(glyph, accent, 24),
             SizeMode = PictureBoxSizeMode.CenterImage,
             Dock = DockStyle.Fill,
             Margin = Padding.Empty
         };
+        _ = StorageHubTheme.TrackIcon(icon, glyph, 24, tone);
         var valueLabel = new Label
         {
             Text = value,
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.BottomLeft,
-            Font = new Font("Segoe UI Semibold", 15F),
+            Font = new Font("Segoe UI Semibold", 17F),
             ForeColor = StorageHubTheme.Text,
             Margin = Padding.Empty
         };
@@ -505,20 +505,22 @@ public sealed class OverviewDashboardControl : UserControl
         grid.Controls.Add(valueLabel, 1, 0);
         grid.Controls.Add(titleLabel, 1, 1);
         card.Controls.Add(grid);
-        host.Controls.Add(card, column, 0);
+        host.Controls.Add(card);
         return valueLabel;
     }
 
-    private static ListView CreateList(string title, string subtitle, UiGlyph glyph, out Panel card)
+    private static ListView CreateList(string title, string subtitle, UiGlyph glyph, out UiCard card)
     {
         card = CreateCard();
         card.Dock = DockStyle.Fill;
+        card.Padding = new Padding(2);
         var grid = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             RowCount = 3,
-            Padding = new Padding(14, 10, 14, 14),
+            BackColor = Color.Transparent,
+            Padding = new Padding(12, 10, 12, 12),
             Margin = Padding.Empty
         };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
@@ -528,11 +530,11 @@ public sealed class OverviewDashboardControl : UserControl
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var icon = new PictureBox
         {
-            Image = UiIconFactory.Create(glyph, StorageHubTheme.Primary, 20),
             SizeMode = PictureBoxSizeMode.CenterImage,
             Dock = DockStyle.Fill,
             Margin = Padding.Empty
         };
+        _ = StorageHubTheme.TrackIcon(icon, glyph, 20, glyph == UiGlyph.Warning ? UiIconTone.Warning : UiIconTone.Primary);
         var titleLabel = new Label
         {
             Text = title,
@@ -554,7 +556,7 @@ public sealed class OverviewDashboardControl : UserControl
         images.Images.Add("connection", UiIconFactory.Create(UiGlyph.Connections, StorageHubTheme.Primary, 18));
         images.Images.Add("warning", UiIconFactory.Create(UiGlyph.Warning, StorageHubTheme.Warning, 18));
         images.Images.Add("ok", UiIconFactory.Create(UiGlyph.Test, StorageHubTheme.Success, 18));
-        images.Images.Add("empty", UiIconFactory.Create(UiGlyph.More, StorageHubTheme.TextMuted, 18));
+        images.Images.Add("empty", UiIconFactory.Create(UiGlyph.Info, StorageHubTheme.TextMuted, 18));
         var list = new ListView
         {
             View = View.Details,
@@ -632,10 +634,52 @@ public sealed class OverviewDashboardControl : UserControl
         }
     }
 
-    private static Panel CreateCard() => new()
+    /// <summary>
+    /// A band of equal-width cards across the page. The row divides its own width between its
+    /// children rather than delegating to proportional columns, so the tiles line up from one
+    /// arithmetic step instead of from a table's preferred-size negotiation with its contents.
+    /// </summary>
+    private sealed class DashboardRow : Panel
+    {
+        private const int Gutter = 12;
+
+        /// <summary>How many equal columns the children are spread across.</summary>
+        [System.ComponentModel.DefaultValue(1)]
+        public int Columns { get; init; } = 1;
+
+        public override Size GetPreferredSize(Size proposedSize) => new(0, Height);
+
+        protected override void OnLayout(LayoutEventArgs levent)
+        {
+            base.OnLayout(levent);
+            var count = Math.Max(1, Columns);
+            var available = ClientSize.Width - (Gutter * (count - 1));
+            if (available <= 0 || Controls.Count == 0)
+            {
+                return;
+            }
+
+            var cell = available / count;
+            var index = 0;
+            foreach (Control child in Controls)
+            {
+                var left = index * (cell + Gutter);
+                // The last column absorbs the rounding remainder so the band ends flush.
+                var width = index == count - 1 ? ClientSize.Width - left : cell;
+                child.Bounds = new Rectangle(left, 0, Math.Max(1, width), ClientSize.Height);
+                index++;
+                if (index >= count)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    private static UiCard CreateCard(Color? accent = null) => new()
     {
         BackColor = StorageHubTheme.Surface,
-        BorderStyle = BorderStyle.FixedSingle
+        Accent = accent
     };
 
     private static Button CreateActionButton(string text, UiGlyph glyph, EventHandler handler, bool primary = false)
@@ -643,12 +687,12 @@ public sealed class OverviewDashboardControl : UserControl
         var button = new Button
         {
             Text = text,
-            Image = UiIconFactory.Create(glyph, primary ? Color.White : StorageHubTheme.Text, 18),
             ImageAlign = ContentAlignment.MiddleLeft,
             TextImageRelation = TextImageRelation.ImageBeforeText,
             AutoSize = true,
             Margin = new Padding(0, 0, 8, 0)
         };
+        _ = StorageHubTheme.TrackIcon(button, glyph, 18, primary ? UiIconTone.OnPrimary : UiIconTone.Text);
         if (primary)
         {
             StorageHubTheme.StylePrimaryButton(button);

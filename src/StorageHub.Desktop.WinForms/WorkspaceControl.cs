@@ -1,4 +1,4 @@
-namespace StorageHub.Desktop;
+﻿namespace StorageHub.Desktop;
 
 public sealed class WorkspaceControl : UserControl
 {
@@ -33,14 +33,42 @@ public sealed class WorkspaceControl : UserControl
         {
             Dock = DockStyle.Top,
             GripStyle = ToolStripGripStyle.Hidden,
+            ImageScalingSize = new Size(16, 16),
             BackColor = StorageHubTheme.SurfaceMuted,
             AccessibleName = $"{name} workspace layout"
         };
-        toolbar.Items.Add(new ToolStripLabel("Drag pane headers to swap or dock panes"));
+        var hint = new ToolStripLabel("Drag pane headers to swap or dock panes")
+        {
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            ForeColor = StorageHubTheme.TextMuted
+        };
+        _ = StorageHubTheme.TrackIcon(hint, UiGlyph.Layers, 16, UiIconTone.Muted);
+        var clipboardStatus = new ToolStripLabel("Empty")
+        {
+            Name = "WorkspaceClipboardStatus",
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            ToolTipText = "StorageHub's staged file selection"
+        };
+        _ = StorageHubTheme.TrackIcon(clipboardStatus, UiGlyph.Copy, 16, UiIconTone.Muted);
+        var paste = new ToolStripButton("Paste to active pane")
+        {
+            Name = "WorkspaceClipboardPaste",
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            Enabled = false
+        };
+        _ = StorageHubTheme.TrackIcon(paste, UiGlyph.Paste, 16);
+        var clear = new ToolStripButton("Clear")
+        {
+            Name = "WorkspaceClipboardClear",
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            Enabled = false
+        };
+        _ = StorageHubTheme.TrackIcon(clear, UiGlyph.Close, 16);
+        toolbar.Items.Add(hint);
         toolbar.Items.Add(new ToolStripSeparator());
-        toolbar.Items.Add(new ToolStripLabel("Empty") { Name = "WorkspaceClipboardStatus" });
-        toolbar.Items.Add(new ToolStripButton("Paste to active pane") { Name = "WorkspaceClipboardPaste", Enabled = false });
-        toolbar.Items.Add(new ToolStripButton("Clear") { Name = "WorkspaceClipboardClear", Enabled = false });
+        toolbar.Items.Add(clipboardStatus);
+        toolbar.Items.Add(paste);
+        toolbar.Items.Add(clear);
 
         _layoutHost = new Panel { Dock = DockStyle.Fill, BackColor = StorageHubTheme.Border };
         Controls.Add(_layoutHost);

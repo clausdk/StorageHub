@@ -137,7 +137,7 @@ public sealed class TransferQueueControl : UserControl
         toolbar.Items.Add(_status);
 
         _tabImages = CreateTabImages();
-        _tabs = new TabControl
+        _tabs = new ThemedTabControl
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Transfer queue views",
@@ -271,7 +271,7 @@ public sealed class TransferQueueControl : UserControl
         grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(4);
         grid.DefaultCellStyle.BackColor = StorageHubTheme.Surface;
         grid.DefaultCellStyle.ForeColor = StorageHubTheme.Text;
-        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(222, 233, 251);
+        grid.DefaultCellStyle.SelectionBackColor = StorageHubTheme.Selection;
         grid.DefaultCellStyle.SelectionForeColor = StorageHubTheme.Text;
         StorageHubTheme.ReduceFlicker(grid);
         grid.Columns.Add("Operation", "Operation");

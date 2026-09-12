@@ -39,8 +39,32 @@ public static class DesktopAppearanceService
 
         Appearance = appearance;
         EffectiveAppearance = effective;
+        ApplyFrameworkColorMode(effective);
         ApplyToOpenForms(previousEffective);
         AppearanceChanged?.Invoke(null, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Hands the resolved appearance to the WinForms runtime as well as to StorageHub's own
+    /// palette. StorageHub paints the surfaces it owns, but scrollbars, edit-control borders,
+    /// list headers, and spin buttons are drawn by comctl32 from the framework's colour mode; left
+    /// at the default they stayed light inside a dark window.
+    /// </summary>
+    private static void ApplyFrameworkColorMode(DesktopAppearance effective)
+    {
+        try
+        {
+#pragma warning disable WFO5001 // The color-mode API is still marked experimental in .NET 10.
+            System.Windows.Forms.Application.SetColorMode(effective == DesktopAppearance.Dark
+                ? SystemColorMode.Dark
+                : SystemColorMode.Classic);
+#pragma warning restore WFO5001
+        }
+        catch (InvalidOperationException)
+        {
+            // The runtime refuses the switch once a message loop owns the decision. StorageHub's
+            // own repaint still covers every managed surface.
+        }
     }
 
     internal static ToolStripRenderer MenuRenderer => SharedMenuRenderer;
@@ -72,6 +96,7 @@ public static class DesktopAppearanceService
         }
 
         EffectiveAppearance = effective;
+        ApplyFrameworkColorMode(effective);
         ApplyToOpenForms(previousEffective);
         AppearanceChanged?.Invoke(null, EventArgs.Empty);
     }

@@ -161,7 +161,7 @@ public sealed class SyncProfileEditorForm : Form
             ForeColor = StorageHubTheme.Warning
         };
 
-        _tabs = new TabControl
+        _tabs = new ThemedTabControl
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Synchronization profile workflow"

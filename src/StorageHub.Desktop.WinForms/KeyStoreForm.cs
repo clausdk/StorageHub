@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using StorageHub.Contracts.Ipc;
@@ -79,9 +79,7 @@ public sealed class KeyStoreForm : Form
         StorageHubTheme.StylePrimaryButton(_importCertificate);
         StorageHubTheme.StyleSecondaryButton(_importKey);
         StorageHubTheme.StyleSecondaryButton(_rename);
-        StorageHubTheme.StyleSecondaryButton(_delete);
-        _delete.BackColor = StorageHubTheme.Danger;
-        _delete.ForeColor = Color.White;
+        StorageHubTheme.StyleDangerButton(_delete);
 
         _status = new Label
         {

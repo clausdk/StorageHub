@@ -1,4 +1,4 @@
-namespace StorageHub.Desktop.Tests;
+﻿namespace StorageHub.Desktop.Tests;
 
 public sealed class ThemeTests
 {
@@ -221,6 +221,159 @@ public sealed class ThemeTests
             }
         });
     }
+
+    [Fact]
+    public void Every_glyph_renders_at_the_sizes_the_shell_asks_for()
+    {
+        // One malformed stroke takes down the whole shell, because the menus rasterise every
+        // glyph during construction.
+        foreach (var glyph in Enum.GetValues<UiGlyph>())
+        {
+            foreach (var size in new[] { 12, 16, 18, 20, 24 })
+            {
+                using var bitmap = UiIconFactory.Create(glyph, Color.White, size, 1.5F);
+                Assert.Equal((int)Math.Round(size * 1.5F), bitmap.Width);
+                Assert.Equal(bitmap.Width, bitmap.Height);
+                Assert.True(
+                    HasVisiblePixels(bitmap),
+                    $"{glyph} at {size} drew nothing.");
+            }
+        }
+    }
+
+    [Fact]
+    public void Every_menu_command_carries_an_icon()
+    {
+        // A menu where only some rows are illustrated reads as unfinished, and the icon column is
+        // what makes these menus scannable.
+        Assert.All(UiCommandCatalog.Definitions, definition => Assert.NotNull(definition.Glyph));
+    }
+
+    [Fact]
+    public void Icons_are_recoloured_when_the_appearance_changes()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            var previous = DesktopAppearanceService.Appearance;
+            try
+            {
+                DesktopAppearanceService.SetAppearance(DesktopAppearance.Light);
+                using var item = new ToolStripMenuItem("Refresh");
+                _ = StorageHubTheme.TrackIcon(item, UiGlyph.Refresh, 16);
+                var light = Assert.IsType<Bitmap>(item.Image);
+                AssertInk(StorageHubTheme.Text, StrongestColor(light));
+
+                DesktopAppearanceService.SetAppearance(DesktopAppearance.Dark);
+
+                var dark = Assert.IsType<Bitmap>(item.Image);
+                Assert.NotSame(light, dark);
+                AssertInk(StorageHubTheme.Text, StrongestColor(dark));
+            }
+            finally
+            {
+                DesktopAppearanceService.SetAppearance(previous);
+            }
+        });
+    }
+
+    [Theory]
+    [InlineData(DesktopAppearance.Light)]
+    [InlineData(DesktopAppearance.Dark)]
+    public void Status_tints_stay_readable_against_their_own_status_colour(DesktopAppearance appearance)
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            var previous = DesktopAppearanceService.Appearance;
+            try
+            {
+                DesktopAppearanceService.SetAppearance(appearance);
+                var pairs = new[]
+                {
+                    (Tint: StorageHubTheme.SuccessTint, Ink: StorageHubTheme.Success),
+                    (Tint: StorageHubTheme.WarningTint, Ink: StorageHubTheme.Warning),
+                    (Tint: StorageHubTheme.DangerTint, Ink: StorageHubTheme.Danger)
+                };
+
+                // A notice that hard-codes a pastel fill inverts in dark mode. Every tint has to
+                // sit on the same side of the palette as the surface it replaces.
+                Assert.All(pairs, pair =>
+                {
+                    var tintIsDark = Luminance(pair.Tint) < 0.5;
+                    Assert.Equal(appearance == DesktopAppearance.Dark, tintIsDark);
+                    Assert.True(
+                        Math.Abs(Luminance(pair.Tint) - Luminance(pair.Ink)) > 0.15,
+                        $"{appearance}: tint {pair.Tint} and ink {pair.Ink} are too close.");
+                });
+            }
+            finally
+            {
+                DesktopAppearanceService.SetAppearance(previous);
+            }
+        });
+    }
+
+    [Theory]
+    // A provider may pick any accent, so the badge picks its ink from the accent's luminance.
+    [InlineData("#FFFFFF", 24)]
+    [InlineData("#F59E0B", 24)]
+    [InlineData("#000000", 255)]
+    [InlineData("#1867C0", 255)]
+    public void Badge_text_contrasts_with_the_accent_behind_it(string accent, int expectedChannel)
+    {
+        var ink = StorageHubTheme.ContrastText(ColorTranslator.FromHtml(accent));
+        Assert.Equal(expectedChannel, ink.R);
+    }
+
+    private static bool HasVisiblePixels(Bitmap bitmap)
+    {
+        for (var x = 0; x < bitmap.Width; x++)
+        {
+            for (var y = 0; y < bitmap.Height; y++)
+            {
+                if (bitmap.GetPixel(x, y).A > 8)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Compares a rendered stroke against its intended colour. Nothing in a small anti-aliased
+    /// glyph is guaranteed to reach full opacity, so the darkest pixel is a near miss by design.
+    /// </summary>
+    private static void AssertInk(Color expected, Color actual)
+    {
+        Assert.True(
+            Math.Abs(expected.R - actual.R) <= 12 &&
+            Math.Abs(expected.G - actual.G) <= 12 &&
+            Math.Abs(expected.B - actual.B) <= 12,
+            $"Expected ink near {expected}, drew {actual}.");
+    }
+
+    /// <summary>The colour of the most opaque pixel, which for a stroked glyph is its ink.</summary>
+    private static Color StrongestColor(Bitmap bitmap)
+    {
+        var best = Color.Transparent;
+        for (var x = 0; x < bitmap.Width; x++)
+        {
+            for (var y = 0; y < bitmap.Height; y++)
+            {
+                var pixel = bitmap.GetPixel(x, y);
+                if (pixel.A > best.A)
+                {
+                    best = pixel;
+                }
+            }
+        }
+
+        return Color.FromArgb(best.R, best.G, best.B);
+    }
+
+    private static double Luminance(Color color) =>
+        ((0.2126 * color.R) + (0.7152 * color.G) + (0.0722 * color.B)) / 255D;
 
     private static IEnumerable<Control> DescendantsAndSelf(Control root)
     {

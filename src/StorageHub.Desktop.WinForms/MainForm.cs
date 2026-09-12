@@ -1,10 +1,9 @@
-using StorageHub.Contracts.Ipc;
+﻿using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
 
 public sealed class MainForm : Form
 {
-    private readonly List<Image> _ownedImages = [];
     private readonly AgentStatusMonitor _agentMonitor = new();
     private readonly ManualTransferController _manualTransfers = new();
     private readonly NamedPipeTransferQueueAgentClient _shellTransfers = new();
@@ -91,7 +90,7 @@ public sealed class MainForm : Form
         MainMenuStrip = _menu;
         var toolbar = BuildToolbar();
 
-        _workspaceTabs = new TabControl
+        _workspaceTabs = new ThemedTabControl
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Workspace tabs",
@@ -221,16 +220,6 @@ public sealed class MainForm : Form
         }
 
         base.Dispose(disposing);
-
-        if (disposing)
-        {
-            foreach (var image in _ownedImages)
-            {
-                image.Dispose();
-            }
-
-            _ownedImages.Clear();
-        }
     }
 
     internal string ShortcutDisplay(string commandId)
@@ -315,7 +304,7 @@ public sealed class MainForm : Form
                 };
                 if (definition.Glyph is { } glyph)
                 {
-                    item.Image = CreateOwnedIcon(glyph, 16);
+                    _ = StorageHubTheme.TrackIcon(item, glyph, 16, definition.Tone, DeviceDpi / 96F);
                 }
                 WireCommand(item, command);
                 root.DropDownItems.Add(item);
@@ -541,9 +530,62 @@ public sealed class MainForm : Form
             Padding = new Padding(5, 4, 5, 4),
             AutoSize = true
         };
+        // Every button forwards to the menu entry that already owns the command, so the toolbar
+        // inherits that entry's enabled state instead of maintaining a second, drifting copy.
         toolbar.Items.Add(CreateToolbarButton(UiGlyph.Add, "New workspace", (_, _) => ChooseAndAddWorkspace()));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Folder, "workspace.open-workspace"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Save, "workspace.save-workspace"));
+        toolbar.Items.Add(new ToolStripSeparator());
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Back, "go.back"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Forward, "go.forward"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Up, "go.up"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Refresh, "view.refresh"));
+        toolbar.Items.Add(new ToolStripSeparator());
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Copy, "edit.copy"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Cut, "edit.cut"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Paste, "edit.paste"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Rename, "edit.rename"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Delete, "edit.delete", UiIconTone.Danger));
+        toolbar.Items.Add(new ToolStripSeparator());
         toolbar.Items.Add(CreateToolbarButton(UiGlyph.Connections, "Connection Manager", (_, _) => ShowConnectionManager()));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Key, "connections.key-store"));
+        toolbar.Items.Add(new ToolStripSeparator());
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Compare, "sync.compare-panes"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Schedule, "sync.schedules"));
+        toolbar.Items.Add(new ToolStripSeparator());
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Search, "tools.search"));
+        toolbar.Items.Add(CreateCommandButton(UiGlyph.Settings, "tools.settings"));
         return toolbar;
+    }
+
+    /// <summary>
+    /// A toolbar button backed by a menu command. It mirrors the menu item's label, tooltip, and
+    /// enabled state, and clicking it runs exactly the same handler.
+    /// </summary>
+    private ToolStripItem CreateCommandButton(UiGlyph glyph, string commandId, UiIconTone tone = UiIconTone.Text)
+    {
+        var source = _menu.Items.OfType<ToolStripMenuItem>()
+            .SelectMany(root => root.DropDownItems.OfType<ToolStripMenuItem>())
+            .FirstOrDefault(item => Equals(item.Tag, commandId));
+        if (source is null)
+        {
+            return new ToolStripSeparator { Visible = false };
+        }
+
+        var button = new ToolStripButton
+        {
+            DisplayStyle = ToolStripItemDisplayStyle.Image,
+            ToolTipText = source.ToolTipText,
+            AccessibleName = source.Text,
+            AccessibleDescription = source.ToolTipText,
+            AutoToolTip = true,
+            Enabled = source.Enabled
+        };
+        _ = StorageHubTheme.TrackIcon(button, glyph, 20, tone, DeviceDpi / 96F);
+        button.Click += (_, _) => source.PerformClick();
+        source.EnabledChanged += (_, _) => button.Enabled = source.Enabled;
+        source.TextChanged += (_, _) => button.AccessibleName = source.Text;
+        return button;
     }
 
     private StatusStrip BuildStatusStrip()
@@ -665,20 +707,15 @@ public sealed class MainForm : Form
         };
         var layoutMenu = new ToolStripDropDownButton("Layout: Side by side")
         {
-            Image = CreateOwnedIcon(UiGlyph.Compare, 18),
             DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
             AccessibleName = "Workspace pane layout",
             ToolTipText = "Arrange the two workspace panes"
         };
-        var sideBySide = new ToolStripMenuItem("Side by side")
-        {
-            Checked = true,
-            Image = CreateOwnedIcon(UiGlyph.Compare, 16)
-        };
-        var topAndBottom = new ToolStripMenuItem("Top and bottom")
-        {
-            Image = CreateOwnedIcon(UiGlyph.More, 16)
-        };
+        _ = StorageHubTheme.TrackIcon(layoutMenu, UiGlyph.Compare, 18, UiIconTone.Text, DeviceDpi / 96F);
+        var sideBySide = new ToolStripMenuItem("Side by side") { Checked = true };
+        _ = StorageHubTheme.TrackIcon(sideBySide, UiGlyph.Compare, 16, UiIconTone.Text, DeviceDpi / 96F);
+        var topAndBottom = new ToolStripMenuItem("Top and bottom");
+        _ = StorageHubTheme.TrackIcon(topAndBottom, UiGlyph.Layers, 16, UiIconTone.Text, DeviceDpi / 96F);
         sideBySide.Click += (_, _) => SetWorkspaceOrientation(
             split,
             layoutMenu,
@@ -695,13 +732,14 @@ public sealed class MainForm : Form
         layoutMenu.DropDownItems.Add(topAndBottom);
         layoutToolbar.Items.Add(layoutMenu);
         layoutToolbar.Items.Add(new ToolStripSeparator());
-        layoutToolbar.Items.Add(new ToolStripLabel("CLIPBOARD")
+        var clipboardLabel = new ToolStripLabel("CLIPBOARD")
         {
-            Image = CreateOwnedIcon(UiGlyph.File, 18),
             DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
             ForeColor = StorageHubTheme.TextMuted,
             ToolTipText = "StorageHub's staged file selection"
-        });
+        };
+        _ = StorageHubTheme.TrackIcon(clipboardLabel, UiGlyph.Copy, 18, UiIconTone.Muted, DeviceDpi / 96F);
+        layoutToolbar.Items.Add(clipboardLabel);
         var clipboardStatus = new ToolStripLabel("Empty")
         {
             Name = "WorkspaceClipboardStatus",
@@ -711,11 +749,11 @@ public sealed class MainForm : Form
         var pasteClipboard = new ToolStripButton("Paste to active pane")
         {
             Name = "WorkspaceClipboardPaste",
-            Image = CreateOwnedIcon(UiGlyph.Save, 18),
             DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
             Enabled = false,
             ToolTipText = "Review and paste the staged selection into the active storage pane"
         };
+        _ = StorageHubTheme.TrackIcon(pasteClipboard, UiGlyph.Paste, 18, UiIconTone.Text, DeviceDpi / 96F);
         pasteClipboard.Click += (_, _) =>
         {
             var target = destination.ContainsFocus ? destination : source.ContainsFocus ? source : destination;
@@ -724,11 +762,11 @@ public sealed class MainForm : Form
         var clearClipboard = new ToolStripButton("Clear")
         {
             Name = "WorkspaceClipboardClear",
-            Image = CreateOwnedIcon(UiGlyph.Delete, 18),
             DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
             Enabled = false,
             ToolTipText = "Clear the StorageHub clipboard"
         };
+        _ = StorageHubTheme.TrackIcon(clearClipboard, UiGlyph.Close, 18, UiIconTone.Text, DeviceDpi / 96F);
         clearClipboard.Click += (_, _) => ClearPaneClipboard();
         layoutToolbar.Items.Add(clipboardStatus);
         layoutToolbar.Items.Add(pasteClipboard);
@@ -832,34 +870,37 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private WorkspaceTabMetadata CreateTabMetadata(UiGlyph glyph, bool closable) =>
-        new(closable, CreateOwnedIcon(glyph, 16));
+    private WorkspaceTabMetadata CreateTabMetadata(UiGlyph glyph, bool closable)
+    {
+        var metadata = new WorkspaceTabMetadata(closable);
+        // The strip is hand-drawn, so the icon is not owned by a control property. Tracking it
+        // against the tab control keeps it legible after an appearance change.
+        _ = StorageHubTheme.TrackIcon(
+            _workspaceTabs,
+            image => metadata.Icon = image,
+            glyph,
+            16,
+            UiIconTone.Muted,
+            DeviceDpi / 96F);
+        return metadata;
+    }
 
     private static string CreateTabLabel(string title) => title;
-
-    private Bitmap CreateOwnedIcon(UiGlyph glyph, int size)
-    {
-        var image = UiIconFactory.Create(glyph, StorageHubTheme.Text, size, DeviceDpi / 96F);
-        _ownedImages.Add(image);
-        return image;
-    }
 
     private ToolStripButton CreateToolbarButton(
         UiGlyph glyph,
         string toolTip,
         EventHandler click)
     {
-        var image = UiIconFactory.Create(glyph, StorageHubTheme.Text, 20, DeviceDpi / 96F);
-        _ownedImages.Add(image);
         var button = new ToolStripButton
         {
-            Image = image,
             DisplayStyle = ToolStripItemDisplayStyle.Image,
             ToolTipText = toolTip,
             AccessibleName = toolTip,
             AccessibleDescription = toolTip,
             AutoToolTip = true
         };
+        _ = StorageHubTheme.TrackIcon(button, glyph, 20, UiIconTone.Text, DeviceDpi / 96F);
         button.Click += click;
 
         return button;
@@ -1027,34 +1068,64 @@ public sealed class MainForm : Form
     {
         var page = _workspaceTabs.TabPages[e.Index];
         var bounds = _workspaceTabs.GetTabRect(e.Index);
-        using var brush = new SolidBrush(e.Index == _workspaceTabs.SelectedIndex
-            ? StorageHubTheme.Surface
-            : StorageHubTheme.SurfaceMuted);
-        e.Graphics.FillRectangle(brush, bounds);
+        var selected = e.Index == _workspaceTabs.SelectedIndex;
+        var hovered = e.State.HasFlag(DrawItemState.HotLight);
+        var isAddTab = page == _workspaceTabs.TabPages[^1];
 
-        if (page == _workspaceTabs.TabPages[^1])
+        var previousMode = e.Graphics.SmoothingMode;
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        var fill = selected
+            ? StorageHubTheme.Surface
+            : hovered ? StorageHubTheme.Elevated : StorageHubTheme.SurfaceMuted;
+        // The strip and the page below it are different colours, so the tab is drawn taller than
+        // its own rectangle and the overflow is clipped away by the page: the selected tab then
+        // reads as one continuous surface with its content.
+        using (var shape = UiShapes.RoundedRectangle(
+                   new RectangleF(bounds.Left, bounds.Top, bounds.Width - 1, bounds.Height + 6),
+                   6F))
+        using (var brush = new SolidBrush(fill))
+        using (var outline = new Pen(selected ? StorageHubTheme.Border : fill))
         {
-            TextRenderer.DrawText(e.Graphics, page.Text, Font, bounds, StorageHubTheme.Text,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            e.Graphics.FillPath(brush, shape);
+            e.Graphics.DrawPath(outline, shape);
+        }
+
+        if (selected)
+        {
+            using var accent = new SolidBrush(StorageHubTheme.Primary);
+            e.Graphics.FillRectangle(accent, bounds.Left + 4, bounds.Top + 1, bounds.Width - 9, 2);
+        }
+
+        e.Graphics.SmoothingMode = previousMode;
+        var foreground = selected ? StorageHubTheme.Text : StorageHubTheme.TextMuted;
+
+        if (isAddTab)
+        {
+            using var plus = new Pen(hovered ? StorageHubTheme.Primary : StorageHubTheme.TextMuted, Math.Max(1.4F, DeviceDpi / 96F * 1.5F));
+            var center = new Point(bounds.Left + (bounds.Width / 2), bounds.Top + (bounds.Height / 2));
+            e.Graphics.DrawLine(plus, center.X - 5, center.Y, center.X + 5, center.Y);
+            e.Graphics.DrawLine(plus, center.X, center.Y - 5, center.X, center.Y + 5);
             return;
         }
 
         var metadata = page.Tag as WorkspaceTabMetadata;
-        var iconBounds = new Rectangle(bounds.Left + 7, bounds.Top + Math.Max(0, (bounds.Height - 16) / 2), 16, 16);
-        if (metadata is not null)
+        var iconBounds = new Rectangle(bounds.Left + 9, bounds.Top + Math.Max(0, (bounds.Height - 16) / 2), 16, 16);
+        if (metadata?.Icon is { } icon)
         {
-            e.Graphics.DrawImage(metadata.Icon, iconBounds);
+            e.Graphics.DrawImage(icon, iconBounds);
         }
 
         var closeBounds = GetWorkspaceCloseBounds(bounds);
         var textRight = metadata?.Closable == true ? closeBounds.Left - 5 : bounds.Right - 7;
         TextRenderer.DrawText(e.Graphics, page.Text, Font,
-            Rectangle.FromLTRB(iconBounds.Right + 5, bounds.Top, textRight, bounds.Bottom),
-            StorageHubTheme.Text,
+            Rectangle.FromLTRB(iconBounds.Right + 6, bounds.Top, textRight, bounds.Bottom),
+            foreground,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         if (metadata?.Closable == true)
         {
-            using var pen = new Pen(StorageHubTheme.TextMuted, Math.Max(1F, DeviceDpi / 96F * 1.4F));
+            using var pen = new Pen(
+                selected || hovered ? StorageHubTheme.Text : StorageHubTheme.TextMuted,
+                Math.Max(1F, DeviceDpi / 96F * 1.4F));
             e.Graphics.DrawLine(pen, closeBounds.Left + 4, closeBounds.Top + 4, closeBounds.Right - 4, closeBounds.Bottom - 4);
             e.Graphics.DrawLine(pen, closeBounds.Right - 4, closeBounds.Top + 4, closeBounds.Left + 4, closeBounds.Bottom - 4);
         }
@@ -2891,7 +2962,13 @@ public sealed class MainForm : Form
         _overview.UpdateAgentStatus(status);
     }
 
-    private sealed record WorkspaceTabMetadata(bool Closable, Image Icon);
+    private sealed class WorkspaceTabMetadata(bool Closable)
+    {
+        public bool Closable { get; } = Closable;
+
+        /// <summary>Reassigned by the theme when the appearance changes.</summary>
+        public Image? Icon { get; set; }
+    }
 
     private sealed record PaneClipboardSnapshot(
         BrowserPaneControl SourcePane,

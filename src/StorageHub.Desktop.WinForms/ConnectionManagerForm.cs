@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using StorageHub.Contracts.Ipc;
 
@@ -171,7 +171,7 @@ public sealed class ConnectionManagerForm : Form
         };
         var editorHeader = BuildEditorHeader();
 
-        _settingsTabs = new TabControl
+        _settingsTabs = new ThemedTabControl
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Connection settings",
@@ -720,7 +720,7 @@ public sealed class ConnectionManagerForm : Form
         {
             Height = 62,
             Dock = DockStyle.Top,
-            BackColor = provider.EncryptedByDefault ? Color.FromArgb(232, 247, 240) : Color.FromArgb(255, 242, 222),
+            BackColor = provider.EncryptedByDefault ? StorageHubTheme.SuccessTint : StorageHubTheme.WarningTint,
             Margin = new Padding(4, 4, 4, 12),
             AccessibleName = provider.EncryptedByDefault ? "Secure transport policy" : "Plaintext transport warning"
         };
@@ -1233,14 +1233,19 @@ public sealed class ConnectionManagerForm : Form
 
         var left = cardBounds.Left + 8;
         var badgeBounds = new Rectangle(left, cardBounds.Top + 7, 34, 34);
-        using var accentBrush = new SolidBrush(StorageHubTheme.ParseAccent(card.AccentHex));
-        graphics.FillRectangle(accentBrush, badgeBounds);
+        var badgeAccent = StorageHubTheme.ParseAccent(card.AccentHex);
+        using (var accentBrush = new SolidBrush(badgeAccent))
+        using (var badgePath = CreateProfileTreeRoundedRectangle(badgeBounds, 8))
+        {
+            graphics.FillPath(accentBrush, badgePath);
+        }
+
         TextRenderer.DrawText(
             graphics,
             card.Descriptor.ShortName,
             _profileTagFont,
             badgeBounds,
-            Color.White,
+            StorageHubTheme.ContrastText(badgeAccent),
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
         var textLeft = badgeBounds.Right + 9;
@@ -1265,7 +1270,7 @@ public sealed class ConnectionManagerForm : Form
             }
 
             var pill = new Rectangle(tagRight - width, cardBounds.Top + 14, width, 20);
-            using var pillBrush = new SolidBrush(Color.FromArgb(36, muted));
+            using var pillBrush = new SolidBrush(StorageHubTheme.Tint(muted, 0.16));
             graphics.FillRectangle(pillBrush, pill);
             TextRenderer.DrawText(
                 graphics,
@@ -1285,7 +1290,7 @@ public sealed class ConnectionManagerForm : Form
                 "★",
                 _profileSectionFont,
                 new Rectangle(textLeft, cardBounds.Top + 4, favoriteWidth, 22),
-                Color.FromArgb(245, 158, 11),
+                StorageHubTheme.Warning,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
 

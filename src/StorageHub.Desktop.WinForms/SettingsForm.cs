@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
@@ -6,11 +6,16 @@ namespace StorageHub.Desktop;
 public sealed class SettingsForm : Form
 {
     private const int ContentWidth = 700;
-    private const int NavigationWidth = 260;
+    /// <summary>
+    /// Wide enough for the deepest rail entry — a provider under Storage under Connections — to
+    /// show its full name beside its icon rather than an ellipsis.
+    /// </summary>
+    private const int NavigationWidth = 288;
     private readonly DesktopUpdatePreferencesStore _store;
     private readonly Action<DesktopUpdatePreferences>? _saved;
     private readonly IRemoteSecretVaultClient _secretClient;
     private readonly bool _ownsSecretClient;
+    private readonly ImageList _categoryIcons = CreateCategoryIcons();
     private readonly TreeView _categories;
     private readonly Font _categoryItemFont;
     private readonly Dictionary<string, Control> _pages = new(StringComparer.Ordinal);
@@ -289,35 +294,46 @@ public sealed class SettingsForm : Form
             Indent = 18,
             FullRowSelect = true,
             HideSelection = false,
+            // The rail is drawn end to end here. The dialog opens with focus on the page, and an
+            // unfocused native selection is a faint outline that leaves no clear indication of
+            // which category you are looking at.
+            DrawMode = TreeViewDrawMode.OwnerDrawAll,
             ShowLines = false,
             ShowPlusMinus = true,
             ShowRootLines = false,
             BorderStyle = BorderStyle.None,
             Font = new Font("Segoe UI", 10F, FontStyle.Bold, GraphicsUnit.Point),
             BackColor = StorageHubTheme.SurfaceMuted,
+            ImageList = _categoryIcons,
             AccessibleName = "Settings categories"
         };
-        var work = new TreeNode("Transfers & sync") { Name = "Performance" };
+        var work = CategoryNode("Transfers & sync", "Performance", UiGlyph.Speed);
         _categories.Nodes.Add(work);
-        _categories.Nodes.Add(new TreeNode("Editing") { Name = "Editing" });
-        _categories.Nodes.Add(new TreeNode("Appearance") { Name = "Appearance" });
-        _categories.Nodes.Add(new TreeNode("Workspace") { Name = "Workspace" });
-        _categories.Nodes.Add(new TreeNode("Shortcuts") { Name = "Shortcuts" });
-        var connections = new TreeNode("Connections & trust") { Name = "Connections & trust" };
+        _categories.Nodes.Add(CategoryNode("Editing", "Editing", UiGlyph.Rename));
+        _categories.Nodes.Add(CategoryNode("Appearance", "Appearance", UiGlyph.Theme));
+        _categories.Nodes.Add(CategoryNode("Workspace", "Workspace", UiGlyph.Layers));
+        _categories.Nodes.Add(CategoryNode("Shortcuts", "Shortcuts", UiGlyph.Keyboard));
+        var connections = CategoryNode("Connections & trust", "Connections & trust", UiGlyph.Shield);
         foreach (var type in new[] { ConnectionProfileType.Storage, ConnectionProfileType.Client })
         {
             var typeName = type == ConnectionProfileType.Storage ? "Storage" : "Clients";
-            var typeNode = new TreeNode(typeName) { Name = ConnectionTypePageKey(type) };
+            var typeNode = CategoryNode(
+                typeName,
+                ConnectionTypePageKey(type),
+                type == ConnectionProfileType.Storage ? UiGlyph.Server : UiGlyph.Terminal);
             foreach (var provider in ConnectionProviderCatalog.All.Where(provider => provider.Type == type))
             {
-                typeNode.Nodes.Add(new TreeNode(provider.DisplayName) { Name = ProviderPageKey(provider.Kind) });
+                typeNode.Nodes.Add(CategoryNode(
+                    provider.DisplayName,
+                    ProviderPageKey(provider.Kind),
+                    ProviderGlyph(provider.Kind)));
             }
             typeNode.Expand();
             connections.Nodes.Add(typeNode);
         }
         connections.Expand();
         _categories.Nodes.Add(connections);
-        _categories.Nodes.Add(new TreeNode("Updates") { Name = "Updates" });
+        _categories.Nodes.Add(CategoryNode("Updates", "Updates", UiGlyph.Download));
         _categoryItemFont = new Font(_categories.Font, FontStyle.Regular);
         foreach (TreeNode rootNode in _categories.Nodes)
         {
@@ -402,6 +418,7 @@ public sealed class SettingsForm : Form
         CancelButton = cancel;
 
         _categories.AfterSelect += CategorySelected;
+        _categories.DrawNode += DrawCategoryNode;
         _checkAutomatically.CheckedChanged += UpdateDependencies;
         _downloadAutomatically.CheckedChanged += UpdateDependencies;
         _sshDiscovery.SelectedIndexChanged += DiscoverySelectionChanged;
@@ -449,6 +466,7 @@ public sealed class SettingsForm : Form
         if (disposing)
         {
             _categories.AfterSelect -= CategorySelected;
+            _categories.DrawNode -= DrawCategoryNode;
             _checkAutomatically.CheckedChanged -= UpdateDependencies;
             _downloadAutomatically.CheckedChanged -= UpdateDependencies;
             _sshDiscovery.SelectedIndexChanged -= DiscoverySelectionChanged;
@@ -482,6 +500,7 @@ public sealed class SettingsForm : Form
             }
 
             _categories.Font.Dispose();
+            _categoryIcons.Dispose();
             _categoryItemFont.Dispose();
         }
 
@@ -714,6 +733,130 @@ public sealed class SettingsForm : Form
             }
             control.Width = availableWidth;
         }
+    }
+
+    /// <summary>
+    /// Builds the image list the category tree indexes into. Tree nodes address images by key, so
+    /// each glyph is rasterised once here in the muted text colour that suits a navigation rail.
+    /// </summary>
+    private static ImageList CreateCategoryIcons()
+    {
+        var images = new ImageList { ImageSize = new Size(18, 18), ColorDepth = ColorDepth.Depth32Bit };
+        foreach (var glyph in new[]
+                 {
+                     UiGlyph.Speed, UiGlyph.Rename, UiGlyph.Theme, UiGlyph.Layers, UiGlyph.Keyboard,
+                     UiGlyph.Shield, UiGlyph.Server, UiGlyph.Terminal, UiGlyph.Download,
+                     UiGlyph.Folder, UiGlyph.Cloud, UiGlyph.Link, UiGlyph.Lock, UiGlyph.Key
+                 })
+        {
+            images.Images.Add(glyph.ToString(), UiIconFactory.Create(glyph, StorageHubTheme.TextMuted, 18));
+        }
+
+        return images;
+    }
+
+    private static TreeNode CategoryNode(string text, string key, UiGlyph glyph) => new(text)
+    {
+        Name = key,
+        ImageKey = glyph.ToString(),
+        SelectedImageKey = glyph.ToString()
+    };
+
+    private static UiGlyph ProviderGlyph(StorageProviderKind provider) => provider switch
+    {
+        StorageProviderKind.Local => UiGlyph.Folder,
+        StorageProviderKind.S3 => UiGlyph.Cloud,
+        StorageProviderKind.Ftp => UiGlyph.Link,
+        StorageProviderKind.Ftps => UiGlyph.Lock,
+        StorageProviderKind.Sftp => UiGlyph.Lock,
+        StorageProviderKind.Ssh => UiGlyph.Key,
+        _ => UiGlyph.Server
+    };
+
+    private void DrawCategoryNode(object? sender, DrawTreeNodeEventArgs e)
+    {
+        if (e.Node is not { } node || e.Bounds.Height <= 0)
+        {
+            return;
+        }
+
+        e.DrawDefault = false;
+        var graphics = e.Graphics;
+        var row = new Rectangle(0, e.Bounds.Top, _categories.ClientSize.Width, e.Bounds.Height);
+        using (var background = new SolidBrush(_categories.BackColor))
+        {
+            graphics.FillRectangle(background, row);
+        }
+
+        var selected = ReferenceEquals(node, _categories.SelectedNode);
+        if (selected)
+        {
+            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var pill = new Rectangle(row.Left + 4, row.Top + 1, Math.Max(1, row.Width - 10), row.Height - 3);
+            using (var fill = new SolidBrush(StorageHubTheme.Selection))
+            using (var shape = UiShapes.RoundedRectangle(pill, 5F))
+            {
+                graphics.FillPath(fill, shape);
+            }
+
+            using var accent = new SolidBrush(StorageHubTheme.Primary);
+            graphics.FillRectangle(accent, pill.Left, pill.Top + 4, 3, pill.Height - 8);
+            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.Default;
+        }
+
+        // The chevron slot is reserved on every row, including leaves, so the icons of a group
+        // and its children line up.
+        var left = 8 + (node.Level * _categories.Indent);
+        if (node.Nodes.Count > 0)
+        {
+            DrawCategoryChevron(graphics, new Rectangle(left, row.Top, 12, row.Height), node.IsExpanded);
+        }
+
+        left += 13;
+        if (_categoryIcons.Images.IndexOfKey(node.ImageKey) is >= 0 and var index)
+        {
+            var image = _categoryIcons.Images[index];
+            graphics.DrawImage(image, left, row.Top + ((row.Height - image.Height) / 2), image.Width, image.Height);
+            left += image.Width + 7;
+        }
+
+        TextRenderer.DrawText(
+            graphics,
+            node.Text,
+            node.NodeFont ?? _categories.Font,
+            Rectangle.FromLTRB(left, row.Top, row.Right - 6, row.Bottom),
+            selected ? StorageHubTheme.Text : StorageHubTheme.TextMuted,
+            // NoPrefix: category names such as "Transfers & sync" are labels, not mnemonics.
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis |
+            TextFormatFlags.NoPrefix);
+    }
+
+    private static void DrawCategoryChevron(Graphics graphics, Rectangle bounds, bool expanded)
+    {
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var pen = new Pen(StorageHubTheme.TextMuted, 1.4F);
+        var centerX = bounds.Left + (bounds.Width / 2F);
+        var centerY = bounds.Top + (bounds.Height / 2F);
+        if (expanded)
+        {
+            graphics.DrawLines(pen,
+            [
+                new PointF(centerX - 3.5F, centerY - 1.5F),
+                new PointF(centerX, centerY + 2F),
+                new PointF(centerX + 3.5F, centerY - 1.5F)
+            ]);
+        }
+        else
+        {
+            graphics.DrawLines(pen,
+            [
+                new PointF(centerX - 1.5F, centerY - 3.5F),
+                new PointF(centerX + 2F, centerY),
+                new PointF(centerX - 1.5F, centerY + 3.5F)
+            ]);
+        }
+
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.Default;
     }
 
     private static void ApplyCategoryItemFont(TreeNodeCollection nodes, Font itemFont)
@@ -1461,6 +1604,7 @@ public sealed class SettingsForm : Form
 
     private void CategorySelected(object? sender, EventArgs e)
     {
+        _categories.Invalidate();
         var selected = _categories.SelectedNode?.Name;
         foreach (var page in _pages)
         {

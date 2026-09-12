@@ -155,7 +155,7 @@ public sealed class ObjectInspectorForm : Form
 
         _metadataTab = CreateDataTab("Metadata", _metadataGrid, _metadataNotice);
         _tagsTab = CreateDataTab("Tags", _tagsGrid, _tagsNotice);
-        var tabs = new TabControl
+        var tabs = new ThemedTabControl
         {
             Name = "ObjectInspectorTabs",
             Dock = DockStyle.Fill,

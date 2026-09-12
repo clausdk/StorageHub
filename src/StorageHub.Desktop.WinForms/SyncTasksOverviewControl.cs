@@ -32,7 +32,7 @@ public sealed class SyncTasksOverviewControl : UserControl
         BackColor = StorageHubTheme.Canvas;
         AccessibleName = "Synchronization task overview";
 
-        _views = new TabControl
+        _views = new ThemedTabControl
         {
             Dock = DockStyle.Fill,
             AccessibleName = "Sync task views",

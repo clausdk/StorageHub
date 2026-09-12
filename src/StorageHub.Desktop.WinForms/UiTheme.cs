@@ -1,4 +1,5 @@
-﻿using System.Drawing.Drawing2D;
+﻿using System.ComponentModel;
+using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 
 namespace StorageHub.Desktop;
@@ -11,6 +12,7 @@ public static class StorageHubTheme
     public static Color Canvas => CurrentPalette.Canvas;
     public static Color Surface => CurrentPalette.Surface;
     public static Color SurfaceMuted => CurrentPalette.SurfaceMuted;
+    public static Color Elevated => CurrentPalette.Elevated;
     public static Color Border => CurrentPalette.Border;
     public static Color Text => CurrentPalette.Text;
     public static Color TextMuted => CurrentPalette.TextMuted;
@@ -18,6 +20,20 @@ public static class StorageHubTheme
     public static Color Success => CurrentPalette.Success;
     public static Color Warning => CurrentPalette.Warning;
     public static Color Danger => CurrentPalette.Danger;
+
+    /// <summary>
+    /// Low-saturation backgrounds for status callouts. A notice that hard-codes a pastel fill is
+    /// unreadable once the palette flips, so every tinted surface resolves through the palette.
+    /// </summary>
+    public static Color SuccessTint => CurrentPalette.SuccessTint;
+    public static Color WarningTint => CurrentPalette.WarningTint;
+    public static Color DangerTint => CurrentPalette.DangerTint;
+    public static Color Selection => CurrentPalette.Selection;
+
+    static StorageHubTheme()
+    {
+        DesktopAppearanceService.AppearanceChanged += (_, _) => RefreshTrackedIcons();
+    }
 
     public static void SetAppearance(DesktopAppearance appearance) => DesktopAppearanceService.SetAppearance(appearance);
 
@@ -49,6 +65,7 @@ public static class StorageHubTheme
         list.BackColor = Surface;
         list.ForeColor = Text;
         list.OwnerDraw = true;
+        list.BorderStyle = BorderStyle.None;
         list.DrawColumnHeader -= DrawListColumnHeader;
         list.DrawColumnHeader += DrawListColumnHeader;
         list.DrawItem -= DrawListItem;
@@ -57,6 +74,7 @@ public static class StorageHubTheme
         list.DrawSubItem += DrawListSubItem;
         list.Resize -= ListResized;
         list.Resize += ListResized;
+        ApplyNativeChrome(list);
         FillListHeader(list);
     }
 
@@ -77,6 +95,9 @@ public static class StorageHubTheme
     {
         if (sender is ListView list)
         {
+            // The header window is created lazily, after the first ConfigureList pass, so the
+            // theming is reapplied here rather than only once at setup.
+            ApplyNativeChrome(list);
             FillListHeader(list);
         }
     }
@@ -92,7 +113,7 @@ public static class StorageHubTheme
             e.Header?.Text ?? string.Empty,
             e.Font,
             Rectangle.Inflate(e.Bounds, -6, 0),
-            Text,
+            TextMuted,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
 
@@ -105,7 +126,10 @@ public static class StorageHubTheme
 
         var trailing = list.Columns[^1];
         var preceding = list.Columns.Cast<ColumnHeader>().Take(list.Columns.Count - 1).Sum(column => column.Width);
-        trailing.Width = Math.Max(80, list.ClientSize.Width - preceding - SystemInformation.VerticalScrollBarWidth - 4);
+        // The trailing column runs to the client edge. ClientSize already excludes a visible
+        // scrollbar, so reserving room for one again left an unpainted strip of native header at
+        // the right of every list, which reads as a bright block on a dark window.
+        trailing.Width = Math.Max(80, list.ClientSize.Width - preceding);
     }
 
     public static void StylePrimaryButton(Button button)
@@ -134,6 +158,17 @@ public static class StorageHubTheme
         ApplySecondaryButtonState(button);
     }
 
+    /// <summary>A secondary button whose action destroys data, so it reads as dangerous at rest.</summary>
+    public static void StyleDangerButton(Button button)
+    {
+        ArgumentNullException.ThrowIfNull(button);
+        StyleSecondaryButton(button);
+        button.EnabledChanged -= SecondaryButtonEnabledChanged;
+        button.EnabledChanged -= DangerButtonEnabledChanged;
+        button.EnabledChanged += DangerButtonEnabledChanged;
+        ApplyDangerButtonState(button);
+    }
+
     private static void PrimaryButtonEnabledChanged(object? sender, EventArgs e)
     {
         if (sender is Button button)
@@ -150,17 +185,43 @@ public static class StorageHubTheme
         }
     }
 
+    private static void DangerButtonEnabledChanged(object? sender, EventArgs e)
+    {
+        if (sender is Button button)
+        {
+            ApplyDangerButtonState(button);
+        }
+    }
+
     private static void ApplyPrimaryButtonState(Button button)
     {
-        button.BackColor = button.Enabled ? Primary : SurfaceMuted;
-        button.ForeColor = button.Enabled ? Color.White : CurrentPalette.DisabledText;
+        var palette = CurrentPalette;
+        button.BackColor = button.Enabled ? palette.Primary : palette.SurfaceMuted;
+        button.ForeColor = button.Enabled ? Color.White : palette.DisabledText;
+        button.FlatAppearance.MouseOverBackColor = palette.PrimaryHover;
+        button.FlatAppearance.MouseDownBackColor = palette.PrimaryPressed;
         button.Cursor = button.Enabled ? Cursors.Hand : Cursors.Default;
     }
 
     private static void ApplySecondaryButtonState(Button button)
     {
-        button.BackColor = button.Enabled ? Surface : SurfaceMuted;
-        button.ForeColor = button.Enabled ? Text : CurrentPalette.DisabledText;
+        var palette = CurrentPalette;
+        button.BackColor = button.Enabled ? palette.Surface : palette.SurfaceMuted;
+        button.ForeColor = button.Enabled ? palette.Text : palette.DisabledText;
+        button.FlatAppearance.BorderColor = palette.Border;
+        button.FlatAppearance.MouseOverBackColor = palette.SurfaceMuted;
+        button.FlatAppearance.MouseDownBackColor = palette.Elevated;
+        button.Cursor = button.Enabled ? Cursors.Hand : Cursors.Default;
+    }
+
+    private static void ApplyDangerButtonState(Button button)
+    {
+        var palette = CurrentPalette;
+        button.BackColor = button.Enabled ? palette.DangerTint : palette.SurfaceMuted;
+        button.ForeColor = button.Enabled ? palette.Danger : palette.DisabledText;
+        button.FlatAppearance.BorderColor = button.Enabled ? palette.Danger : palette.Border;
+        button.FlatAppearance.MouseOverBackColor = button.Enabled ? palette.Danger : palette.SurfaceMuted;
+        button.FlatAppearance.MouseDownBackColor = palette.Danger;
         button.Cursor = button.Enabled ? Cursors.Hand : Cursors.Default;
     }
 
@@ -177,7 +238,11 @@ public static class StorageHubTheme
         // Workspace headers include a 16px icon and, for browser workspaces, a
         // 16px close target. Native sizing only measures the text, so reserve
         // enough horizontal padding for those renderer-owned elements.
-        tabs.Padding = isWorkspaceTabs ? new Point(39, 5) : new Point(14, 4);
+        tabs.Padding = isWorkspaceTabs ? new Point(39, 5) : new Point(16, 6);
+        if (tabs is ThemedTabControl themed)
+        {
+            themed.Invalidate(true);
+        }
     }
 
     public static void Register(Form form)
@@ -213,11 +278,20 @@ public static class StorageHubTheme
             case TextBoxBase or ComboBox or NumericUpDown or DateTimePicker:
                 control.BackColor = current.Input;
                 control.ForeColor = current.Text;
+                ApplyNativeChrome(control);
+                if (control is NumericUpDown spinner && spinner.Controls.Count > 0)
+                {
+                    // The spin buttons are a separate child control that keeps painting on the
+                    // stock window background, which is a bright block on a dark input.
+                    spinner.Controls[0].BackColor = current.Input;
+                    spinner.Controls[0].ForeColor = current.Text;
+                }
                 break;
             case TreeView tree:
                 tree.BackColor = current.Surface;
                 tree.ForeColor = current.Text;
                 tree.LineColor = current.Border;
+                ApplyNativeChrome(tree);
                 break;
             case ListView list:
                 ConfigureList(list);
@@ -238,6 +312,8 @@ public static class StorageHubTheme
                 {
                     button.BackColor = current.Primary;
                     button.ForeColor = Color.White;
+                    button.FlatAppearance.MouseOverBackColor = current.PrimaryHover;
+                    button.FlatAppearance.MouseDownBackColor = current.PrimaryPressed;
                 }
                 break;
             case ToolStrip strip:
@@ -245,6 +321,9 @@ public static class StorageHubTheme
                 strip.ForeColor = current.Text;
                 strip.Renderer = DesktopAppearanceService.MenuRenderer;
                 ApplyToolStripItems(strip.Items, current);
+                break;
+            case ScrollableControl scrollable when scrollable is not TabPage:
+                ApplyNativeChrome(scrollable);
                 break;
         }
 
@@ -270,6 +349,7 @@ public static class StorageHubTheme
     private static void ConfigureGrid(DataGridView grid, StorageHubPalette palette)
     {
         grid.EnableHeadersVisualStyles = false;
+        grid.BorderStyle = BorderStyle.None;
         grid.BackgroundColor = palette.Surface;
         grid.GridColor = palette.Border;
         grid.DefaultCellStyle.BackColor = palette.Surface;
@@ -278,10 +358,15 @@ public static class StorageHubTheme
         grid.DefaultCellStyle.SelectionForeColor = palette.Text;
         grid.AlternatingRowsDefaultCellStyle.BackColor = palette.SurfaceMuted;
         grid.AlternatingRowsDefaultCellStyle.ForeColor = palette.Text;
+        grid.AlternatingRowsDefaultCellStyle.SelectionBackColor = palette.Selection;
+        grid.AlternatingRowsDefaultCellStyle.SelectionForeColor = palette.Text;
         grid.ColumnHeadersDefaultCellStyle.BackColor = palette.SurfaceMuted;
-        grid.ColumnHeadersDefaultCellStyle.ForeColor = palette.Text;
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = palette.TextMuted;
+        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = palette.SurfaceMuted;
+        grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = palette.TextMuted;
         grid.RowHeadersDefaultCellStyle.BackColor = palette.SurfaceMuted;
         grid.RowHeadersDefaultCellStyle.ForeColor = palette.Text;
+        ApplyNativeChrome(grid);
     }
 
     private static void ApplyToolStripItems(ToolStripItemCollection items, StorageHubPalette palette)
@@ -312,13 +397,20 @@ public static class StorageHubTheme
         if (value == previous.Canvas) return current.Canvas;
         if (value == previous.Surface) return current.Surface;
         if (value == previous.SurfaceMuted) return current.SurfaceMuted;
+        if (value == previous.Elevated) return current.Elevated;
         if (value == previous.Border) return current.Border;
         if (value == previous.Text) return current.Text;
         if (value == previous.TextMuted) return current.TextMuted;
+        if (value == previous.DisabledText) return current.DisabledText;
         if (value == previous.Primary) return current.Primary;
         if (value == previous.Success) return current.Success;
         if (value == previous.Warning) return current.Warning;
         if (value == previous.Danger) return current.Danger;
+        if (value == previous.SuccessTint) return current.SuccessTint;
+        if (value == previous.WarningTint) return current.WarningTint;
+        if (value == previous.DangerTint) return current.DangerTint;
+        if (value == previous.Selection) return current.Selection;
+        if (value == previous.Input) return current.Input;
         return value;
     }
 
@@ -329,11 +421,29 @@ public static class StorageHubTheme
             return;
         }
 
+        var palette = CurrentPalette;
         var selected = e.Index == tabs.SelectedIndex;
-        using var background = new SolidBrush(selected ? Surface : SurfaceMuted);
-        using var border = new Pen(Border);
-        e.Graphics.FillRectangle(background, e.Bounds);
-        e.Graphics.DrawRectangle(border, Rectangle.Inflate(e.Bounds, -1, -1));
+        var bounds = e.Bounds;
+        using var background = new SolidBrush(selected ? palette.Surface : palette.SurfaceMuted);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var shape = UiShapes.RoundedRectangle(
+                   new RectangleF(bounds.Left, bounds.Top, bounds.Width - 1, bounds.Height + 6),
+                   5F))
+        {
+            e.Graphics.FillPath(background, shape);
+            using var outline = new Pen(selected ? palette.Border : palette.SurfaceMuted);
+            e.Graphics.DrawPath(outline, shape);
+        }
+
+        if (selected)
+        {
+            // A 2px accent cap is the only cue that survives at every DPI once the tab and the
+            // page below it share one surface colour.
+            using var accent = new SolidBrush(palette.Primary);
+            e.Graphics.FillRectangle(accent, bounds.Left + 3, bounds.Top + 1, bounds.Width - 7, 2);
+        }
+
+        e.Graphics.SmoothingMode = SmoothingMode.Default;
         var page = tabs.TabPages[e.Index];
         var image = ResolveTabImage(tabs, page);
         var textSize = TextRenderer.MeasureText(
@@ -343,13 +453,13 @@ public static class StorageHubTheme
             TextFormatFlags.NoPadding);
         var gap = image is null ? 0 : 7;
         var contentWidth = textSize.Width + gap + (image?.Width ?? 0);
-        var contentLeft = e.Bounds.Left + Math.Max(8, (e.Bounds.Width - contentWidth) / 2);
+        var contentLeft = bounds.Left + Math.Max(8, (bounds.Width - contentWidth) / 2);
         if (image is not null)
         {
             e.Graphics.DrawImage(
                 image,
                 contentLeft,
-                e.Bounds.Top + (e.Bounds.Height - image.Height) / 2,
+                bounds.Top + (bounds.Height - image.Height) / 2,
                 image.Width,
                 image.Height);
             contentLeft += image.Width + gap;
@@ -358,8 +468,8 @@ public static class StorageHubTheme
             e.Graphics,
             page.Text,
             tabs.Font,
-            new Rectangle(contentLeft, e.Bounds.Top, Math.Max(1, e.Bounds.Right - contentLeft - 6), e.Bounds.Height),
-            Text,
+            new Rectangle(contentLeft, bounds.Top, Math.Max(1, bounds.Right - contentLeft - 6), bounds.Height),
+            selected ? palette.Text : palette.TextMuted,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 
@@ -382,19 +492,285 @@ public static class StorageHubTheme
     }
 
     private static StorageHubPalette PaletteFor(DesktopAppearance appearance) =>
-        appearance == DesktopAppearance.Dark
-            ? new StorageHubPalette(
-                Color.FromArgb(28, 29, 32), Color.FromArgb(37, 39, 43), Color.FromArgb(48, 51, 56),
-                Color.FromArgb(75, 78, 85), Color.FromArgb(238, 239, 242), Color.FromArgb(178, 182, 190),
-                Color.FromArgb(76, 139, 245), Color.FromArgb(54, 102, 166), Color.FromArgb(43, 77, 120),
-                Color.FromArgb(33, 35, 39), Color.FromArgb(111, 115, 122),
-                Color.FromArgb(74, 190, 132), Color.FromArgb(245, 180, 72), Color.FromArgb(244, 105, 112))
-            : new StorageHubPalette(
-                Color.FromArgb(243, 246, 250), Color.White, Color.FromArgb(238, 242, 247),
-                Color.FromArgb(203, 210, 220), Color.FromArgb(32, 37, 45), Color.FromArgb(95, 104, 116),
-                Color.FromArgb(24, 103, 192), Color.FromArgb(218, 232, 250), Color.FromArgb(195, 218, 247),
-                Color.White, Color.FromArgb(145, 151, 160),
-                Color.FromArgb(17, 135, 86), Color.FromArgb(176, 94, 0), Color.FromArgb(190, 45, 55));
+        appearance == DesktopAppearance.Dark ? DarkPalette : LightPalette;
+
+    private static readonly StorageHubPalette DarkPalette = new(
+        Canvas: Color.FromArgb(22, 24, 29),
+        Surface: Color.FromArgb(30, 33, 39),
+        SurfaceMuted: Color.FromArgb(39, 43, 51),
+        Elevated: Color.FromArgb(46, 50, 59),
+        Border: Color.FromArgb(58, 63, 74),
+        Text: Color.FromArgb(232, 234, 240),
+        TextMuted: Color.FromArgb(160, 167, 180),
+        Primary: Color.FromArgb(76, 139, 245),
+        PrimaryHover: Color.FromArgb(107, 160, 248),
+        PrimaryPressed: Color.FromArgb(56, 114, 214),
+        Selection: Color.FromArgb(43, 74, 122),
+        SelectionPressed: Color.FromArgb(35, 57, 92),
+        Input: Color.FromArgb(20, 22, 26),
+        DisabledText: Color.FromArgb(107, 114, 128),
+        Success: Color.FromArgb(74, 190, 132),
+        Warning: Color.FromArgb(240, 176, 69),
+        Danger: Color.FromArgb(244, 105, 111),
+        SuccessTint: Color.FromArgb(27, 47, 39),
+        WarningTint: Color.FromArgb(51, 41, 26),
+        DangerTint: Color.FromArgb(51, 32, 31));
+
+    private static readonly StorageHubPalette LightPalette = new(
+        Canvas: Color.FromArgb(244, 246, 250),
+        Surface: Color.White,
+        SurfaceMuted: Color.FromArgb(237, 241, 247),
+        Elevated: Color.FromArgb(249, 251, 253),
+        Border: Color.FromArgb(211, 218, 228),
+        Text: Color.FromArgb(30, 36, 45),
+        TextMuted: Color.FromArgb(92, 102, 116),
+        Primary: Color.FromArgb(24, 103, 192),
+        PrimaryHover: Color.FromArgb(41, 123, 214),
+        PrimaryPressed: Color.FromArgb(18, 82, 154),
+        Selection: Color.FromArgb(218, 232, 250),
+        SelectionPressed: Color.FromArgb(195, 218, 247),
+        Input: Color.FromArgb(253, 254, 255),
+        DisabledText: Color.FromArgb(146, 154, 165),
+        Success: Color.FromArgb(17, 135, 86),
+        Warning: Color.FromArgb(176, 94, 0),
+        Danger: Color.FromArgb(190, 45, 55),
+        SuccessTint: Color.FromArgb(230, 246, 238),
+        WarningTint: Color.FromArgb(255, 244, 224),
+        DangerTint: Color.FromArgb(253, 236, 236));
+
+    /// <summary>
+    /// Paints a card: a rounded, filled panel with a hairline border, and optionally a coloured
+    /// rail down its leading edge. Callers pass the full client rectangle.
+    /// </summary>
+    public static void PaintCard(Graphics graphics, Rectangle bounds, Color? accent = null)
+    {
+        ArgumentNullException.ThrowIfNull(graphics);
+        if (bounds.Width <= 2 || bounds.Height <= 2)
+        {
+            return;
+        }
+
+        var palette = CurrentPalette;
+        var previousMode = graphics.SmoothingMode;
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        var shape = new RectangleF(bounds.Left + 0.5F, bounds.Top + 0.5F, bounds.Width - 1.5F, bounds.Height - 1.5F);
+        using (var path = UiShapes.RoundedRectangle(shape, 7F))
+        {
+            using var fill = new SolidBrush(palette.Surface);
+            using var outline = new Pen(palette.Border);
+            graphics.FillPath(fill, path);
+            if (accent is { } rail)
+            {
+                var clip = graphics.Clip;
+                graphics.SetClip(path);
+                using var railBrush = new SolidBrush(rail);
+                graphics.FillRectangle(railBrush, bounds.Left, bounds.Top, 3, bounds.Height);
+                graphics.Clip = clip;
+            }
+
+            graphics.DrawPath(outline, path);
+        }
+
+        graphics.SmoothingMode = previousMode;
+    }
+
+    public static Color ToneColor(UiIconTone tone)
+    {
+        var palette = CurrentPalette;
+        return tone switch
+        {
+            UiIconTone.Muted => palette.TextMuted,
+            UiIconTone.Primary => palette.Primary,
+            UiIconTone.OnPrimary => Color.White,
+            UiIconTone.Success => palette.Success,
+            UiIconTone.Warning => palette.Warning,
+            UiIconTone.Danger => palette.Danger,
+            _ => palette.Text
+        };
+    }
+
+    /// <summary>
+    /// Creates an icon and keeps repainting it in the palette's colours. Icons are rasterised once
+    /// with a baked-in colour, so without this a menu that was built in one appearance keeps dark
+    /// glyphs after a switch to dark mode and becomes invisible.
+    /// </summary>
+    public static Bitmap TrackIcon(
+        ToolStripItem item,
+        UiGlyph glyph,
+        int size = 16,
+        UiIconTone tone = UiIconTone.Text,
+        float dpiScale = 1F)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return Track(item, image => item.Image = image, glyph, size, tone, dpiScale);
+    }
+
+    public static Bitmap TrackIcon(
+        ButtonBase button,
+        UiGlyph glyph,
+        int size = 18,
+        UiIconTone tone = UiIconTone.Text,
+        float dpiScale = 1F)
+    {
+        ArgumentNullException.ThrowIfNull(button);
+        return Track(button, image => button.Image = image, glyph, size, tone, dpiScale);
+    }
+
+    public static Bitmap TrackIcon(
+        PictureBox picture,
+        UiGlyph glyph,
+        int size = 20,
+        UiIconTone tone = UiIconTone.Text,
+        float dpiScale = 1F)
+    {
+        ArgumentNullException.ThrowIfNull(picture);
+        return Track(picture, image => picture.Image = image, glyph, size, tone, dpiScale);
+    }
+
+    /// <summary>
+    /// Tracks an icon that is drawn by hand rather than assigned to a control property. The owner
+    /// decides when the icon dies; tracking stops once it is disposed or collected.
+    /// </summary>
+    public static Bitmap TrackIcon(
+        Component owner,
+        Action<Image> apply,
+        UiGlyph glyph,
+        int size,
+        UiIconTone tone = UiIconTone.Text,
+        float dpiScale = 1F)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(apply);
+        return Track(owner, apply, glyph, size, tone, dpiScale);
+    }
+
+    private static readonly List<TrackedIcon> TrackedIcons = [];
+    private static readonly Lock TrackedIconsLock = new();
+
+    private static Bitmap Track(
+        object owner,
+        Action<Image> apply,
+        UiGlyph glyph,
+        int size,
+        UiIconTone tone,
+        float dpiScale)
+    {
+        var image = UiIconFactory.Create(glyph, ToneColor(tone), size, dpiScale);
+        apply(image);
+        lock (TrackedIconsLock)
+        {
+            TrackedIcons.Add(new TrackedIcon(new WeakReference<object>(owner), apply, glyph, size, tone, dpiScale)
+            {
+                Current = image
+            });
+        }
+
+        return image;
+    }
+
+    private static void RefreshTrackedIcons()
+    {
+        TrackedIcon[] pending;
+        lock (TrackedIconsLock)
+        {
+            TrackedIcons.RemoveAll(static tracked => !tracked.IsAlive);
+            pending = [.. TrackedIcons];
+        }
+
+        foreach (var tracked in pending)
+        {
+            var replacement = UiIconFactory.Create(
+                tracked.Glyph,
+                ToneColor(tracked.Tone),
+                tracked.Size,
+                tracked.DpiScale);
+            var previous = tracked.Current;
+            tracked.Apply(replacement);
+            tracked.Current = replacement;
+            previous?.Dispose();
+        }
+    }
+
+    private sealed class TrackedIcon(
+        WeakReference<object> owner,
+        Action<Image> apply,
+        UiGlyph glyph,
+        int size,
+        UiIconTone tone,
+        float dpiScale)
+    {
+        public Action<Image> Apply { get; } = apply;
+        public UiGlyph Glyph { get; } = glyph;
+        public int Size { get; } = size;
+        public UiIconTone Tone { get; } = tone;
+        public float DpiScale { get; } = dpiScale;
+        public Image? Current { get; set; }
+
+        public bool IsAlive => owner.TryGetTarget(out var target) && target switch
+        {
+            Control control => !control.IsDisposed,
+            ToolStripItem item => !item.IsDisposed,
+            _ => true
+        };
+    }
+
+    /// <summary>
+    /// Asks the shell to paint a native control's scrollbars, headers, and borders in the dark
+    /// palette. WinForms leaves these to comctl32, which otherwise draws a light scrollbar track
+    /// and a bright header gutter inside an otherwise dark window.
+    /// </summary>
+    internal static void ApplyNativeChrome(Control control)
+    {
+        if (!OperatingSystem.IsWindows() || !control.IsHandleCreated)
+        {
+            control.HandleCreated -= NativeChromeHandleCreated;
+            control.HandleCreated += NativeChromeHandleCreated;
+            return;
+        }
+
+        var dark = EffectiveAppearance == DesktopAppearance.Dark;
+        var theme = control switch
+        {
+            TextBoxBase or ComboBox or NumericUpDown or DateTimePicker => dark ? "DarkMode_CFD" : "Explorer",
+            _ => dark ? "DarkMode_Explorer" : "Explorer"
+        };
+
+        try
+        {
+            _ = SetWindowTheme(control.Handle, theme, null);
+            foreach (Control child in control.Controls)
+            {
+                if (child.IsHandleCreated)
+                {
+                    _ = SetWindowTheme(child.Handle, theme, null);
+                }
+            }
+
+            if (control is ListView)
+            {
+                // The column header is a comctl32 window rather than a WinForms child, so it is
+                // not reached by walking Controls. Owner drawing covers the header cells but not
+                // the gap past the last column, which stayed a bright block in dark mode.
+                var header = SendMessage(control.Handle, LvmGetHeader, IntPtr.Zero, IntPtr.Zero);
+                if (header != IntPtr.Zero)
+                {
+                    _ = SetWindowTheme(header, theme, null);
+                }
+            }
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // An older shell without the dark-mode theme classes keeps the light chrome.
+        }
+    }
+
+    private static void NativeChromeHandleCreated(object? sender, EventArgs e)
+    {
+        if (sender is Control control)
+        {
+            ApplyNativeChrome(control);
+        }
+    }
 
     private static void ApplyDarkTitleBar(Form form, bool enabled)
     {
@@ -421,6 +797,14 @@ public static class StorageHubTheme
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int valueSize);
 
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hwnd, string? appName, string? idList);
+
+    private const int LvmGetHeader = 0x1000 + 31;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
+
     public static Color ParseAccent(string accentHex)
     {
         if (string.IsNullOrWhiteSpace(accentHex))
@@ -431,217 +815,64 @@ public static class StorageHubTheme
         return ColorTranslator.FromHtml(accentHex);
     }
 
+    /// <summary>
+    /// Blends an accent towards the current surface. Hard-coding an alpha over an unknown
+    /// background produced badge fills that vanished in one appearance and glared in the other.
+    /// </summary>
+    public static Color Tint(Color accent, double strength)
+    {
+        var clamped = Math.Clamp(strength, 0D, 1D);
+        var surface = Surface;
+        return Color.FromArgb(
+            (int)Math.Round((accent.R * clamped) + (surface.R * (1 - clamped))),
+            (int)Math.Round((accent.G * clamped) + (surface.G * (1 - clamped))),
+            (int)Math.Round((accent.B * clamped) + (surface.B * (1 - clamped))));
+    }
+
+    /// <summary>
+    /// Picks black or white text for an arbitrary accent fill, so provider badges stay readable
+    /// whatever colour a profile chose.
+    /// </summary>
+    public static Color ContrastText(Color background)
+    {
+        static double Channel(int value)
+        {
+            var normalized = value / 255D;
+            return normalized <= 0.03928D
+                ? normalized / 12.92D
+                : Math.Pow((normalized + 0.055D) / 1.055D, 2.4D);
+        }
+
+        var luminance = (0.2126D * Channel(background.R))
+            + (0.7152D * Channel(background.G))
+            + (0.0722D * Channel(background.B));
+        // 0.179 is where black and white reach the same contrast ratio against a background, so
+        // it is the crossover that keeps a mid-tone accent such as amber readable.
+        return luminance > 0.179D ? Color.FromArgb(24, 26, 30) : Color.White;
+    }
 }
 
 internal readonly record struct StorageHubPalette(
     Color Canvas,
     Color Surface,
     Color SurfaceMuted,
+    Color Elevated,
     Color Border,
     Color Text,
     Color TextMuted,
     Color Primary,
+    Color PrimaryHover,
+    Color PrimaryPressed,
     Color Selection,
     Color SelectionPressed,
     Color Input,
     Color DisabledText,
     Color Success,
     Color Warning,
-    Color Danger);
-
-public enum UiGlyph
-{
-    Add,
-    Connections,
-    Back,
-    Forward,
-    Up,
-    Refresh,
-    Compare,
-    Run,
-    Pause,
-    Search,
-    Folder,
-    File,
-    Save,
-    Delete,
-    Test,
-    Terminal,
-    Lock,
-    Warning,
-    More,
-    Home,
-    Settings,
-    Info
-}
-
-public static class UiIconFactory
-{
-    public static Bitmap Create(UiGlyph glyph, Color color, int logicalSize = 20, float dpiScale = 1F)
-    {
-        ArgumentOutOfRangeException.ThrowIfLessThan(logicalSize, 12);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dpiScale, 0F);
-        var pixelSize = Math.Max(12, (int)Math.Round(logicalSize * dpiScale, MidpointRounding.AwayFromZero));
-        var bitmap = new Bitmap(pixelSize, pixelSize);
-        bitmap.SetResolution(96F * dpiScale, 96F * dpiScale);
-
-        using var graphics = Graphics.FromImage(bitmap);
-        graphics.Clear(Color.Transparent);
-        graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        graphics.ScaleTransform(pixelSize / 24F, pixelSize / 24F);
-        using var pen = new Pen(color, 1.9F)
-        {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round,
-            LineJoin = LineJoin.Round
-        };
-        using var brush = new SolidBrush(color);
-        DrawGlyph(graphics, pen, brush, glyph);
-        return bitmap;
-    }
-
-    private static void DrawGlyph(Graphics graphics, Pen pen, Brush brush, UiGlyph glyph)
-    {
-        switch (glyph)
-        {
-            case UiGlyph.Add:
-                graphics.DrawLine(pen, 12, 5, 12, 19);
-                graphics.DrawLine(pen, 5, 12, 19, 12);
-                break;
-            case UiGlyph.Connections:
-                graphics.DrawArc(pen, 3, 5, 8, 10, -75, 150);
-                graphics.DrawArc(pen, 13, 9, 8, 10, 105, 150);
-                graphics.DrawLine(pen, 9, 9, 15, 15);
-                break;
-            case UiGlyph.Back:
-                DrawChevron(graphics, pen, false);
-                graphics.DrawLine(pen, 6, 12, 19, 12);
-                break;
-            case UiGlyph.Forward:
-                DrawChevron(graphics, pen, true);
-                graphics.DrawLine(pen, 5, 12, 18, 12);
-                break;
-            case UiGlyph.Up:
-                graphics.DrawLines(pen, [new PointF(6, 12), new PointF(12, 6), new PointF(18, 12)]);
-                graphics.DrawLine(pen, 12, 6, 12, 19);
-                break;
-            case UiGlyph.Refresh:
-                graphics.DrawArc(pen, 4, 4, 16, 16, -35, 285);
-                graphics.DrawLines(pen, [new PointF(17, 4), new PointF(20, 4), new PointF(20, 7)]);
-                break;
-            case UiGlyph.Compare:
-                graphics.DrawLine(pen, 4, 8, 18, 8);
-                graphics.DrawLines(pen, [new PointF(15, 5), new PointF(18, 8), new PointF(15, 11)]);
-                graphics.DrawLine(pen, 20, 16, 6, 16);
-                graphics.DrawLines(pen, [new PointF(9, 13), new PointF(6, 16), new PointF(9, 19)]);
-                break;
-            case UiGlyph.Run:
-                graphics.FillPolygon(brush, [new PointF(7, 4), new PointF(19, 12), new PointF(7, 20)]);
-                break;
-            case UiGlyph.Pause:
-                graphics.FillRectangle(brush, 6, 5, 4, 14);
-                graphics.FillRectangle(brush, 14, 5, 4, 14);
-                break;
-            case UiGlyph.Search:
-                graphics.DrawEllipse(pen, 4, 4, 11, 11);
-                graphics.DrawLine(pen, 14, 14, 20, 20);
-                break;
-            case UiGlyph.Folder:
-                using (var path = new GraphicsPath())
-                {
-                    path.AddLines([new PointF(3, 7), new PointF(10, 7), new PointF(12, 9), new PointF(21, 9), new PointF(19, 19), new PointF(3, 19)]);
-                    path.CloseFigure();
-                    graphics.DrawPath(pen, path);
-                }
-                break;
-            case UiGlyph.File:
-                graphics.DrawLines(pen,
-                [
-                    new PointF(6, 3),
-                    new PointF(15, 3),
-                    new PointF(19, 7),
-                    new PointF(19, 21),
-                    new PointF(6, 21),
-                    new PointF(6, 3)
-                ]);
-                graphics.DrawLines(pen,
-                [
-                    new PointF(15, 3),
-                    new PointF(15, 7),
-                    new PointF(19, 7)
-                ]);
-                break;
-            case UiGlyph.Save:
-                graphics.DrawRectangle(pen, 5, 4, 14, 16);
-                graphics.DrawRectangle(pen, 8, 4, 8, 5);
-                graphics.DrawRectangle(pen, 8, 14, 8, 6);
-                break;
-            case UiGlyph.Delete:
-                graphics.DrawLine(pen, 5, 7, 19, 7);
-                graphics.DrawLine(pen, 9, 4, 15, 4);
-                graphics.DrawRectangle(pen, 7, 7, 10, 13);
-                graphics.DrawLine(pen, 10, 10, 10, 17);
-                graphics.DrawLine(pen, 14, 10, 14, 17);
-                break;
-            case UiGlyph.Test:
-                graphics.DrawEllipse(pen, 4, 4, 16, 16);
-                graphics.DrawLines(pen, [new PointF(8, 12), new PointF(11, 15), new PointF(17, 8)]);
-                break;
-            case UiGlyph.Terminal:
-                graphics.DrawRectangle(pen, 3, 5, 18, 14);
-                graphics.DrawLines(pen, [new PointF(7, 9), new PointF(10, 12), new PointF(7, 15)]);
-                graphics.DrawLine(pen, 12, 15, 17, 15);
-                break;
-            case UiGlyph.Lock:
-                graphics.DrawRectangle(pen, 5, 10, 14, 10);
-                graphics.DrawArc(pen, 8, 3, 8, 12, 180, 180);
-                break;
-            case UiGlyph.Warning:
-                graphics.DrawPolygon(pen, [new PointF(12, 3), new PointF(21, 20), new PointF(3, 20)]);
-                graphics.DrawLine(pen, 12, 8, 12, 14);
-                graphics.FillEllipse(brush, 11, 16, 2, 2);
-                break;
-            case UiGlyph.More:
-                graphics.FillEllipse(brush, 4, 10, 3, 3);
-                graphics.FillEllipse(brush, 10.5F, 10, 3, 3);
-                graphics.FillEllipse(brush, 17, 10, 3, 3);
-                break;
-            case UiGlyph.Home:
-                graphics.DrawLines(pen, [new PointF(3, 11), new PointF(12, 4), new PointF(21, 11)]);
-                graphics.DrawLines(pen, [new PointF(6, 10), new PointF(6, 20), new PointF(18, 20), new PointF(18, 10)]);
-                graphics.DrawRectangle(pen, 10, 14, 4, 6);
-                break;
-            case UiGlyph.Settings:
-                graphics.DrawEllipse(pen, 8, 8, 8, 8);
-                graphics.DrawEllipse(pen, 4, 4, 16, 16);
-                graphics.DrawLine(pen, 12, 2, 12, 5);
-                graphics.DrawLine(pen, 12, 19, 12, 22);
-                graphics.DrawLine(pen, 2, 12, 5, 12);
-                graphics.DrawLine(pen, 19, 12, 22, 12);
-                break;
-            case UiGlyph.Info:
-                graphics.DrawEllipse(pen, 4, 4, 16, 16);
-                graphics.DrawLine(pen, 12, 10, 12, 17);
-                graphics.FillEllipse(brush, 11, 7, 2, 2);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(glyph), glyph, "Unknown UI glyph.");
-        }
-    }
-
-    private static void DrawChevron(Graphics graphics, Pen pen, bool pointsRight)
-    {
-        if (pointsRight)
-        {
-            graphics.DrawLines(pen, [new PointF(13, 6), new PointF(19, 12), new PointF(13, 18)]);
-        }
-        else
-        {
-            graphics.DrawLines(pen, [new PointF(11, 6), new PointF(5, 12), new PointF(11, 18)]);
-        }
-    }
-}
+    Color Danger,
+    Color SuccessTint,
+    Color WarningTint,
+    Color DangerTint);
 
 internal static class UiControlFactory
 {

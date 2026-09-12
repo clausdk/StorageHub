@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop.Tests;
@@ -77,9 +77,23 @@ public sealed class ShellWiringTests
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .Select(name => name!)
                 .ToArray();
-            Assert.Equal(
-                ["New workspace", "Connection Manager"],
-                toolbarActions);
+
+            // Most toolbar buttons forward to a menu entry; the two shell actions are wired
+            // directly. Anything else on the strip would be a button with nothing behind it.
+            string[] directActions = ["New workspace", "Connection Manager"];
+            Assert.All(toolbarActions, action => Assert.True(
+                directActions.Contains(action) || labels.Contains(action),
+                $"Toolbar action '{action}' does not match a shell handler or a live menu command."));
+            Assert.Contains("New workspace", toolbarActions);
+            Assert.Contains("Connection Manager", toolbarActions);
+            Assert.Contains("Refresh", toolbarActions);
+            Assert.Contains("Delete", toolbarActions);
+
+            // Commands the shell does not implement yet are absent from the menus, so their
+            // toolbar buttons must not appear either.
+            Assert.DoesNotContain("Compare Panes", toolbarActions);
+            Assert.All(toolbar.Items.Cast<ToolStripItem>().OfType<ToolStripButton>(), button =>
+                Assert.NotNull(button.Image));
         });
     }
 
@@ -412,7 +426,9 @@ public sealed class ShellWiringTests
     {
         var field = instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(field);
-        return Assert.IsType<T>(field.GetValue(instance));
+        // Assignable rather than exact: the shell swaps in themed subclasses of the stock
+        // controls, and this helper only cares that the field holds one.
+        return Assert.IsAssignableFrom<T>(field.GetValue(instance));
     }
 
     private sealed class FakeStorageClient : IRemoteStorageAgentClient
