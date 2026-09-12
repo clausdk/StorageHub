@@ -170,7 +170,15 @@ outbox. Schema v2 adds scheduler CAS/lease/fencing/queue/outcome state; schema v
 adds immutable transfer intents plus transfer revision/retry/lease metadata;
 schema v4 adds immutable lease-keyed scheduler completion records; schemas v5-v7
 add sync durability, orchestration, and fenced execution; and schema v8 adds
-portable checksum evidence plus digest-schema tracking.
+portable checksum evidence plus digest-schema tracking. Schemas v9-v11 carry
+neutral sync policy, bind each copy to whether its destination existed in the
+approved snapshot so one plan can mix atomic creates with conditional
+overwrites, and record the fail-closed policy for non-atomic FTP/SFTP writes.
+Schema v12 lets durable intents address agent-owned root-validated local
+endpoints that are not saved profiles. Schemas v13-v14 replace the credential
+reference placeholder with the shared key and certificate store, whose bindings
+block deletion while a profile still uses an entry, and allow a PKCS#12 bundle
+to carry no passphrase while SSH keys still require one.
 
 Connection-profile and trust repositories use optimistic versions. Trust
 rollover revokes the old identity and inserts the verified replacement in one

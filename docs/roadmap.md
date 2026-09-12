@@ -90,10 +90,13 @@ Unicode, large-object, and hostile-identity tests pass.
   manifests, explicit symbolic-link rejection, collision validation, empty-folder
   creation, and restartable per-file children. Local/ad-hoc sources and durable
   dependency-aware folder moves remain planned.
-- Create folder, rename, duplicate, delete, trash/restore where supported, batch
-  rename, checksums, compare panes, and conflict-resolution workflows.
-- Local shell integration, drag/drop, clipboard formats, Open With, properties,
-  hidden-file policy, and long-path-aware navigation.
+- Implemented: create folder, create empty file, rename, batch rename, delete
+  with confirmation, and read-only properties.
+- Duplicate, trash/restore where supported, checksums, compare panes, and
+  conflict-resolution workflows.
+- Implemented: Explorer drag and drop in both directions through a native broker.
+- Clipboard formats, Open With, hidden-file policy, and long-path-aware
+  navigation.
 - Bounded metadata index for search, saved searches, duplicate discovery, and
   content-independent filtering. Pane filtering must not be mislabeled as remote
   provider search.
@@ -110,8 +113,12 @@ Unicode, large-object, and hostile-identity tests pass.
   without atomic conditions remain preview/create-only.
 - Retry/backoff, no-overlap/queue-one, missed-run policy, battery/network rules,
   Windows startup/service options, and auditable run history.
-- Import/export of non-secret connection and task definitions; secret migration is
-  an explicit protected workflow.
+- Implemented: import/export of non-secret connection, sync task, and schedule
+  definitions with optional password protection. Credentials never travel — the
+  vault is bound to one Windows account — so a file recognized as foreign by its
+  machine fingerprint brings those connections in disabled and tagged rather
+  than appearing ready and failing at first connect. Secret migration remains an
+  explicit protected workflow.
 
 ### 7. Production readiness
 

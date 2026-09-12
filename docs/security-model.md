@@ -167,6 +167,14 @@ runtime IAM identity.
   outbox, and fenced execution state. Schema v8 records portable checksum
   evidence and plan digest-schema versions while keeping legacy plan/intent
   readers bounded and explicit.
+- Schema v10 binds each copy operation to whether its destination existed in the
+  approved snapshot, so a single plan mixes atomic creates and conditional
+  overwrites without weakening either. Schema v11 records the explicit
+  fail-closed policy for providers that cannot write atomically.
+- Schemas v13-v14 hold the shared key and certificate store. Bindings use
+  `ON DELETE RESTRICT`, so an entry cannot be deleted while a profile still
+  references it, and only the private material's reference — never the material
+  — is stored alongside the metadata.
 
 The Windows host composes the transfer worker, sync outbox worker, and scheduler.
 Manual enqueue treats the transfer ID as an idempotency key: after a lost
