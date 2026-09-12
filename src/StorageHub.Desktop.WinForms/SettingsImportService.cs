@@ -21,9 +21,17 @@ internal sealed record SettingsImportReport(
     IReadOnlyDictionary<SettingsSectionId, string> Blocked,
     string? BackupPath,
     bool ConcurrencyChanged,
-    string? Failure)
+    string? Failure,
+    SettingsAgentImportResult? Agent = null)
 {
     internal bool Succeeded => Failure is null;
+
+    /// <summary>
+    /// Connections that arrived without working credentials. Listed so the user is told plainly
+    /// rather than discovering it the first time one fails to connect.
+    /// </summary>
+    internal IReadOnlyList<string> NeedsCredentials =>
+        [.. (Agent?.Connections ?? []).Where(item => item.NeedsCredentials).Select(item => item.Name)];
 }
 
 /// <summary>
@@ -46,13 +54,16 @@ internal sealed class SettingsImportService
     private readonly SettingsExportService _exporter;
     private readonly string _backupDirectory;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly SettingsAgentClients? _agent;
 
     internal SettingsImportService(
         DesktopUpdatePreferencesStore store,
         SettingsExportService exporter,
         string backupDirectory,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        SettingsAgentClients? agent = null)
     {
+        _agent = agent;
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _exporter = exporter ?? throw new ArgumentNullException(nameof(exporter));
         ArgumentException.ThrowIfNullOrWhiteSpace(backupDirectory);
@@ -158,21 +169,33 @@ internal sealed class SettingsImportService
     }
 
     /// <summary>
-    /// Applies the chosen desktop sections, after saving what is there now.
+    /// Applies the chosen sections, after saving what is there now.
     ///
     /// The backup is written first and unconditionally: it is the only way back from an import the
     /// user regrets, and producing it with the exporter means the import wizard can read it again.
+    ///
+    /// Desktop settings are saved last. The agent-backed writes go one item at a time over a pipe
+    /// with no transaction spanning them, so if those fail the local settings file is still
+    /// untouched and the backup still describes a coherent starting point.
     /// </summary>
-    internal SettingsImportReport Apply(
+    internal async Task<SettingsImportReport> ApplyAsync(
         SettingsExportDocument document,
-        IReadOnlyCollection<SettingsSectionId> chosen)
+        IReadOnlyCollection<SettingsSectionId> chosen,
+        SettingsConflictPolicy policy = SettingsConflictPolicy.Skip,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(chosen);
 
         var current = _store.Load();
         var result = DesktopPreferenceSectionMapper.Apply(current, document, chosen);
-        if (result.Applied.Count == 0)
+        var agentSections = chosen
+            .Where(id => SettingsSectionCatalog.Get(id).RequiresAgent)
+            .Where(id => document.PresentSections().Contains(id))
+            .ToArray();
+        var hasAgentWork = agentSections.Length > 0 && _agent is not null;
+
+        if (result.Applied.Count == 0 && !hasAgentWork)
         {
             // Nothing to write, so nothing to back up either.
             return new SettingsImportReport(
@@ -180,27 +203,74 @@ internal sealed class SettingsImportService
         }
 
         var backupPath = TryWriteBackup();
-        try
+        var blocked = new Dictionary<SettingsSectionId, string>(result.Blocked);
+        var applied = new HashSet<SettingsSectionId>(result.Applied);
+        var agentResult = SettingsAgentImportResult.Empty;
+
+        if (hasAgentWork)
         {
-            _store.Save(result.Preferences);
+            try
+            {
+                agentResult = await SettingsAgentTransfer.ApplyAsync(
+                    document,
+                    agentSections,
+                    _agent!,
+                    policy,
+                    SettingsExportFingerprint.MatchesThisMachine(document.MachineFingerprint),
+                    cancellationToken).ConfigureAwait(false);
+                foreach (var id in agentSections)
+                {
+                    _ = applied.Add(id);
+                }
+            }
+            catch (Exception error) when (error is InvalidOperationException or IOException or
+                TimeoutException or OperationCanceledException)
+            {
+                // The agent went away mid-import. Whatever it already wrote stands, and the
+                // desktop settings below are still applied, so the user is left with a coherent
+                // partial result and a clear reason rather than a silent half-import.
+                foreach (var id in agentSections)
+                {
+                    blocked[id] = $"The background agent could not be reached. {error.Message}";
+                }
+            }
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
-            ArgumentException or NotSupportedException)
+        else if (agentSections.Length > 0)
         {
-            return new SettingsImportReport(
-                new HashSet<SettingsSectionId>(),
-                result.Blocked,
-                backupPath,
-                ConcurrencyChanged: false,
-                $"StorageHub could not save the imported settings. {error.Message}");
+            foreach (var id in agentSections)
+            {
+                blocked[id] = "The background agent is not running.";
+            }
+        }
+
+        if (result.Applied.Count > 0)
+        {
+            try
+            {
+                _store.Save(result.Preferences);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+                ArgumentException or NotSupportedException)
+            {
+                // Agent sections that already landed are still reported as applied; only the
+                // desktop half failed.
+                return new SettingsImportReport(
+                    applied.Where(id => SettingsSectionCatalog.Get(id).RequiresAgent).ToHashSet(),
+                    blocked,
+                    backupPath,
+                    ConcurrencyChanged: false,
+                    $"StorageHub could not save the imported settings. {error.Message}",
+                    agentResult);
+            }
         }
 
         return new SettingsImportReport(
-            result.Applied,
-            result.Blocked,
+            applied,
+            blocked,
             backupPath,
             ConcurrencyDiffers(current, result.Preferences),
-            null);
+            null,
+            agentResult);
     }
 
     /// <summary>

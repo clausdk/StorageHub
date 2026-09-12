@@ -139,6 +139,12 @@ internal sealed class DesktopUpdatePreferencesStore
         _filePath = Path.GetFullPath(filePath);
     }
 
+    /// <summary>
+    /// Where these settings live. Exposed so the import backup lands beside them rather than in a
+    /// second location the two would have to agree on.
+    /// </summary>
+    internal string FilePath => _filePath;
+
     internal static DesktopUpdatePreferencesStore CreateDefault()
     {
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);

@@ -121,7 +121,7 @@ public sealed class SettingsImportServiceTests : IDisposable
                 DesktopUpdatePreferences.Defaults with { Appearance = DesktopAppearance.Light })
         };
 
-        var report = fixture.Importer.Apply(document, [SettingsSectionId.DesktopGeneral]);
+        var report = ApplyNow(fixture.Importer, document, [SettingsSectionId.DesktopGeneral]);
 
         Assert.True(report.Succeeded);
         Assert.Equal(DesktopAppearance.Light, fixture.Store.Load().Appearance);
@@ -138,7 +138,7 @@ public sealed class SettingsImportServiceTests : IDisposable
         var fixture = Fixture();
         fixture.Store.Save(DesktopUpdatePreferences.Defaults with { Appearance = DesktopAppearance.Dark });
 
-        var report = fixture.Importer.Apply(
+        var report = ApplyNow(fixture.Importer, 
             SettingsExportSerializer.Create(DateTimeOffset.UnixEpoch, "StorageHub", null), Everything);
 
         Assert.True(report.Succeeded);
@@ -173,10 +173,10 @@ public sealed class SettingsImportServiceTests : IDisposable
                 DesktopUpdatePreferences.Defaults with { MaximumTransferConcurrency = 7 })
         };
 
-        var report = fixture.Importer.Apply(document, [SettingsSectionId.DesktopGeneral]);
+        var report = ApplyNow(fixture.Importer, document, [SettingsSectionId.DesktopGeneral]);
 
         Assert.True(report.ConcurrencyChanged);
-        Assert.False(fixture.Importer.Apply(document, [SettingsSectionId.DesktopGeneral]).ConcurrencyChanged);
+        Assert.False(ApplyNow(fixture.Importer, document, [SettingsSectionId.DesktopGeneral]).ConcurrencyChanged);
     }
 
     [Fact]
@@ -210,6 +210,16 @@ public sealed class SettingsImportServiceTests : IDisposable
         Assert.Contains(SettingsSectionId.Connections, expanded);
         Assert.NotNull(fixture.Exporter.Capture([SettingsSectionId.Schedules]));
     }
+
+    /// <summary>
+    /// Applying is asynchronous because the agent-backed sections cross a pipe. These tests cover
+    /// the desktop half, which never awaits anything real.
+    /// </summary>
+    private static SettingsImportReport ApplyNow(
+        SettingsImportService importer,
+        SettingsExportDocument document,
+        IReadOnlyCollection<SettingsSectionId> chosen) =>
+        importer.ApplyAsync(document, chosen).GetAwaiter().GetResult();
 
     private static IReadOnlyCollection<SettingsSectionId> Everything => [.. Enum.GetValues<SettingsSectionId>()];
 

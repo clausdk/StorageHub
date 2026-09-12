@@ -977,6 +977,12 @@ public sealed class MainForm : Form
                         await ApplyConcurrencySettingsAsync();
                     }
                     break;
+                case "Export Settings...":
+                    ShowSettingsExport();
+                    break;
+                case "Import Settings...":
+                    await ShowSettingsImportAsync();
+                    break;
                 case "Check for Updates...":
                     ShowUpdateChecker();
                     break;
@@ -1570,6 +1576,84 @@ public sealed class MainForm : Form
         _ = dialog.ShowDialog(this);
     }
 
+    /// <summary>
+    /// Opens the four agent clients a settings transfer needs. Connections, sync tasks and
+    /// schedules each live behind their own contract, and all of them are non-secret: credentials
+    /// travel on a separate write-only pipe that is deliberately not opened here.
+    /// </summary>
+    private static SettingsAgentClients CreateSettingsAgentClients() => new(
+        new NamedPipeRemoteStorageAgentClient(),
+        new NamedPipeRemoteConnectionProfileClient(),
+        new NamedPipeSyncManagementAgentClient(),
+        new NamedPipeScheduleManagementAgentClient());
+
+    private static void DisposeSettingsAgentClients(SettingsAgentClients clients)
+    {
+        _ = clients.Storage.DisposeAsync().AsTask();
+        _ = clients.Profiles.DisposeAsync().AsTask();
+        _ = clients.Sync.DisposeAsync().AsTask();
+        _ = clients.Schedules.DisposeAsync().AsTask();
+    }
+
+    private void ShowSettingsExport()
+    {
+        var clients = CreateSettingsAgentClients();
+        try
+        {
+            using var dialog = new SettingsExportForm(
+                new SettingsExportService(_updatePreferencesStore, clients));
+            if (dialog.ShowDialog(this) == DialogResult.OK && dialog.ExportedPath is { } path)
+            {
+                _locationStatus.Text = $"Settings exported to {Path.GetFileName(path)}.";
+            }
+        }
+        finally
+        {
+            DisposeSettingsAgentClients(clients);
+        }
+    }
+
+    private async Task ShowSettingsImportAsync()
+    {
+        var clients = CreateSettingsAgentClients();
+        SettingsImportReport? report;
+        try
+        {
+            var exporter = new SettingsExportService(_updatePreferencesStore, clients);
+            var importer = new SettingsImportService(
+                _updatePreferencesStore,
+                exporter,
+                SettingsImportService.DefaultBackupDirectory(_updatePreferencesStore.FilePath),
+                clock: null,
+                agent: clients);
+
+            using var dialog = new SettingsImportForm(importer);
+            _ = dialog.ShowDialog(this);
+            report = dialog.Report;
+        }
+        finally
+        {
+            DisposeSettingsAgentClients(clients);
+        }
+
+        if (report is null || !report.Succeeded || report.Applied.Count == 0) return;
+
+        // Imported settings are live everywhere the shell reads them, so refresh what is already
+        // on screen rather than waiting for the next restart.
+        var preferences = _updatePreferencesStore.Load();
+        DesktopAppearanceService.SetAppearance(preferences.Appearance);
+        _updater.SavePreferences(preferences);
+        RefreshShortcutPresentation();
+        PublishWorkspaceShortcuts(preferences);
+        UpdateWorkspaceCommandState();
+        _locationStatus.Text = "Settings imported.";
+
+        if (report.ConcurrencyChanged)
+        {
+            await ApplyConcurrencySettingsAsync();
+        }
+    }
+
     private void ShowAgentControl()
     {
         using var dialog = new AgentControlForm(
@@ -1662,6 +1746,8 @@ public sealed class MainForm : Form
         "Sync Profiles..." or
         "Schedules..." or
         "Settings..." or
+        "Export Settings..." or
+        "Import Settings..." or
         "Check for Updates..." or
         "About StorageHub";
 

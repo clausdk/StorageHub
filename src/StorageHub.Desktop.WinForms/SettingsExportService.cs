@@ -5,8 +5,8 @@ namespace StorageHub.Desktop;
 /// <summary>
 /// Builds export documents and writes them to disk, with or without a password.
 ///
-/// Reading the agent-backed sections is not here yet; this covers the four desktop sections and
-/// the file writing both halves of the feature share.
+/// Desktop sections are read straight from the settings store; the ones the agent owns come from
+/// <see cref="SettingsAgentTransfer"/> over the pipe, which is why capturing everything is async.
 /// </summary>
 internal sealed class SettingsExportService
 {
@@ -14,13 +14,16 @@ internal sealed class SettingsExportService
     private readonly Func<DateTimeOffset> _clock;
     private readonly Func<string> _application;
     private readonly Func<string?> _fingerprint;
+    private readonly SettingsAgentClients? _agent;
 
     internal SettingsExportService(
         DesktopUpdatePreferencesStore store,
+        SettingsAgentClients? agent = null,
         Func<DateTimeOffset>? clock = null,
         Func<string>? application = null,
         Func<string?>? fingerprint = null)
     {
+        _agent = agent;
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _application = application ?? (() => $"StorageHub {DesktopApplicationVersion.Current}");
@@ -30,6 +33,8 @@ internal sealed class SettingsExportService
     /// <summary>
     /// Captures the chosen desktop sections. Dependencies are expanded first, so a file can never
     /// describe something it does not also carry what is needed to rebuild.
+    ///
+    /// Desktop sections only; <see cref="CaptureAsync"/> adds the ones the agent owns.
     /// </summary>
     internal SettingsExportDocument Capture(IReadOnlyCollection<SettingsSectionId> chosen)
     {
@@ -69,6 +74,29 @@ internal sealed class SettingsExportService
 
         return document;
     }
+
+    /// <summary>
+    /// Captures everything chosen, including the sections the agent owns.
+    ///
+    /// Agent sections are only reachable when a client bundle was supplied, so a shell running
+    /// without the agent exports what it can rather than failing outright.
+    /// </summary>
+    internal async Task<SettingsExportDocument> CaptureAsync(
+        IReadOnlyCollection<SettingsSectionId> chosen,
+        CancellationToken cancellationToken = default)
+    {
+        var document = Capture(chosen);
+        if (_agent is null) return document;
+
+        return await SettingsAgentTransfer.CaptureAsync(
+            document,
+            SettingsSectionCatalog.ExpandForExport(chosen),
+            _agent,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Whether the agent-backed sections can be read at all.</summary>
+    internal bool CanReachAgent => _agent is not null;
 
     /// <summary>
     /// Writes a document to <paramref name="path"/>, sealed when a password is given.
