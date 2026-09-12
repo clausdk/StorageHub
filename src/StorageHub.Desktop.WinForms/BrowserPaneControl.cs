@@ -38,6 +38,7 @@ public sealed class BrowserPaneControl : UserControl
     private readonly Func<Guid, string, SshTerminalForm> _sshTerminalFactory;
     private readonly ComboBox _connectionSelector;
     private readonly Button _connectionButton;
+    private ConnectionPickerPopup? _connectionPicker;
     private readonly ToolStrip _navigation;
     private readonly ToolStripButton _backButton;
     private readonly ToolStripButton _forwardButton;
@@ -1041,6 +1042,8 @@ public sealed class BrowserPaneControl : UserControl
             _fileList.ItemDrag -= FileListItemDrag;
             _fileList.SelectedIndexChanged -= FileSelectionChanged;
             _fileList.MouseDown -= FileListMouseDown;
+            _connectionPicker?.Dispose();
+            _connectionPicker = null;
             UnconfigureDropTarget(_fileList);
             UnconfigureDropTarget(_emptyStateOverlay);
             UnconfigureDropTarget(_emptyStateLabel);
@@ -3435,12 +3438,17 @@ public sealed class BrowserPaneControl : UserControl
             return;
         }
 
-        var popup = new ConnectionPickerPopup(
+        // The popup is kept in a field and replaced on the next open rather than disposed from
+        // its own Closed event: WinForms' modal menu filter still holds the drop-down after it
+        // closes and calls SetVisibleCore on it, which recreates the handle and throws
+        // ObjectDisposedException when the instance has already been disposed.
+        var previous = _connectionPicker;
+        _connectionPicker = new ConnectionPickerPopup(
             cards,
             _connectionSelector.SelectedItem as ConnectionCardModel,
             GetConnectionGroupLabel,
             Math.Max(_connectionButton.Width, 340));
-        popup.ConnectionChosen += (_, chosen) =>
+        _connectionPicker.ConnectionChosen += (_, chosen) =>
         {
             var index = _connectionSelector.Items.IndexOf(chosen);
             if (index >= 0)
@@ -3448,8 +3456,8 @@ public sealed class BrowserPaneControl : UserControl
                 _connectionSelector.SelectedIndex = index;
             }
         };
-        popup.Closed += (_, _) => popup.Dispose();
-        popup.Show(_connectionButton, new Point(0, _connectionButton.Height));
+        previous?.Dispose();
+        _connectionPicker.Show(_connectionButton, new Point(0, _connectionButton.Height));
     }
 
     private bool IsFirstConnectionInGroup(int index) => index == 0 ||
