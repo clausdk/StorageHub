@@ -462,31 +462,66 @@ public sealed class WorkspacePaneEventArgs(Guid paneId, BrowserPaneControl pane)
 
 internal sealed class NewWorkspaceForm : Form
 {
+    private const int Columns = 3;
+
     private readonly CheckBox _remember;
+    private readonly List<Bitmap> _previews = [];
 
     internal NewWorkspaceForm(WorkspaceLayout layout)
     {
         Text = "New Workspace";
-        AccessibleName = "New workspace pane chooser";
+        AccessibleName = "New workspace layout chooser";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(620, 232);
-        var choices = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, Padding = new Padding(14) };
-        for (var count = 1; count <= WorkspaceLayoutModel.MaximumPanes; count++)
+        ClientSize = new Size(660, 424);
+
+        var rows = (WorkspacePreset.All.Count + Columns - 1) / Columns;
+        var choices = new TableLayoutPanel
         {
-            choices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            var captured = count;
+            Dock = DockStyle.Fill,
+            ColumnCount = Columns,
+            RowCount = rows,
+            Padding = new Padding(14)
+        };
+        for (var column = 0; column < Columns; column++)
+        {
+            choices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F / Columns));
+        }
+
+        for (var row = 0; row < rows; row++)
+        {
+            choices.RowStyles.Add(new RowStyle(SizeType.Percent, 100F / rows));
+        }
+
+        for (var index = 0; index < WorkspacePreset.All.Count; index++)
+        {
+            var preset = WorkspacePreset.All[index];
+            var preview = WorkspacePreset.CreatePreview(preset, 104, 68, StorageHubTheme.Primary);
+            _previews.Add(preview);
             var button = new Button
             {
                 Dock = DockStyle.Fill,
                 Margin = new Padding(7),
-                Text = $"{count} pane{(count == 1 ? string.Empty : "s")}\n{Describe(count, layout)}",
-                AccessibleName = $"Create workspace with {count} panes"
+                Text = $"{preset.Title}\n{preset.Description}",
+                Image = preview,
+                ImageAlign = ContentAlignment.TopCenter,
+                TextAlign = ContentAlignment.BottomCenter,
+                TextImageRelation = TextImageRelation.ImageAboveText,
+                Padding = new Padding(0, 10, 0, 8),
+                AccessibleName = $"Create workspace with {preset.Label}"
             };
-            button.Click += (_, _) => { PaneCount = captured; DialogResult = DialogResult.OK; Close(); };
-            choices.Controls.Add(button, count - 1, 0);
+            button.Click += (_, _) =>
+            {
+                PaneCount = preset.PaneCount;
+                // An orientation the preset does not use is left as the caller's, so picking a
+                // single pane never silently rewrites the stored default.
+                PaneLayout = preset.OrientationMatters ? preset.Layout : layout;
+                DialogResult = DialogResult.OK;
+                Close();
+            };
+            choices.Controls.Add(button, index % Columns, index / Columns);
         }
 
         _remember = new CheckBox
@@ -495,7 +530,7 @@ internal sealed class NewWorkspaceForm : Form
             AutoSize = true,
             Dock = DockStyle.Bottom,
             Padding = new Padding(21, 0, 21, 14),
-            AccessibleName = "Remember this pane count",
+            AccessibleName = "Remember this layout",
             AccessibleDescription =
                 "New workspaces use the arrangement you pick here. Change it later in Settings, under Workspace."
         };
@@ -503,22 +538,30 @@ internal sealed class NewWorkspaceForm : Form
         // for the fill panel to take the space above it.
         Controls.Add(choices);
         Controls.Add(_remember);
+        PaneLayout = layout;
     }
 
     internal int PaneCount { get; private set; }
 
-    /// <summary>Whether the chosen pane count should become the stored default.</summary>
+    /// <summary>The orientation the chosen preset needs, which may differ from the stored default.</summary>
+    internal WorkspaceLayout PaneLayout { get; private set; }
+
+    /// <summary>Whether the chosen arrangement should become the stored default.</summary>
     internal bool RememberChoice => _remember.Checked;
 
-    /// <summary>
-    /// The arrangement a pane count produces under the chosen orientation. Shared with Settings so
-    /// the two describe the same preset the same way.
-    /// </summary>
-    internal static string Describe(int count, WorkspaceLayout layout) => count switch
+    protected override void Dispose(bool disposing)
     {
-        1 => "Single",
-        2 => layout == WorkspaceLayout.SideBySide ? "Side by side" : "Top / bottom",
-        3 => "Large + stacked",
-        _ => "2 × 2 grid"
-    };
+        if (disposing)
+        {
+            foreach (var preview in _previews)
+            {
+                preview.Dispose();
+            }
+
+            _previews.Clear();
+        }
+
+        base.Dispose(disposing);
+    }
+
 }

@@ -1093,14 +1093,18 @@ public sealed class MainForm : Form
 
         if (chooser.RememberChoice)
         {
-            var chosen = chooser.PaneCount;
-            MutatePreferences(current => current with { DefaultWorkspacePaneCount = chosen });
+            var (panes, chosenLayout) = (chooser.PaneCount, chooser.PaneLayout);
+            MutatePreferences(current => current with
+            {
+                DefaultWorkspacePaneCount = panes,
+                DefaultWorkspaceLayout = chosenLayout
+            });
         }
 
-        AddWorkspace(chooser.PaneCount);
+        AddWorkspace(chooser.PaneCount, chooser.PaneLayout);
     }
 
-    internal TabPage AddWorkspace(int paneCount = 2)
+    internal TabPage AddWorkspace(int paneCount = 2, WorkspaceLayout? layout = null)
     {
         var insertAt = _workspaceTabs.TabPages.Count - 1;
         var workspaceNumber = _nextWorkspaceNumber++;
@@ -1113,7 +1117,7 @@ public sealed class MainForm : Form
         var name = $"Workspace {workspaceNumber}";
         var page = CreateCustomWorkspace(
             name,
-            WorkspaceLayoutModel.CreatePreset(paneCount, _updatePreferencesStore.Load().DefaultWorkspaceLayout));
+            WorkspaceLayoutModel.CreatePreset(paneCount, layout ?? LoadPreferences().DefaultWorkspaceLayout));
         _workspaceTabs.TabPages.Insert(insertAt, page);
         _workspaceTabs.SelectedTab = page;
         return page;

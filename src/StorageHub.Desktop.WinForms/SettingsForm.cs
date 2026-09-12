@@ -35,7 +35,8 @@ public sealed class SettingsForm : Form
     private const string AskEveryTime = "Ask every time";
 
     private readonly ComboBox _defaultWorkspaceLayout;
-    private readonly ComboBox _defaultWorkspacePaneCount;
+    private readonly ComboBox _defaultWorkspacePreset;
+    private bool _syncingWorkspaceControls;
     private readonly DesktopUpdatePreferences _preferences;
     private readonly CheckBox _reconnectRemotePanes;
     private readonly ComboBox _sshTerminalName;
@@ -157,25 +158,25 @@ public sealed class SettingsForm : Form
             _ => "Side by side"
         };
         _defaultWorkspaceLayout.SelectedItem = preferences.DefaultWorkspaceLayout;
-        _defaultWorkspacePaneCount = new ComboBox
+        _defaultWorkspacePreset = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Width = 260,
+            Width = 300,
             FormattingEnabled = true,
-            AccessibleName = "Panes in a new workspace"
+            AccessibleName = "Layout for a new workspace"
         };
-        // Zero stands for "ask", so the list is a plain int list rather than a nullable one.
-        _defaultWorkspacePaneCount.Items.AddRange(
-            [.. Enumerable.Range(0, WorkspaceLayoutModel.MaximumPanes + 1).Cast<object>()]);
-        _defaultWorkspacePaneCount.Format += (_, args) => args.Value = args.ListItem switch
-        {
-            int count and >= 1 => $"{count} pane{(count == 1 ? string.Empty : "s")} - " +
-                NewWorkspaceForm.Describe(count, ReadWorkspaceLayout()),
-            _ => AskEveryTime
-        };
-        _defaultWorkspacePaneCount.SelectedItem = preferences.DefaultWorkspacePaneCount ?? 0;
-        // The pane descriptions name the orientation, so they are restated when it changes.
-        _defaultWorkspaceLayout.SelectedIndexChanged += (_, _) => _defaultWorkspacePaneCount.Refresh();
+        // The same six arrangements the chooser offers, so neither place has options the other
+        // lacks. The leading null is "ask", which no preset can represent.
+        _defaultWorkspacePreset.Items.Add(AskEveryTime);
+        _defaultWorkspacePreset.Items.AddRange([.. WorkspacePreset.All]);
+        _defaultWorkspacePreset.Format += (_, args) =>
+            args.Value = args.ListItem is WorkspacePreset preset ? preset.Label : AskEveryTime;
+        _defaultWorkspacePreset.SelectedItem = preferences.DefaultWorkspacePaneCount is { } panes
+            ? WorkspacePreset.Find(panes, preferences.DefaultWorkspaceLayout) ?? (object)AskEveryTime
+            : AskEveryTime;
+        // Kept in step so the two controls can never disagree about the same workspace.
+        _defaultWorkspacePreset.SelectedIndexChanged += (_, _) => SyncWorkspaceControls(fromPreset: true);
+        _defaultWorkspaceLayout.SelectedIndexChanged += (_, _) => SyncWorkspaceControls(fromPreset: false);
         _reconnectRemotePanes = CreateOption(
             "Reconnect remote panes automatically when opening workspace files",
             "Uses saved profiles to create fresh storage and SSH sessions. Workspace files never contain credentials or terminal contents.",
@@ -416,7 +417,7 @@ public sealed class SettingsForm : Form
         _maximumSyncConcurrency.ValueChanged += ConcurrencyChanged;
         _appearance.SelectedIndexChanged += AppearanceSelectionChanged;
         _defaultWorkspaceLayout.SelectedIndexChanged += MarkDirty;
-        _defaultWorkspacePaneCount.SelectedIndexChanged += MarkDirty;
+        _defaultWorkspacePreset.SelectedIndexChanged += MarkDirty;
         _reconnectRemotePanes.CheckedChanged += MarkDirty;
         _sshTerminalName.TextChanged += MarkDirty;
         _sshStartupCommand.TextChanged += MarkDirty;
@@ -463,7 +464,7 @@ public sealed class SettingsForm : Form
             _maximumSyncConcurrency.ValueChanged -= ConcurrencyChanged;
             _appearance.SelectedIndexChanged -= AppearanceSelectionChanged;
             _defaultWorkspaceLayout.SelectedIndexChanged -= MarkDirty;
-            _defaultWorkspacePaneCount.SelectedIndexChanged -= MarkDirty;
+            _defaultWorkspacePreset.SelectedIndexChanged -= MarkDirty;
             _reconnectRemotePanes.CheckedChanged -= MarkDirty;
             _sshTerminalName.TextChanged -= MarkDirty;
             _sshStartupCommand.TextChanged -= MarkDirty;
@@ -924,12 +925,43 @@ public sealed class SettingsForm : Form
     private WorkspaceLayout ReadWorkspaceLayout() =>
         _defaultWorkspaceLayout.SelectedItem is WorkspaceLayout layout ? layout : WorkspaceLayout.SideBySide;
 
-    /// <summary>The chosen pane count, or null for "Ask every time", which the list stores as zero.</summary>
+    /// <summary>The chosen preset's pane count, or null for "Ask every time".</summary>
     private int? ReadWorkspacePaneCount() =>
-        _defaultWorkspacePaneCount.SelectedItem is int count &&
-            count is >= 1 and <= WorkspaceLayoutModel.MaximumPanes
-                ? count
-                : null;
+        _defaultWorkspacePreset.SelectedItem is WorkspacePreset preset ? preset.PaneCount : null;
+
+    /// <summary>
+    /// Keeps the preset and the orientation agreeing. Without this the two controls can describe
+    /// different workspaces -- "2 panes, top and bottom" beside an orientation of "Side by side" --
+    /// and nothing on screen says which wins.
+    /// </summary>
+    private void SyncWorkspaceControls(bool fromPreset)
+    {
+        if (_syncingWorkspaceControls) return;
+        _syncingWorkspaceControls = true;
+        try
+        {
+            if (_defaultWorkspacePreset.SelectedItem is not WorkspacePreset preset ||
+                !preset.OrientationMatters)
+            {
+                // "Ask every time", one pane, or a grid: the orientation stands on its own as the
+                // default the chooser opens with.
+                return;
+            }
+
+            if (fromPreset)
+            {
+                _defaultWorkspaceLayout.SelectedItem = preset.Layout;
+            }
+            else if (WorkspacePreset.Find(preset.PaneCount, ReadWorkspaceLayout()) is { } matching)
+            {
+                _defaultWorkspacePreset.SelectedItem = matching;
+            }
+        }
+        finally
+        {
+            _syncingWorkspaceControls = false;
+        }
+    }
 
     private FlowLayoutPanel BuildWorkspacePage()
     {
@@ -955,16 +987,17 @@ public sealed class SettingsForm : Form
             "Choose the orientation used by two- and three-pane presets."));
         layout.Controls.Add(new Label
         {
-            Text = "Panes in a new workspace",
+            Text = "New workspace layout",
             AutoSize = true,
             Margin = new Padding(0, 14, 0, 0),
             Font = StorageHubTheme.CreateSectionFont(),
             ForeColor = StorageHubTheme.Text
         });
-        layout.Controls.Add(_defaultWorkspacePaneCount);
+        layout.Controls.Add(_defaultWorkspacePreset);
         layout.Controls.Add(UiControlFactory.CreateDescription(
-            "\"Ask every time\" shows the pane chooser, which is also where you can tell StorageHub " +
-            "to stop asking. Pick a pane count here to change or undo that choice."));
+            "The same arrangements the New Workspace chooser offers. \"Ask every time\" shows that " +
+            "chooser, which is also where you can tell StorageHub to stop asking; pick an " +
+            "arrangement here to change or undo that choice."));
         layout.Controls.Add(_reconnectRemotePanes);
         StyleSettingsSection(layout);
         page.Controls.Add(layout);
