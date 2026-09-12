@@ -74,8 +74,10 @@ public static class StorageHubTheme
         list.DrawSubItem += DrawListSubItem;
         list.Resize -= ListResized;
         list.Resize += ListResized;
-        ApplyNativeChrome(list);
+        // Column sizing can bring a scrollbar into existence, and a window that does not exist
+        // yet cannot be themed, so the fill runs before the theming rather than after it.
         FillListHeader(list);
+        ApplyNativeChrome(list);
     }
 
     private static void DrawListItem(object? sender, DrawListViewItemEventArgs e)
@@ -95,10 +97,10 @@ public static class StorageHubTheme
     {
         if (sender is ListView list)
         {
-            // The header window is created lazily, after the first ConfigureList pass, so the
-            // theming is reapplied here rather than only once at setup.
-            ApplyNativeChrome(list);
+            // Same order as setup: resize the columns, then theme whatever that produced. The
+            // header and the scrollbars are created lazily, so both need the later pass.
             FillListHeader(list);
+            ApplyNativeChrome(list);
         }
     }
 
@@ -117,6 +119,20 @@ public static class StorageHubTheme
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
 
+    /// <summary>
+    /// Re-runs the trailing-column fill after a caller has set its own column widths.
+    ///
+    /// <see cref="ConfigureList"/> fills once, but a caller that then assigns fixed widths to
+    /// every column undoes it, and the fill only ran again on resize. A list whose declared
+    /// widths exceed a narrow window then keeps a horizontal scrollbar, which is the one piece
+    /// of chrome the dark theme does not reach.
+    /// </summary>
+    public static void FitTrailingColumn(ListView list)
+    {
+        ArgumentNullException.ThrowIfNull(list);
+        FillListHeader(list);
+    }
+
     private static void FillListHeader(ListView list)
     {
         if (list.View != View.Details || list.Columns.Count == 0 || list.ClientSize.Width == 0)
@@ -126,10 +142,26 @@ public static class StorageHubTheme
 
         var trailing = list.Columns[^1];
         var preceding = list.Columns.Cast<ColumnHeader>().Take(list.Columns.Count - 1).Sum(column => column.Width);
-        // The trailing column runs to the client edge. ClientSize already excludes a visible
-        // scrollbar, so reserving room for one again left an unpainted strip of native header at
-        // the right of every list, which reads as a bright block on a dark window.
-        trailing.Width = Math.Max(80, list.ClientSize.Width - preceding);
+
+        // Two pixels short of the client edge. ClientSize already accounts for a visible vertical
+        // scrollbar and is unaffected by a horizontal one, so it is the width to divide up -- but
+        // the control raises a horizontal scrollbar as soon as the column total merely *equals*
+        // the client width, so filling exactly to the edge scrolls at every size. Reserving a
+        // whole scrollbar's width instead would leave a strip of unpainted native header, which
+        // is the bright block this fill exists to remove.
+        var width = Math.Max(80, list.ClientSize.Width - preceding - 2);
+
+        // Assigned even when the value is unchanged, and nudged first when it is. The control
+        // re-evaluates its scroll range on a column assignment and at no other time, so a
+        // horizontal scrollbar raised by an earlier, narrower layout survives any pass that
+        // skips the write -- and that leftover scrollbar is the one piece of chrome the dark
+        // theme does not reach.
+        if (trailing.Width == width)
+        {
+            trailing.Width = width + 1;
+        }
+
+        trailing.Width = width;
     }
 
     public static void StylePrimaryButton(Button button)
@@ -853,6 +885,8 @@ public static class StorageHubTheme
     private static extern int SetWindowTheme(IntPtr hwnd, string? appName, string? idList);
 
     private const int LvmGetHeader = 0x1000 + 31;
+
+
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);

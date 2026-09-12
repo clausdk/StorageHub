@@ -375,6 +375,38 @@ public sealed class ThemeTests
     private static double Luminance(Color color) =>
         ((0.2126 * color.R) + (0.7152 * color.G) + (0.0722 * color.B)) / 255D;
 
+    // Widths where the fixed leading columns plus the trailing column's floor still fit, so the
+    // fill is expected to keep everything inside the client area. Below that the content genuinely
+    // does not fit and a scrollbar is the correct outcome.
+    [Theory]
+    [InlineData(700)]
+    [InlineData(1400)]
+    [InlineData(2000)]
+    public void The_trailing_column_fill_stays_inside_the_client_area(int width)
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var list = new ListView { View = View.Details, Width = width, Height = 120 };
+            using var host = new Form();
+            host.Controls.Add(list);
+            host.CreateControl();
+            list.Columns.Add("A", 150);
+            list.Columns.Add("B", 150);
+            list.Columns.Add("C", 150);
+
+            StorageHubTheme.ConfigureList(list);
+            StorageHubTheme.FitTrailingColumn(list);
+
+            // Filling exactly to the edge is enough for the control to raise a horizontal
+            // scrollbar, and a scrollbar is the one piece of chrome the theme cannot colour, so
+            // the fill has to stop short of the client edge rather than meet it.
+            var columns = list.Columns.Cast<ColumnHeader>().Sum(column => column.Width);
+            Assert.True(
+                columns < list.ClientSize.Width,
+                $"Columns total {columns} should stay under the {list.ClientSize.Width}px client area.");
+        });
+    }
+
     private static IEnumerable<Control> DescendantsAndSelf(Control root)
     {
         yield return root;

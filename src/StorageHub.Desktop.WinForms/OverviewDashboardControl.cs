@@ -126,11 +126,14 @@ public sealed class OverviewDashboardControl : UserControl
             "Pinned layouts first, then the ones you opened most recently",
             UiGlyph.Add,
             out var workspaceCard);
+        // Only the leading columns get a fixed width. The trailing one absorbs whatever is left,
+        // so the row never totals more than the card and never raises a horizontal scrollbar in a
+        // narrow window.
         _workspaces.Columns[0].Width = 220;
         _workspaces.Columns[1].Text = "Location";
         _workspaces.Columns[1].Width = 420;
         _workspaces.Columns[2].Text = "State";
-        _workspaces.Columns[2].Width = 110;
+        StorageHubTheme.FitTrailingColumn(_workspaces);
         // No ListViewGroups: the rows arrive pinned-first and the State column already says which
         // list each came from, so grouping would add native-control fragility for no information.
         _workspaces.MouseDoubleClick += (_, args) => OpenWorkspaceAt(_workspaces.HitTest(args.Location).Item);
