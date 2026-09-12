@@ -54,7 +54,12 @@ execution as that user.
   rewritten.
 - A store entry declares its kind. A PKCS#12 bundle and an SSH private key are
   separate kinds, and a profile slot accepts only the kind its provider can use,
-  preserving the rule that a PFX is never interpreted as an SSH key.
+  preserving the rule that a PFX is never interpreted as an SSH key. The check is
+  enforced in the agent before a profile is written, not in the desktop editor.
+- Bindings are derived from the references a saved profile actually holds, rather
+  than declared by the caller. Saving a profile rebuilds its slot bindings, so a
+  slot that no longer points at a store entry is released and the usage counts
+  that guard deletion cannot drift.
 - An FTPS client-certificate PFX requires a separate vault-backed password
   reference. SFTP private-key authentication requires a vault-backed passphrase,
   accepts only strict OpenSSH, legacy PEM, or PKCS#8 envelopes, and requires

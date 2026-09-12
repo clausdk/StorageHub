@@ -1,9 +1,11 @@
 using StorageHub.Agent.Ipc;
 using StorageHub.Application.Connections;
+using StorageHub.Application.Credentials;
 using StorageHub.Contracts.Ipc;
 using StorageHub.Domain.Identifiers;
 using StorageHub.Persistence;
 using StorageHub.Persistence.Connections;
+using StorageHub.Persistence.Credentials;
 using StorageHub.Security;
 using ContractWriteStatus = StorageHub.Contracts.Ipc.ConnectionProfileWriteStatus;
 using DomainWriteStatus = StorageHub.Application.Connections.ConnectionProfileWriteStatus;
@@ -14,20 +16,26 @@ namespace StorageHub.Agent.Windows;
 public sealed class ConnectionProfileIpcCommandService : IAgentIpcCommandHandler
 {
     private readonly IConnectionProfileRepository _profiles;
+    private readonly IKeyStoreRepository? _keyStore;
     private readonly TimeProvider _timeProvider;
 
     public ConnectionProfileIpcCommandService(
         IConnectionProfileRepository profiles,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IKeyStoreRepository? keyStore = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
+        _keyStore = keyStore;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public ConnectionProfileIpcCommandService(
         SqliteDatabaseOptions databaseOptions,
         TimeProvider? timeProvider = null)
-        : this(new SqliteConnectionProfileRepository(databaseOptions, timeProvider), timeProvider)
+        : this(
+            new SqliteConnectionProfileRepository(databaseOptions, timeProvider),
+            timeProvider,
+            new SqliteKeyStoreRepository(databaseOptions))
     {
     }
 
@@ -113,7 +121,19 @@ public sealed class ConnectionProfileIpcCommandService : IAgentIpcCommandHandler
                 ConnectionProfileId.New(),
                 request.Draft,
                 now);
+            var mismatch = await ValidateKeyStoreKindsAsync(profile, cancellationToken).ConfigureAwait(false);
+            if (mismatch is not null)
+            {
+                return WriteFailure(
+                    ConnectionProfileIpcMessageTypes.CreateResponse,
+                    ContractWriteStatus.ValidationFailed,
+                    "connection.profile.key_store_kind_mismatch",
+                    StorageIpcFailureCategory.Validation,
+                    mismatch);
+            }
+
             var result = await _profiles.CreateAsync(profile, cancellationToken).ConfigureAwait(false);
+            await SyncKeyStoreBindingsAsync(result, cancellationToken).ConfigureAwait(false);
             return MapWriteResult(ConnectionProfileIpcMessageTypes.CreateResponse, result);
         }
         catch (Exception error) when (IsValidationError(error))
@@ -173,10 +193,22 @@ public sealed class ConnectionProfileIpcCommandService : IAgentIpcCommandHandler
                 request.Draft,
                 UtcNow(),
                 existing?.Metadata.Notes);
+            var mismatch = await ValidateKeyStoreKindsAsync(profile, cancellationToken).ConfigureAwait(false);
+            if (mismatch is not null)
+            {
+                return WriteFailure(
+                    ConnectionProfileIpcMessageTypes.UpdateResponse,
+                    ContractWriteStatus.ValidationFailed,
+                    "connection.profile.key_store_kind_mismatch",
+                    StorageIpcFailureCategory.Validation,
+                    mismatch);
+            }
+
             var result = await _profiles.UpdateAsync(
                 profile,
                 request.ExpectedVersion,
                 cancellationToken).ConfigureAwait(false);
+            await SyncKeyStoreBindingsAsync(result, cancellationToken).ConfigureAwait(false);
             return MapWriteResult(ConnectionProfileIpcMessageTypes.UpdateResponse, result);
         }
         catch (Exception error) when (IsValidationError(error))
@@ -326,6 +358,93 @@ public sealed class ConnectionProfileIpcCommandService : IAgentIpcCommandHandler
             ConnectionProfileIpcContract.CurrentVersion,
             status,
             Failure: new StorageIpcFailure(code, category, message, isTransient)));
+
+    /// <summary>
+    /// Names the key-store slots a profile can fill and the material each one accepts. A slot only
+    /// ever takes the kind its provider can actually use, which is what stops a PKCS#12 bundle
+    /// reaching an SSH authentication path.
+    /// </summary>
+    private static IEnumerable<(string Slot, string Reference, KeyMaterialKind Required)> KeyStoreSlots(
+        ConnectionProfile profile)
+    {
+        if (profile.Endpoint is FtpsEndpoint { ClientCertificatePfxReference: { } pfx })
+        {
+            yield return ("ftps.client-certificate", pfx.Value, KeyMaterialKind.Pkcs12Certificate);
+        }
+
+        switch (profile.Authentication)
+        {
+            case SftpPrivateKeyAuthentication key:
+                yield return ("sftp.private-key", key.PrivateKeyReference.Value, KeyMaterialKind.SshPrivateKey);
+                break;
+            case SshPrivateKeyPasswordAuthentication key:
+                yield return ("ssh.private-key", key.PrivateKeyReference.Value, KeyMaterialKind.SshPrivateKey);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Rejects a profile that points a slot at a store entry of the wrong kind, before anything is
+    /// written. Returns null when every referenced entry is usable, or was never in the store.
+    /// </summary>
+    private async ValueTask<string?> ValidateKeyStoreKindsAsync(
+        ConnectionProfile profile,
+        CancellationToken cancellationToken)
+    {
+        if (_keyStore is null)
+        {
+            return null;
+        }
+
+        foreach (var (slot, reference, required) in KeyStoreSlots(profile))
+        {
+            var entry = await _keyStore.FindByMaterialReferenceAsync(reference, cancellationToken)
+                .ConfigureAwait(false);
+            if (entry is not null && entry.Kind != required)
+            {
+                return required is KeyMaterialKind.Pkcs12Certificate
+                    ? $"'{entry.DisplayName}' is an SSH private key and cannot be used as a client certificate."
+                    : $"'{entry.DisplayName}' is a certificate and cannot be used as an SSH private key.";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Derives the profile's key-store bindings from what it actually references, rather than
+    /// trusting the caller to declare them. A slot that no longer points at a store entry is
+    /// unbound, so the usage counts that guard deletion cannot drift.
+    /// </summary>
+    private async ValueTask SyncKeyStoreBindingsAsync(
+        ConnectionProfileWriteResult result,
+        CancellationToken cancellationToken)
+    {
+        if (_keyStore is null ||
+            result.Status != DomainWriteStatus.Succeeded ||
+            result.Profile is not { } profile)
+        {
+            return;
+        }
+
+        foreach (var slot in AllKeyStoreSlots)
+        {
+            await _keyStore.UnbindAsync(profile.Id, slot, cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var (slot, reference, _) in KeyStoreSlots(profile))
+        {
+            var entry = await _keyStore.FindByMaterialReferenceAsync(reference, cancellationToken)
+                .ConfigureAwait(false);
+            if (entry is not null)
+            {
+                await _keyStore.BindAsync(profile.Id, slot, entry.Id, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static readonly string[] AllKeyStoreSlots =
+        ["ftps.client-certificate", "sftp.private-key", "ssh.private-key"];
 
     private DateTimeOffset UtcNow() => _timeProvider.GetUtcNow().ToUniversalTime();
 

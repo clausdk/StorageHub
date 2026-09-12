@@ -16,8 +16,11 @@ namespace StorageHub.Agent.Windows;
 public sealed class ShellTransferIpcCommandService(
     ITransferJobStore store,
     ITransferEndpointConnector connector,
-    TimeProvider? timeProvider = null) : IAgentIpcCommandHandler
+    TimeProvider? timeProvider = null,
+    IActiveTransferProgress? activeProgress = null) : IAgentIpcCommandHandler
 {
+    private readonly IActiveTransferProgress? _activeProgress = activeProgress;
+
     private static readonly TimeSpan ReviewLifetime = TimeSpan.FromMinutes(5);
     private readonly ITransferJobStore _store = store ?? throw new ArgumentNullException(nameof(store));
     private readonly ITransferEndpointConnector _connector = connector ?? throw new ArgumentNullException(nameof(connector));
@@ -335,6 +338,21 @@ public sealed class ShellTransferIpcCommandService(
         transferIds.Add(id);
     }
 
+    /// <summary>
+    /// Bytes already copied for a transfer that has not finished. The live counter is preferred
+    /// because it leads the durable checkpoint, which is written on a slow recovery timer.
+    /// </summary>
+    private async ValueTask<long?> ReadInFlightBytesAsync(TransferJobId id)
+    {
+        if (_activeProgress?.TryGetLiveProgressBytes(id) is { } live)
+        {
+            return live;
+        }
+
+        var checkpoint = await _store.FindCheckpointAsync(id, CancellationToken.None).ConfigureAwait(false);
+        return checkpoint?.Checkpoint.VerifiedBytes;
+    }
+
     private async Task WaitForQueuedExportsAsync(ExportJob export, List<TransferJobId> transferIds)
     {
         if (transferIds.Count == 0) return;
@@ -350,6 +368,12 @@ public sealed class ShellTransferIpcCommandService(
                 {
                     completed++;
                     completedBytes += transfer.Intent.ExpectedLength ?? 0;
+                }
+                else if (await ReadInFlightBytesAsync(id).ConfigureAwait(false) is { } inFlight)
+                {
+                    // Counting only finished files made a single large object sit at 0% and then
+                    // jump to 100%. Partial bytes are added so the export advances as it copies.
+                    completedBytes += Math.Min(inFlight, transfer.Intent.ExpectedLength ?? inFlight);
                 }
                 else if (transfer.State.State is TransferState.Failed or TransferState.Cancelled or
                          TransferState.Interrupted or TransferState.NeedsReconciliation or TransferState.RestartRequired)

@@ -136,7 +136,11 @@ var transferCommands = new TransferQueueIpcCommandService(
     transferStore,
     transferStore,
     transferQueueSubsystem);
-var shellTransferCommands = new ShellTransferIpcCommandService(transferStore, transferEndpointConnector);
+var shellTransferCommands = new ShellTransferIpcCommandService(
+    transferStore,
+    transferEndpointConnector,
+    timeProvider: null,
+    transferQueueSubsystem);
 var syncProfiles = new SqliteSyncProfileRepository(transferDatabase);
 var syncBaselines = new SqliteSyncBaselineStore(transferDatabase);
 var syncPlans = new SqliteSyncPlanStore(transferDatabase);

@@ -46,6 +46,15 @@ public interface IKeyStoreRepository
         KeyStoreEntryId id,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Finds the entry that owns a vault reference, or null when the reference was enrolled
+    /// directly against a profile rather than imported into the store. This is what lets bindings
+    /// be derived from a saved profile instead of being asserted separately by the caller.
+    /// </summary>
+    ValueTask<KeyStoreEntry?> FindByMaterialReferenceAsync(
+        string materialReference,
+        CancellationToken cancellationToken = default);
+
     ValueTask<IReadOnlyList<KeyStoreEntryUsage>> SearchAsync(
         KeyStoreSearch search,
         CancellationToken cancellationToken = default);

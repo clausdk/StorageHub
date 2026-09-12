@@ -74,6 +74,30 @@ public sealed class SqliteKeyStoreRepository : IKeyStoreRepository
         return await ReadAsync(lease.Connection, id, cancellationToken).ConfigureAwait(false);
     }
 
+    public async ValueTask<KeyStoreEntry?> FindByMaterialReferenceAsync(
+        string materialReference,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(materialReference))
+        {
+            return null;
+        }
+
+        await _initializer.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var lease = await _database.AcquireWriterAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var command = lease.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT credential_id, credential_kind, display_name, description, tags_json,
+                   material_reference, passphrase_reference, summary_json, version, created_utc, updated_utc
+            FROM credential_references
+            WHERE material_reference = $reference;
+            """;
+        command.Parameters.AddWithValue("$reference", materialReference.Trim());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? Read(reader) : null;
+    }
+
     public async ValueTask<IReadOnlyList<KeyStoreEntryUsage>> SearchAsync(
         KeyStoreSearch search,
         CancellationToken cancellationToken = default)

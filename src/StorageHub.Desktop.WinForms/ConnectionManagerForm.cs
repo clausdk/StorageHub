@@ -23,6 +23,12 @@ public sealed class ConnectionManagerForm : Form
     private readonly TabControl _settingsTabs;
     private readonly List<ConnectionCardModel> _allCards;
     private readonly Dictionary<string, Control> _editorFields = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The reference box behind each secret field, kept separately because choosing one key store
+    /// entry fills two fields: the material and the passphrase that unlocks it.
+    /// </summary>
+    private readonly Dictionary<string, TextBox> _secretReferenceBoxes = new(StringComparer.Ordinal);
     private readonly IRemoteStorageAgentClient _storageClient;
     private readonly IRemoteConnectionProfileClient _profileClient;
     private readonly IRemoteSecretVaultClient _secretClient;
@@ -504,6 +510,7 @@ public sealed class ConnectionManagerForm : Form
     private void UpdateProviderEditor(ConnectionProviderDescriptor provider)
     {
         _editorFields.Clear();
+        _secretReferenceBoxes.Clear();
         _providerSummary.Text = provider.Summary;
         _providerAccent.BackColor = StorageHubTheme.ParseAccent(provider.AccentHex);
         ReplacePageContent(_generalPage, BuildProviderPage("Endpoint", provider.EndpointExample, provider.GeneralFields, provider));
@@ -917,6 +924,7 @@ public sealed class ConnectionManagerForm : Form
             AccessibleName = field.Label,
             AccessibleDescription = "An opaque vault reference. Secret material is never displayed."
         };
+        _secretReferenceBoxes[field.Key] = value;
         var enroll = new Button { Text = "Enroll / replace…", AutoSize = true };
         var delete = new Button { Text = "Delete…", AutoSize = true };
         StorageHubTheme.StyleSecondaryButton(enroll);
@@ -928,6 +936,18 @@ public sealed class ConnectionManagerForm : Form
         panel.Controls.Add(value, 0, 0);
         panel.Controls.Add(enroll, 1, 0);
         panel.Controls.Add(delete, 2, 0);
+
+        // Material fields can also borrow an already-imported key instead of enrolling a new copy.
+        if (KeyStoreSlotKind(field.Key) is { } kind)
+        {
+            var choose = new Button { Text = "Key Store…", AutoSize = true, Margin = new Padding(6, 0, 0, 0) };
+            StorageHubTheme.StyleSecondaryButton(choose);
+            choose.Click += async (_, _) => await ChooseFromKeyStoreAsync(field, kind, _formLifetime.Token);
+            panel.ColumnCount = 4;
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            panel.Controls.Add(choose, 3, 0);
+        }
+
         return panel;
     }
 
@@ -2232,6 +2252,82 @@ public sealed class ConnectionManagerForm : Form
                     nested.Text = value;
                 }
                 break;
+        }
+    }
+
+    /// <summary>
+    /// The key material a field can accept, or null when the field is not a key store slot. Only
+    /// material fields qualify: a passphrase is filled from whichever entry is chosen, never picked
+    /// on its own.
+    /// </summary>
+    private static KeyStoreMaterialKind? KeyStoreSlotKind(string fieldKey) => fieldKey switch
+    {
+        "clientCertificateReference" => KeyStoreMaterialKind.Pkcs12Certificate,
+        "privateKeyReference" => KeyStoreMaterialKind.SshPrivateKey,
+        _ => null
+    };
+
+    /// <summary>The passphrase field unlocked by a given material field.</summary>
+    private static string? CompanionPassphraseField(string fieldKey) => fieldKey switch
+    {
+        "clientCertificateReference" => "clientCertificatePasswordReference",
+        "privateKeyReference" => "privateKeyPassphraseReference",
+        _ => null
+    };
+
+    private async Task ChooseFromKeyStoreAsync(
+        ConnectionFieldDescriptor field,
+        KeyStoreMaterialKind kind,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var client = new NamedPipeKeyStoreAgentClient();
+            var listed = await client.ListAsync(
+                new KeyStoreListRequest(KeyStoreIpcContract.CurrentVersion, Kind: kind),
+                cancellationToken);
+            if (listed.Failure is not null)
+            {
+                ShowStatus(listed.Failure.Message, StorageHubTheme.Warning);
+                return;
+            }
+
+            if (listed.Entries.Length == 0)
+            {
+                ShowStatus(
+                    "No matching keys are stored yet. Import one from Connections > Key Store.",
+                    StorageHubTheme.Warning);
+                return;
+            }
+
+            using var picker = new KeyStorePickerForm(listed.Entries);
+            if (picker.ShowDialog(this) != DialogResult.OK || picker.Selected is not { } chosen)
+            {
+                return;
+            }
+
+            if (!_secretReferenceBoxes.TryGetValue(field.Key, out var materialBox))
+            {
+                return;
+            }
+
+            // One entry fills both halves: provider APIs need the passphrase to open the material,
+            // and the profile model requires them together.
+            materialBox.Text = chosen.MaterialReference;
+            if (CompanionPassphraseField(field.Key) is { } companionKey &&
+                _secretReferenceBoxes.TryGetValue(companionKey, out var passphraseBox))
+            {
+                passphraseBox.Text = chosen.PassphraseReference;
+            }
+
+            ShowStatus($"Using '{chosen.DisplayName}' from the key store.", StorageHubTheme.Success);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            ShowStatus("The key store could not be read.", StorageHubTheme.Warning);
         }
     }
 

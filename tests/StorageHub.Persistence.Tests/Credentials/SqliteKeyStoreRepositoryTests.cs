@@ -179,6 +179,58 @@ public sealed class SqliteKeyStoreRepositoryTests : IDisposable
         Assert.NotNull(await repository.GetAsync(entry.Id));
     }
 
+    [Fact]
+    public async Task An_entry_can_be_found_by_the_vault_reference_it_owns()
+    {
+        // This is what lets a saved profile's bindings be derived from what it actually references,
+        // instead of trusting the caller to declare them.
+        var repository = Repository();
+        var entry = CertificateEntry("Partner certificate");
+        await repository.CreateAsync(entry);
+
+        var found = await repository.FindByMaterialReferenceAsync(entry.MaterialReference.Value);
+        var missing = await repository.FindByMaterialReferenceAsync(SecretReference.Create().Value);
+        var blank = await repository.FindByMaterialReferenceAsync("   ");
+
+        Assert.NotNull(found);
+        Assert.Equal(entry.Id, found.Id);
+        Assert.Null(missing);
+        Assert.Null(blank);
+    }
+
+    [Fact]
+    public async Task A_passphrase_reference_does_not_resolve_as_material()
+    {
+        // The two references are distinct slots; only the material identifies the entry.
+        var repository = Repository();
+        var entry = CertificateEntry("Partner certificate");
+        await repository.CreateAsync(entry);
+
+        Assert.Null(await repository.FindByMaterialReferenceAsync(entry.PassphraseReference.Value));
+    }
+
+    [Fact]
+    public async Task Rebinding_a_slot_replaces_the_previous_entry()
+    {
+        var repository = Repository();
+        var first = CertificateEntry("First certificate");
+        var second = CertificateEntry("Second certificate");
+        await repository.CreateAsync(first);
+        await repository.CreateAsync(second);
+        var profile = await SeedProfileAsync("Nightly FTPS");
+
+        await repository.BindAsync(profile, "ftps.client-certificate", first.Id);
+        await repository.BindAsync(profile, "ftps.client-certificate", second.Id);
+
+        // The first entry is released by the rebind, so it can be deleted again.
+        Assert.Equal(
+            KeyStoreWriteStatus.Succeeded,
+            (await repository.DeleteAsync(first.Id, expectedVersion: 1)).Status);
+        Assert.Equal(
+            KeyStoreWriteStatus.StillReferenced,
+            (await repository.DeleteAsync(second.Id, expectedVersion: 1)).Status);
+    }
+
     private async Task<ConnectionProfileId> SeedProfileAsync(string name)
     {
         var profile = ConnectionProfile.Create(
