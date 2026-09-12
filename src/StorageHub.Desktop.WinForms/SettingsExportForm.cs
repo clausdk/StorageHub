@@ -136,7 +136,7 @@ public sealed class SettingsExportForm : Form
         };
 
         _export = new Button { Text = "Export...", AutoSize = true, Margin = new Padding(8, 0, 0, 0) };
-        _export.Click += ExportClicked;
+        _export.Click += async (_, _) => await ExportClickedAsync().ConfigureAwait(true);
         StorageHubTheme.StylePrimaryButton(_export);
         var cancel = new Button
         {
@@ -231,7 +231,7 @@ public sealed class SettingsExportForm : Form
             ? null
             : "The two passwords do not match.");
 
-    private void ExportClicked(object? sender, EventArgs e)
+    private async Task ExportClickedAsync()
     {
         using var dialog = new SaveFileDialog
         {
@@ -243,11 +243,16 @@ public sealed class SettingsExportForm : Form
         };
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
+        _export.Enabled = false;
+        _status.Text = "Collecting settings...";
         try
         {
+            // Async because connections, sync tasks and schedules are read from the agent over a
+            // pipe, one round trip per connection.
+            var document = await _exporter.CaptureAsync(SelectedSections).ConfigureAwait(true);
             SettingsExportService.Write(
                 dialog.FileName,
-                _exporter.Capture(SelectedSections),
+                document,
                 _protect.Checked ? _password.Text : null);
             ExportedPath = dialog.FileName;
             DialogResult = DialogResult.OK;
@@ -262,6 +267,22 @@ public sealed class SettingsExportForm : Form
                 "Export Settings",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
+        }
+        catch (Exception error) when (error is InvalidOperationException or TimeoutException)
+        {
+            // The agent went away between ticking the boxes and pressing Export.
+            _ = MessageBox.Show(
+                this,
+                $"StorageHub could not read your connections and tasks. {error.Message}",
+                "Export Settings",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _export.Enabled = true;
+            _status.Text = string.Empty;
+            UpdateExportState();
         }
     }
 

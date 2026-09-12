@@ -464,10 +464,13 @@ public sealed class SettingsImportForm : Form
         }
 
         _resultSummary.Text = string.Join(Environment.NewLine, lines);
+        // Kept short so it fits on one line; the file name itself is a timestamp and a guid, and
+        // goes in the tooltip rather than wrapping out of view.
         _backupLink.Visible = report.BackupPath is not null;
         _backupLink.Text = report.BackupPath is null
             ? string.Empty
-            : $"Your previous settings were saved to {Path.GetFileName(report.BackupPath)}";
+            : "Show the backup of your previous settings";
+        _backupLink.AccessibleDescription = report.BackupPath ?? string.Empty;
         // The one way out of the result screen, carrying whether anything actually changed so the
         // shell knows whether to refresh itself.
         _close.Text = "Close";
