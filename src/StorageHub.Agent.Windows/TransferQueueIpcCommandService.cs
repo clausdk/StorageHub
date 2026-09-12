@@ -20,17 +20,20 @@ public sealed class TransferQueueIpcCommandService : IAgentIpcCommandHandler
     private readonly ITransferJobStore _store;
     private readonly ITransferQueueQueryStore _queries;
     private readonly IActiveTransferCancellation? _activeCancellation;
+    private readonly IActiveTransferProgress? _activeProgress;
     private readonly TimeProvider _timeProvider;
 
     public TransferQueueIpcCommandService(
         ITransferJobStore store,
         ITransferQueueQueryStore queries,
         IActiveTransferCancellation? activeCancellation = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IActiveTransferProgress? activeProgress = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _queries = queries ?? throw new ArgumentNullException(nameof(queries));
         _activeCancellation = activeCancellation;
+        _activeProgress = activeProgress ?? activeCancellation as IActiveTransferProgress;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -556,6 +559,15 @@ public sealed class TransferQueueIpcCommandService : IAgentIpcCommandHandler
             .ConfigureAwait(false);
         var expectedBytes = checkpoint?.Checkpoint.ExpectedLength ?? job.Intent.ExpectedLength;
         var progressBytes = checkpoint?.Checkpoint.VerifiedBytes ?? 0;
+
+        // A running transfer reports its live counter, which is always at least as current as the
+        // last checkpoint. Without this, a job showed 0% until the first checkpoint timer fired.
+        if (_activeProgress?.TryGetLiveProgressBytes(job.Intent.TransferJobId) is { } live &&
+            live > progressBytes)
+        {
+            progressBytes = live;
+        }
+
         if (expectedBytes is long length && progressBytes > length)
         {
             progressBytes = length;

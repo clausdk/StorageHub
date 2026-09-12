@@ -18,6 +18,22 @@ public readonly record struct ConnectionProfileId
     public override string ToString() => Value.ToString("D", CultureInfo.InvariantCulture);
 }
 
+public readonly record struct KeyStoreEntryId
+{
+    public KeyStoreEntryId(Guid value) => Value = StrongIdentifier.Validate(value, nameof(value));
+    public Guid Value { get; }
+    public bool IsEmpty => Value == Guid.Empty;
+    public static KeyStoreEntryId New() => new(Guid.NewGuid());
+    public static KeyStoreEntryId Parse(string value) => new(StrongIdentifier.Parse(value));
+    public static bool TryParse(string? value, out KeyStoreEntryId result)
+    {
+        var success = StrongIdentifier.TryParse(value, out var parsed);
+        result = success ? new KeyStoreEntryId(parsed) : default;
+        return success;
+    }
+    public override string ToString() => Value.ToString("D", CultureInfo.InvariantCulture);
+}
+
 public readonly record struct TransferJobId
 {
     public TransferJobId(Guid value) => Value = StrongIdentifier.Validate(value, nameof(value));

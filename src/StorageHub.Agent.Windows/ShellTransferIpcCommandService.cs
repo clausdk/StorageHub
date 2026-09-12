@@ -45,7 +45,7 @@ public sealed class ShellTransferIpcCommandService(
 
     private AgentIpcCommandResponse BeginExplorerDrop(IpcEnvelope envelope)
     {
-        var request = envelope.DeserializePayload<ShellExportPrepareRequest>();
+        var request = envelope.DeserializePayload<ExplorerDropBeginRequest>();
         if (!ShellTransferIpcContract.IsSupported(request.ContractVersion) || !request.HasValidBounds)
             return BeginExplorerDropFailure("The selected Explorer drop items are invalid.");
 
@@ -53,14 +53,23 @@ public sealed class ShellTransferIpcCommandService(
         if (_pendingExplorerDrops.Count >= 16)
             return BeginExplorerDropFailure("Too many Explorer drops are waiting for a destination.");
 
-        var token = Guid.NewGuid().ToString("N");
+        // The token is a caller-supplied correlation identifier, never a capability: the marker
+        // path is derived here rather than accepted from the request, the sources are re-evidenced
+        // at commit, and a token already in flight is refused rather than rebound.
+        var token = request.DropToken.ToLowerInvariant();
         var markerRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "StorageHub", "DragMarkers");
         var inboxRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "StorageHub", "ShellDropInbox");
         var markerPath = Path.Combine(markerRoot, "StorageHubDrop-" + token);
+        var pending = new PendingExplorerDrop(_time.GetUtcNow().AddMinutes(5), request.Sources, markerPath);
+        if (!_pendingExplorerDrops.TryAdd(token, pending))
+            return BeginExplorerDropFailure("This Explorer drop is already in progress.");
+
         try
         {
+            // The desktop creates the marker before the drag starts; creating it again is
+            // idempotent and keeps the agent working if the drag was staged some other way.
             Directory.CreateDirectory(markerRoot);
             Directory.CreateDirectory(inboxRoot);
             Directory.CreateDirectory(markerPath);
@@ -68,12 +77,11 @@ public sealed class ShellTransferIpcCommandService(
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
+            _ = _pendingExplorerDrops.TryRemove(token, out _);
             TryDeleteDirectory(markerPath);
             return BeginExplorerDropFailure("StorageHub could not create the Explorer drop marker.");
         }
 
-        _pendingExplorerDrops[token] = new PendingExplorerDrop(
-            _time.GetUtcNow().AddMinutes(5), request.Sources, markerPath);
         return AgentIpcCommandResponse.Create(ShellTransferIpcMessageTypes.BeginExplorerDropResponse,
             new ExplorerDropBeginResponse(ShellTransferIpcContract.CurrentVersion, token, markerPath));
     }

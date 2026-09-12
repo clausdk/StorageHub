@@ -13,6 +13,7 @@ using StorageHub.Contracts.Ipc;
 using StorageHub.Infrastructure.Windows;
 using StorageHub.Persistence;
 using StorageHub.Persistence.Connections;
+using StorageHub.Persistence.Credentials;
 using StorageHub.Persistence.Scheduling;
 using StorageHub.Persistence.Sync;
 using StorageHub.Persistence.Transfers;
@@ -127,6 +128,9 @@ var storageCommands = new StorageIpcCommandService(
         Libraries.Get<StorageLibrary>() ??
         throw new InvalidOperationException("CL.Storage is not configured.")));
 var profileCommands = new ConnectionProfileIpcCommandService(databaseOptions);
+var keyStoreCommands = new KeyStoreIpcCommandService(
+    new SqliteKeyStoreRepository(databaseOptions),
+    vaultSubsystem.Vault);
 var trustCommands = new ConnectionTrustIpcCommandService(databaseOptions);
 var transferCommands = new TransferQueueIpcCommandService(
     transferStore,
@@ -194,6 +198,7 @@ var requestHandler = new AgentIpcRequestHandler(
     new CompositeAgentIpcCommandHandler(
         storageCommands,
         profileCommands,
+        keyStoreCommands,
         trustCommands,
         transferCommands,
         shellTransferCommands,

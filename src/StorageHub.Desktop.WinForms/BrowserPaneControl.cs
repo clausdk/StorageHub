@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using StorageHub.Contracts.Ipc;
 using StorageHub.Contracts.Results;
 
@@ -12,6 +13,7 @@ public sealed class BrowserPaneControl : UserControl
     private static readonly TimeSpan ExplorerDropHandshakeTimeout = TimeSpan.FromSeconds(10);
 
     private const string PaneDragDataFormat = "StorageHub.PaneSelection.v1";
+    private const string EmptyFolderMessage = "This folder is empty.";
     private const int DragShiftKeyState = 4;
     private const int MaximumCachedConnections = 32;
     private const int MaximumCachedDirectoriesPerConnection = 2_000;
@@ -53,6 +55,8 @@ public sealed class BrowserPaneControl : UserControl
     private readonly TreeView _directoryTree;
     private readonly ListView _fileList;
     private readonly TableLayoutPanel _loadingOverlay;
+    private readonly Label _emptyStateLabel;
+    private readonly TableLayoutPanel _emptyStateOverlay;
     private readonly ContextMenuStrip _fileContextMenu;
     private readonly Label _connectionState;
     private readonly Label _connectionNameLabel;
@@ -479,6 +483,11 @@ public sealed class BrowserPaneControl : UserControl
         _fileList.MouseDown += FileListMouseDown;
 
         _loadingOverlay = CreateLoadingOverlay();
+        _emptyStateOverlay = CreateEmptyStateOverlay(out _emptyStateLabel);
+        // The empty-folder notice covers the list, so it must accept drops itself; otherwise
+        // uploading into an empty folder would be impossible.
+        ConfigureDropTarget(_emptyStateOverlay);
+        ConfigureDropTarget(_emptyStateLabel);
 
         var browserSplit = new SplitContainer
         {
@@ -498,6 +507,7 @@ public sealed class BrowserPaneControl : UserControl
         browserSplit.Panel2.BackColor = StorageHubTheme.Surface;
         browserSplit.Panel1.Controls.Add(_directoryTree);
         browserSplit.Panel2.Controls.Add(_fileList);
+        browserSplit.Panel2.Controls.Add(_emptyStateOverlay);
         browserSplit.Panel2.Controls.Add(_loadingOverlay);
 
         _summary = new Label
@@ -587,9 +597,9 @@ public sealed class BrowserPaneControl : UserControl
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<bool>? CanPaste { get; set; }
 
-    /// <summary>Creates an inert Explorer marker; StorageHub performs the eventual transfer.</summary>
+    /// <summary>Registers an inert Explorer marker; StorageHub performs the eventual transfer.</summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public Func<PaneSelectionSnapshot, CancellationToken, Task<ExplorerDropBeginResponse>>? BeginExplorerDropAsync { get; set; }
+    public Func<PaneSelectionSnapshot, string, CancellationToken, Task<ExplorerDropBeginResponse>>? BeginExplorerDropAsync { get; set; }
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<string, CancellationToken, Task<ExplorerDropCommitResponse>>? CommitExplorerDropAsync { get; set; }
@@ -998,6 +1008,8 @@ public sealed class BrowserPaneControl : UserControl
             _fileList.SelectedIndexChanged -= FileSelectionChanged;
             _fileList.MouseDown -= FileListMouseDown;
             UnconfigureDropTarget(_fileList);
+            UnconfigureDropTarget(_emptyStateOverlay);
+            UnconfigureDropTarget(_emptyStateLabel);
             UnconfigureDropTarget(_directoryTree);
             _fileContextMenu.Dispose();
             if (_localBrowser is not null)
@@ -1847,6 +1859,33 @@ public sealed class BrowserPaneControl : UserControl
         }
     }
 
+    /// <summary>
+    /// Shows an explicit notice when a loaded folder renders no rows, so that an empty container
+    /// reads as empty rather than as a failed or still-loading listing. The notice never covers a
+    /// pane that has no listing yet, and it accepts drops so an empty folder stays a valid target.
+    /// </summary>
+    private void UpdateEmptyState(int visibleItemCount, string? filter)
+    {
+        var hasListing = IsRemoteSnapshotSelected || IsLocalConnectionSelected;
+        var show = hasListing && visibleItemCount == 0;
+        if (show)
+        {
+            _emptyStateLabel.Text = string.IsNullOrWhiteSpace(filter)
+                ? EmptyFolderMessage
+                : "No items match the current filter.";
+        }
+
+        if (_emptyStateOverlay.Visible != show)
+        {
+            _emptyStateOverlay.Visible = show;
+        }
+
+        if (show && !_loadingOverlay.Visible)
+        {
+            _emptyStateOverlay.BringToFront();
+        }
+    }
+
     private void UpdateSummaryText()
     {
         var filter = _filterBox.Text;
@@ -1864,6 +1903,7 @@ public sealed class BrowserPaneControl : UserControl
                 ? " | indexing next page…"
                 : " | more available")
             : countText;
+        UpdateEmptyState(visibleItemCount, filter);
         _summary.AccessibleDescription = string.IsNullOrWhiteSpace(filter)
             ? _summary.Text
             : $"{_summary.Text} match filter {filter}";
@@ -2232,7 +2272,10 @@ public sealed class BrowserPaneControl : UserControl
         var payload = new PaneDragPayload(this, selection.Value);
         var data = new DataObject();
         data.SetData(PaneDragDataFormat, autoConvert: false, payload);
-        ExplorerDropBeginResponse? explorerDrop = null;
+        string? dropToken = null;
+        string? markerPath = null;
+        Task<ExplorerDropBeginResponse>? registration = null;
+        CancellationTokenSource? registrationTimeout = null;
         if (selection.Value.Context.Kind == PaneTransferContextKind.ThisPc)
         {
             var paths = _fileList.SelectedIndices.Cast<int>()
@@ -2244,24 +2287,20 @@ public sealed class BrowserPaneControl : UserControl
         }
         else if (selection.Value.Context.Kind == PaneTransferContextKind.SavedConnection && BeginExplorerDropAsync is not null)
         {
-            try
+            // The marker must be on the clipboard before the drag starts, and awaiting the agent
+            // first loses the mouse gesture, so the marker is staged locally and registered with
+            // the agent concurrently. The agent still derives the marker path and re-evidences the
+            // sources at commit, so the token it is handed is only a correlation identifier.
+            dropToken = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+            if (!TryStageExplorerDropMarker(dropToken, out markerPath))
             {
-                using var beginTimeout = new CancellationTokenSource(ExplorerDropHandshakeTimeout);
-                explorerDrop = await BeginExplorerDropAsync(selection.Value, beginTimeout.Token).ConfigureAwait(true);
-                if (explorerDrop.Failure is not null || string.IsNullOrWhiteSpace(explorerDrop.DropToken) ||
-                    string.IsNullOrWhiteSpace(explorerDrop.MarkerPath) || !Directory.Exists(explorerDrop.MarkerPath))
-                {
-                    ShowError(explorerDrop.Failure?.Message ?? "StorageHub could not initialize the Explorer drop.");
-                    return;
-                }
-                data.SetData(DataFormats.FileDrop, new[] { explorerDrop.MarkerPath });
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
-                InvalidOperationException or TimeoutException or System.Text.Json.JsonException or OperationCanceledException)
-            {
-                ShowError($"StorageHub could not initialize the Explorer drop: {error.Message}");
+                ShowError("StorageHub could not initialize the Explorer drop.");
                 return;
             }
+
+            data.SetData(DataFormats.FileDrop, new[] { markerPath });
+            registrationTimeout = new CancellationTokenSource(ExplorerDropHandshakeTimeout);
+            registration = BeginExplorerDropAsync(selection.Value, dropToken, registrationTimeout.Token);
         }
 
         var allowedEffects = selection.Value.Context.Kind == PaneTransferContextKind.SavedConnection
@@ -2273,23 +2312,37 @@ public sealed class BrowserPaneControl : UserControl
         }
         catch (Exception error) when (error is ExternalException or InvalidOperationException)
         {
+            registrationTimeout?.Dispose();
+            TryDiscardExplorerDropMarker(markerPath);
             ShowError($"Windows could not start the drag operation: {error.Message}");
             return;
         }
 
         if (selection.Value.Context.Kind == PaneTransferContextKind.SavedConnection &&
-            explorerDrop is null && !payload.InternalDropHandled &&
+            registration is null && !payload.InternalDropHandled &&
             !string.IsNullOrWhiteSpace(ExplorerDropUnavailableReason))
         {
             ShowError(ExplorerDropUnavailableReason);
         }
 
-        if (explorerDrop is not null && CommitExplorerDropAsync is not null)
+        if (registration is not null && CommitExplorerDropAsync is not null)
         {
             try
             {
+                var registered = await registration.ConfigureAwait(true);
+                if (registered.Failure is not null || string.IsNullOrWhiteSpace(registered.DropToken))
+                {
+                    TryDiscardExplorerDropMarker(markerPath);
+                    if (!payload.InternalDropHandled)
+                    {
+                        ShowError(registered.Failure?.Message ?? "StorageHub could not initialize the Explorer drop.");
+                    }
+
+                    return;
+                }
+
                 using var commitTimeout = new CancellationTokenSource(ExplorerDropHandshakeTimeout);
-                var committed = await CommitExplorerDropAsync(explorerDrop.DropToken!, commitTimeout.Token)
+                var committed = await CommitExplorerDropAsync(dropToken!, commitTimeout.Token)
                     .ConfigureAwait(true);
                 if (!payload.InternalDropHandled && committed.Accepted)
                 {
@@ -2304,6 +2357,14 @@ public sealed class BrowserPaneControl : UserControl
                 if (!payload.InternalDropHandled)
                     ShowError($"StorageHub could not queue the Explorer drop: {error.Message}");
             }
+            finally
+            {
+                registrationTimeout?.Dispose();
+            }
+        }
+        else
+        {
+            registrationTimeout?.Dispose();
         }
     }
 
@@ -2318,6 +2379,46 @@ public sealed class BrowserPaneControl : UserControl
             }.Concat(selection.Items
                 .OrderBy(static item => item.RelativePath, StringComparer.Ordinal)
                 .Select(item => string.Join("|", item.RelativePath, item.VersionId, item.EntityTag))));
+    }
+
+    /// <summary>
+    /// Creates the empty marker folder that Explorer will appear to copy. It carries no content:
+    /// the copy hook vetoes the copy and StorageHub performs the real transfer, so the folder is
+    /// only a handle that lets the drag begin inside the mouse gesture.
+    /// </summary>
+    private static bool TryStageExplorerDropMarker(string dropToken, out string? markerPath)
+    {
+        markerPath = null;
+        try
+        {
+            var root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "StorageHub",
+                "DragMarkers");
+            var staged = Path.Combine(root, "StorageHubDrop-" + dropToken);
+            Directory.CreateDirectory(staged);
+            File.WriteAllText(Path.Combine(staged, ".storagehub-drop"), dropToken);
+            markerPath = staged;
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDiscardExplorerDropMarker(string? markerPath)
+    {
+        if (string.IsNullOrWhiteSpace(markerPath)) return;
+        try
+        {
+            if (Directory.Exists(markerPath)) Directory.Delete(markerPath, recursive: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // The agent purges abandoned markers on its own timer, so this is best effort.
+        }
     }
 
     private void ConfigureDropTarget(Control control)
@@ -2981,6 +3082,33 @@ public sealed class BrowserPaneControl : UserControl
             AccessibleName = "Fetching folder contents"
         });
         overlay.Controls.Add(content, 0, 1);
+        return overlay;
+    }
+
+    private static TableLayoutPanel CreateEmptyStateOverlay(out Label message)
+    {
+        var overlay = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = StorageHubTheme.Surface,
+            ColumnCount = 1,
+            RowCount = 3,
+            Visible = false,
+            AccessibleName = "Empty folder notice"
+        };
+        overlay.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        overlay.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+        overlay.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        overlay.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
+        message = new Label
+        {
+            Anchor = AnchorStyles.None,
+            AutoSize = true,
+            Text = EmptyFolderMessage,
+            Font = StorageHubTheme.CreateSectionFont(),
+            ForeColor = StorageHubTheme.TextMuted
+        };
+        overlay.Controls.Add(message, 0, 1);
         return overlay;
     }
 

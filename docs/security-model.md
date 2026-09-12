@@ -40,6 +40,21 @@ execution as that user.
   inherited access disabled and access granted only to the current user. Files
   are hidden, not content-indexed, and removed on a best-effort basis with the
   runtime connection.
+- The key and certificate store (schema v13 `credential_references`) holds only
+  opaque vault references plus a derived, non-sensitive summary: certificate
+  subject/issuer/validity/thumbprint, or an SSH public-key algorithm and SHA-256
+  fingerprint. Summaries are computed in the agent at import time; the key store
+  IPC surface is metadata-only and can never return key material. Material still
+  travels exclusively on the dedicated, write-only secret pipe.
+- Store entries are shared. `profile_credentials` binds a profile slot to an
+  entry with `ON DELETE RESTRICT`, and deletion is refused with the consuming
+  profile names rather than orphaning a reference. Rotation replaces material
+  under the same reference, so every consuming profile's root identity changes
+  through the existing secret-revision evidence without any profile being
+  rewritten.
+- A store entry declares its kind. A PKCS#12 bundle and an SSH private key are
+  separate kinds, and a profile slot accepts only the kind its provider can use,
+  preserving the rule that a PFX is never interpreted as an SSH key.
 - An FTPS client-certificate PFX requires a separate vault-backed password
   reference. SFTP private-key authentication requires a vault-backed passphrase,
   accepts only strict OpenSSH, legacy PEM, or PKCS#8 envelopes, and requires

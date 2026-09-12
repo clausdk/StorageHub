@@ -338,7 +338,51 @@ public sealed class TransferQueueIpcCommandServiceTests : IDisposable
         }
     }
 
-    private async Task<Fixture> CreateFixtureAsync()
+    [Fact]
+    public async Task Status_reports_live_progress_before_any_checkpoint_is_written()
+    {
+        // Checkpoints are written on a slow recovery timer, so a running transfer used to report
+        // zero bytes until the first one landed. The live counter must be preferred while it leads.
+        var progress = new StubActiveProgress();
+        var fixture = await CreateFixtureAsync(progress);
+        var request = await CreateRequestAsync(fixture);
+        await SendAsync<TransferEnqueueRequest, TransferEnqueueResponse>(
+            fixture.Service,
+            TransferQueueIpcMessageTypes.EnqueueRequest,
+            request);
+        progress.Bytes[new TransferJobId(request.TransferId)] = 64;
+
+        var status = await SendAsync<TransferStatusRequest, TransferStatusResponse>(
+            fixture.Service,
+            TransferQueueIpcMessageTypes.StatusRequest,
+            new TransferStatusRequest(TransferQueueIpcContract.CurrentVersion, request.TransferId));
+
+        Assert.NotNull(status.Transfer);
+        Assert.Equal(64, status.Transfer!.ProgressBytes);
+        Assert.Equal(128, status.Transfer.ExpectedBytes);
+    }
+
+    [Fact]
+    public async Task Status_never_reports_more_progress_than_the_expected_length()
+    {
+        var progress = new StubActiveProgress();
+        var fixture = await CreateFixtureAsync(progress);
+        var request = await CreateRequestAsync(fixture);
+        await SendAsync<TransferEnqueueRequest, TransferEnqueueResponse>(
+            fixture.Service,
+            TransferQueueIpcMessageTypes.EnqueueRequest,
+            request);
+        progress.Bytes[new TransferJobId(request.TransferId)] = 4_096;
+
+        var status = await SendAsync<TransferStatusRequest, TransferStatusResponse>(
+            fixture.Service,
+            TransferQueueIpcMessageTypes.StatusRequest,
+            new TransferStatusRequest(TransferQueueIpcContract.CurrentVersion, request.TransferId));
+
+        Assert.Equal(128, status.Transfer!.ProgressBytes);
+    }
+
+    private async Task<Fixture> CreateFixtureAsync(IActiveTransferProgress? activeProgress = null)
     {
         var options = new SqliteDatabaseOptions(
             Path.Combine(_directory, $"{Guid.NewGuid():N}.db"),
@@ -354,7 +398,8 @@ public sealed class TransferQueueIpcCommandServiceTests : IDisposable
                 store,
                 store,
                 activeCancellation: null,
-                new FixedTimeProvider(Now)));
+                new FixedTimeProvider(Now),
+                activeProgress));
     }
 
     private static async Task<TransferEnqueueRequest> CreateRequestAsync(Fixture fixture)
@@ -430,6 +475,14 @@ public sealed class TransferQueueIpcCommandServiceTests : IDisposable
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private sealed class StubActiveProgress : IActiveTransferProgress
+    {
+        public Dictionary<TransferJobId, long> Bytes { get; } = [];
+
+        public long? TryGetLiveProgressBytes(TransferJobId transferJobId) =>
+            Bytes.TryGetValue(transferJobId, out var bytes) ? bytes : null;
     }
 
     private sealed class RecordingCancellation(ActiveTransferCancellationResult result)

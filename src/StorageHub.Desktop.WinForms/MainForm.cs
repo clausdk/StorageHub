@@ -124,6 +124,7 @@ public sealed class MainForm : Form
         mainSplit.Panel2.BackColor = StorageHubTheme.Surface;
         mainSplit.Panel1.Controls.Add(_workspaceTabs);
         _transferQueue = new TransferQueueControl(_updatePreferencesStore);
+        _transferQueue.QueueCountsChanged += TransferQueueCountsChanged;
         _manualTransfers.TransfersEnqueued += ManualTransfersEnqueued;
         mainSplit.Panel2.Controls.Add(_transferQueue);
 
@@ -535,6 +536,7 @@ public sealed class MainForm : Form
 
     private Task<ExplorerDropBeginResponse> BeginExplorerDropAsync(
         PaneSelectionSnapshot selection,
+        string dropToken,
         CancellationToken cancellationToken)
     {
         if (selection.Context.ConnectionId is not { } connectionId ||
@@ -561,9 +563,10 @@ public sealed class MainForm : Form
                 item.EntityTag),
             item.IsContainer,
             item.Name)).ToArray();
-        return _shellTransfers.BeginExplorerDropAsync(new ShellExportPrepareRequest(
+        return _shellTransfers.BeginExplorerDropAsync(new ExplorerDropBeginRequest(
             ShellTransferIpcContract.CurrentVersion,
-            sources), cancellationToken);
+            sources,
+            dropToken), cancellationToken);
     }
 
     private Task<ExplorerDropCommitResponse> CommitExplorerDropAsync(
@@ -738,6 +741,9 @@ public sealed class MainForm : Form
                     break;
                 case "Schedules...":
                     ShowSchedules();
+                    break;
+                case "Key Store...":
+                    ShowKeyStore();
                     break;
                 case "Settings...":
                     var preferencesBefore = _updatePreferencesStore.Load();
@@ -1140,6 +1146,24 @@ public sealed class MainForm : Form
         _ = dialog.ShowDialog(this);
     }
 
+    private void ShowKeyStore()
+    {
+        // Two clients: metadata travels on the ordinary pipe, and material is enrolled only on the
+        // dedicated secret pipe, which never reads anything back.
+        var client = new NamedPipeKeyStoreAgentClient();
+        var secrets = new NamedPipeRemoteSecretVaultClient();
+        try
+        {
+            using var dialog = new KeyStoreForm(client, secrets);
+            _ = dialog.ShowDialog(this);
+        }
+        finally
+        {
+            _ = client.DisposeAsync().AsTask();
+            _ = secrets.DisposeAsync().AsTask();
+        }
+    }
+
     private void ActivePaneEntered(object? sender, EventArgs e)
     {
         _activePane = sender as BrowserPaneControl;
@@ -1200,6 +1224,7 @@ public sealed class MainForm : Form
         "Focus Address" or
         "Next Pane" or
         "Connection Manager..." or
+        "Key Store..." or
         "Review & Run..." or
         "Sync Profiles..." or
         "Schedules..." or
@@ -2391,6 +2416,23 @@ public sealed class MainForm : Form
             DesktopUpdateState.Failed => StorageHubTheme.Danger,
             _ => StorageHubTheme.TextMuted
         };
+    }
+
+    /// <summary>
+    /// Keeps the shell status bar's queue counters in step with the agent, so a running transfer
+    /// is visible from any workspace tab rather than only inside the queue panel.
+    /// </summary>
+    private void TransferQueueCountsChanged(object? sender, TransferQueueCountsEventArgs e)
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        if (_status.QueuedJobs != e.QueuedJobs || _status.ActiveJobs != e.ActiveJobs)
+        {
+            ApplyStatus(_status with { QueuedJobs = e.QueuedJobs, ActiveJobs = e.ActiveJobs });
+        }
     }
 
     private void ApplyStatus(ShellStatusSnapshot status)

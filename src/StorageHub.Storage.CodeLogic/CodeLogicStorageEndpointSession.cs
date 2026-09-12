@@ -74,12 +74,22 @@ public sealed class CodeLogicStorageEndpointSession :
             }
 
             var result = await _storage.GetInfoAsync(string.Empty, cancellationToken).ConfigureAwait(false);
-            return result.IsSuccess
+            if (result.IsSuccess)
+            {
+                return StorageResult.Success();
+            }
+
+            var failure = CodeLogicStorageMapper.MapFailure(
+                result.Error,
+                "storage.health.failed",
+                "The endpoint health check failed.");
+
+            // An empty namespace is healthy. Object stores have no directory entry for a prefix
+            // that holds no keys, so probing the root of an empty bucket legitimately reports
+            // NotFound; only reachability, authorization, and provider faults are health failures.
+            return failure.Kind == StorageFailureKind.NotFound
                 ? StorageResult.Success()
-                : StorageResult.Fail(CodeLogicStorageMapper.MapFailure(
-                    result.Error,
-                    "storage.health.failed",
-                    "The endpoint health check failed."));
+                : StorageResult.Fail(failure);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

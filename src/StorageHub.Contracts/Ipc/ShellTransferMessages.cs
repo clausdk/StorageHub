@@ -68,6 +68,23 @@ public sealed record ShellExportStatusResponse(
     string[] LocalPaths,
     StorageIpcFailure? Failure = null);
 
+/// <summary>
+/// Registers an Explorer drag that the desktop has already staged. The caller supplies the token
+/// so that it can create the marker directory and start the drag synchronously inside the mouse
+/// gesture; awaiting a pipe round trip first loses the drag. The agent still derives the marker
+/// path itself and captures all source evidence, so the token is only a correlation identifier.
+/// </summary>
+public sealed record ExplorerDropBeginRequest(
+    int ContractVersion,
+    ShellExportSource[] Sources,
+    string DropToken)
+{
+    public bool HasValidBounds => ContractVersion > 0 &&
+        Sources is { Length: > 0 and <= ShellTransferIpcLimits.MaximumPaths } &&
+        Sources.All(source => source is not null && source.HasValidBounds) &&
+        DropToken is { Length: 32 } && DropToken.All(Uri.IsHexDigit);
+}
+
 public sealed record ExplorerDropBeginResponse(
     int ContractVersion,
     string? DropToken,

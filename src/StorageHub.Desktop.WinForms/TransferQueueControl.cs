@@ -8,6 +8,9 @@ namespace StorageHub.Desktop;
 /// </summary>
 public sealed class TransferQueueControl : UserControl
 {
+    private const int ActivePollIntervalMilliseconds = 500;
+    private const int IdlePollIntervalMilliseconds = 2_000;
+
     private static readonly QueueTabDefinition[] QueueTabs =
     [
         new("Active", UiGlyph.Run,
@@ -149,7 +152,7 @@ public sealed class TransferQueueControl : UserControl
         Controls.Add(_tabs);
         Controls.Add(toolbar);
 
-        _pollTimer = new System.Windows.Forms.Timer { Interval = 2_000 };
+        _pollTimer = new System.Windows.Forms.Timer { Interval = IdlePollIntervalMilliseconds };
         _pollTimer.Tick += PollTimerTick;
         UpdateActionState();
     }
@@ -263,7 +266,7 @@ public sealed class TransferQueueControl : UserControl
         grid.Columns.Add("Operation", "Operation");
         grid.Columns.Add("Source", "Source");
         grid.Columns.Add("Destination", "Destination");
-        grid.Columns.Add("Progress", "Progress");
+        grid.Columns.Add(new TransferProgressColumn { Name = "Progress", HeaderText = "Progress" });
         grid.Columns.Add("Attempt", "Attempt");
         grid.Columns.Add("Status", "Status");
         grid.Columns[0].FillWeight = 55;
@@ -504,9 +507,12 @@ public sealed class TransferQueueControl : UserControl
     }
 
     private async void PollTimerTick(object? sender, EventArgs e) =>
-        await RefreshQueueCoreAsync(resetPage: false, _lifetime.Token).ConfigureAwait(true);
+        await RefreshQueueCoreAsync(resetPage: false, _lifetime.Token, background: true).ConfigureAwait(true);
 
-    private async Task RefreshQueueCoreAsync(bool resetPage, CancellationToken cancellationToken)
+    private async Task RefreshQueueCoreAsync(
+        bool resetPage,
+        CancellationToken cancellationToken,
+        bool background = false)
     {
         var selectedTab = _tabs.SelectedTab;
         if (_disposed || selectedTab is null || !_definitions.TryGetValue(selectedTab, out var definition) ||
@@ -520,7 +526,13 @@ public sealed class TransferQueueControl : UserControl
             _pageCursor = null;
         }
 
-        SetBusy(true, "Refreshing queue…");
+        // A background poll must stay invisible: showing a wait cursor and a "refreshing" status
+        // every couple of seconds made an in-flight transfer look stalled rather than live.
+        if (!background)
+        {
+            SetBusy(true, "Refreshing queue…");
+        }
+
         try
         {
             var response = await _client.ListAsync(
@@ -537,7 +549,9 @@ public sealed class TransferQueueControl : UserControl
             }
 
             PopulateGrid(_grids[selectedTab], response.Transfers);
+            AdjustPollInterval(response.Transfers);
             UpdateTabCounters(response, definition);
+            PublishQueueCounts(response);
             ConfigureTabSize();
             _nextCursor = response.ContinuationToken;
             _nextButton.Enabled = _nextCursor is not null;
@@ -556,26 +570,94 @@ public sealed class TransferQueueControl : UserControl
         finally
         {
             _ = Interlocked.Exchange(ref _refreshing, 0);
-            SetBusy(false);
+            if (background)
+            {
+                UpdateActionState();
+            }
+            else
+            {
+                SetBusy(false);
+            }
         }
     }
 
+    /// <summary>
+    /// Reconciles the grid against the latest page in place. Clearing and rebuilding the rows on
+    /// every poll discarded the user's selection and made the progress bars restart their paint
+    /// each tick, so rows are matched by transfer id and only the changed cells are written.
+    /// </summary>
     private static void PopulateGrid(DataGridView grid, IEnumerable<TransferQueueSummary> transfers)
     {
-        grid.Rows.Clear();
-        foreach (var transfer in transfers)
+        var ordered = transfers as IList<TransferQueueSummary> ?? transfers.ToList();
+        var wasEmpty = grid.Rows.Count == 0;
+
+        while (grid.Rows.Count > ordered.Count)
         {
-            var index = grid.Rows.Add(
-                transfer.Operation,
-                FormatEndpoint(transfer.SourceConnectionId, transfer.SourcePath),
-                FormatEndpoint(transfer.DestinationConnectionId, transfer.DestinationPath),
-                FormatProgress(transfer.ProgressBytes, transfer.ExpectedBytes),
-                transfer.Attempt,
-                FormatStatus(transfer));
-            grid.Rows[index].Tag = transfer;
+            grid.Rows.RemoveAt(grid.Rows.Count - 1);
         }
 
-        grid.ClearSelection();
+        while (grid.Rows.Count < ordered.Count)
+        {
+            grid.Rows.Add();
+        }
+
+        for (var index = 0; index < ordered.Count; index++)
+        {
+            var transfer = ordered[index];
+            var row = grid.Rows[index];
+            if (row.Tag is TransferQueueSummary existing && existing == transfer)
+            {
+                continue;
+            }
+
+            var previous = row.Tag as TransferQueueSummary;
+            if (previous?.TransferId != transfer.TransferId)
+            {
+                SetCell(row, 0, transfer.Operation);
+                SetCell(row, 1, FormatEndpoint(transfer.SourceConnectionId, transfer.SourcePath));
+                SetCell(row, 2, FormatEndpoint(transfer.DestinationConnectionId, transfer.DestinationPath));
+            }
+
+            SetCell(row, 3, FormatProgress(transfer.ProgressBytes, transfer.ExpectedBytes));
+            SetCell(row, 4, transfer.Attempt);
+            SetCell(row, 5, FormatStatus(transfer));
+            row.Cells[3].Style.Tag = ProgressFraction(transfer);
+            row.Tag = transfer;
+        }
+
+        if (wasEmpty)
+        {
+            grid.ClearSelection();
+        }
+    }
+
+    private static void SetCell(DataGridViewRow row, int index, object? value)
+    {
+        var cell = row.Cells[index];
+        if (!Equals(cell.Value, value))
+        {
+            cell.Value = value;
+        }
+    }
+
+    /// <summary>
+    /// The completed fraction to paint, or null when the total is unknown and only a byte count
+    /// can be shown. A finished transfer always paints full so a rounded percentage cannot leave
+    /// a completed row looking short.
+    /// </summary>
+    internal static double? ProgressFraction(TransferQueueSummary transfer)
+    {
+        if (transfer.State is TransferQueueState.Completed)
+        {
+            return 1D;
+        }
+
+        if (transfer.ExpectedBytes is not { } expected || expected <= 0)
+        {
+            return null;
+        }
+
+        return Math.Clamp(transfer.ProgressBytes / (double)expected, 0D, 1D);
     }
 
     private static string FormatEndpoint(Guid connectionId, string path) =>
@@ -683,6 +765,67 @@ public sealed class TransferQueueControl : UserControl
         _nextButton.Enabled = _nextCursor is not null;
     }
 
+    /// <summary>
+    /// Raised whenever a refresh produces fresh queue counts, so the shell status bar can stay
+    /// current without the queue panel being on screen.
+    /// </summary>
+    public event EventHandler<TransferQueueCountsEventArgs>? QueueCountsChanged;
+
+    private void PublishQueueCounts(TransferListResponse response)
+    {
+        if (response.StateCounts is not { } counts)
+        {
+            return;
+        }
+
+        var queued = 0;
+        var active = 0;
+        foreach (var (state, count) in counts)
+        {
+            if (IsActiveState(state))
+            {
+                active += count;
+            }
+            else if (state is TransferQueueState.Pending or TransferQueueState.Retrying)
+            {
+                queued += count;
+            }
+        }
+
+        QueueCountsChanged?.Invoke(this, new TransferQueueCountsEventArgs(queued, active));
+    }
+
+    /// <summary>
+    /// Polls quickly while work is actually moving and backs off when the queue is settled, so a
+    /// running transfer advances visibly without charging an idle queue the same wake-up cost.
+    /// </summary>
+    private void AdjustPollInterval(TransferQueueSummary[] transfers)
+    {
+        var active = false;
+        for (var index = 0; index < transfers.Length; index++)
+        {
+            if (IsActiveState(transfers[index].State))
+            {
+                active = true;
+                break;
+            }
+        }
+
+        var interval = active ? ActivePollIntervalMilliseconds : IdlePollIntervalMilliseconds;
+        if (_pollTimer.Interval != interval)
+        {
+            _pollTimer.Interval = interval;
+        }
+    }
+
+    internal static bool IsActiveState(TransferQueueState state) => state is
+        TransferQueueState.Preparing or
+        TransferQueueState.Connecting or
+        TransferQueueState.Transferring or
+        TransferQueueState.Verifying or
+        TransferQueueState.Finalizing or
+        TransferQueueState.CleanupPending;
+
     private void SetBusy(bool busy, string? message = null)
     {
         UseWaitCursor = busy;
@@ -706,7 +849,10 @@ public sealed class TransferQueueControl : UserControl
 
     private void UpdatePollingState()
     {
-        var shouldPoll = !_disposed && IsHandleCreated && Visible && FindForm()?.Visible == true;
+        // Polling follows the window, not this panel. Gating on the panel's own visibility meant
+        // the queue stopped refreshing the moment the user switched to a browser tab, which is
+        // exactly when a transfer is running and its progress most needs to stay live.
+        var shouldPoll = !_disposed && IsHandleCreated && FindForm()?.Visible == true;
         if (!shouldPoll)
         {
             _pollTimer.Stop();
@@ -773,4 +919,12 @@ internal sealed class ClearTransferHistoryConfirmationForm : Form
     }
 
     internal bool DontShowAgain => _dontShowAgain.Checked;
+}
+
+/// <summary>Live queue counts published by a background refresh.</summary>
+public sealed class TransferQueueCountsEventArgs(int queuedJobs, int activeJobs) : EventArgs
+{
+    public int QueuedJobs { get; } = queuedJobs;
+
+    public int ActiveJobs { get; } = activeJobs;
 }

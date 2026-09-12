@@ -5,6 +5,77 @@ namespace StorageHub.Desktop.Tests;
 
 public sealed class TransferQueueControlTests
 {
+    [Theory]
+    [InlineData(TransferQueueState.Transferring, 0L, 100L, 0D)]
+    [InlineData(TransferQueueState.Transferring, 25L, 100L, 0.25D)]
+    [InlineData(TransferQueueState.Transferring, 100L, 100L, 1D)]
+    public void ProgressFractionTracksTheCompletedShare(
+        TransferQueueState state,
+        long progress,
+        long expected,
+        double fraction)
+    {
+        Assert.Equal(fraction, TransferQueueControl.ProgressFraction(Summary(state, progress, expected)));
+    }
+
+    [Fact]
+    public void ProgressFractionClampsReportsThatOvershootTheExpectedLength()
+    {
+        Assert.Equal(1D, TransferQueueControl.ProgressFraction(
+            Summary(TransferQueueState.Transferring, 4_096, 100)));
+    }
+
+    [Fact]
+    public void ProgressFractionIsUnknownWithoutAnExpectedLength()
+    {
+        Assert.Null(TransferQueueControl.ProgressFraction(
+            Summary(TransferQueueState.Transferring, 40, expected: null)));
+    }
+
+    [Fact]
+    public void CompletedTransfersAlwaysPaintFull()
+    {
+        // A rounded percentage must never leave a finished row looking short of the end.
+        Assert.Equal(1D, TransferQueueControl.ProgressFraction(
+            Summary(TransferQueueState.Completed, 0, expected: null)));
+    }
+
+    [Theory]
+    [InlineData(TransferQueueState.Transferring, true)]
+    [InlineData(TransferQueueState.Verifying, true)]
+    [InlineData(TransferQueueState.Finalizing, true)]
+    [InlineData(TransferQueueState.Pending, false)]
+    [InlineData(TransferQueueState.Completed, false)]
+    [InlineData(TransferQueueState.Failed, false)]
+    public void ActiveStatesDriveTheFasterPollingCadence(TransferQueueState state, bool active)
+    {
+        Assert.Equal(active, TransferQueueControl.IsActiveState(state));
+    }
+
+    private static TransferQueueSummary Summary(
+        TransferQueueState state,
+        long progress,
+        long? expected) => new(
+        Guid.NewGuid(),
+        TransferQueueOperation.Copy,
+        Guid.NewGuid(),
+        "source.bin",
+        Guid.NewGuid(),
+        "destination.bin",
+        state,
+        Revision: 1,
+        Attempt: 1,
+        Priority: 0,
+        ExpectedBytes: expected,
+        ProgressBytes: progress,
+        UpdatedUtc: DateTimeOffset.UnixEpoch,
+        RetryAvailableUtc: null,
+        ErrorCode: null,
+        ErrorSummary: null,
+        CanCancel: true,
+        CanRetry: false,
+        NeedsReconciliation: false);
+
     [Fact]
     public void Control_stays_inert_until_shown_and_renders_an_explicit_refresh()
     {

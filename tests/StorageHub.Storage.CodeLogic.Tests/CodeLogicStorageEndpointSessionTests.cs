@@ -1198,6 +1198,95 @@ public sealed class CodeLogicStorageEndpointSessionTests
         ClStorageFeature.ConditionalCreate |
         ClStorageFeature.RangeReads);
 
+    [Fact]
+    public async Task ListsContainerReportedWithAZeroByteSize()
+    {
+        // S3-style adapters surface a common prefix as a directory carrying Size = 0. The domain
+        // rejects a sized container, so the adapter must drop the size instead of failing the page.
+        var service = new FakeStorageService
+        {
+            ListHandler = (_, _, _) => Task.FromResult(Result<CL.Storage.Models.StoragePage>.Success(
+                new CL.Storage.Models.StoragePage(
+                [
+                    Item("folder/nested", StorageItemType.Directory, 0),
+                    Item("folder/file.bin", StorageItemType.File, 512)
+                ])))
+        };
+        await using var session = CreateSession(service);
+
+        var result = await session.ListAsync(
+            Address(session.ProfileId, RootIdentity, "folder"),
+            new StorageListRequest());
+
+        Assert.True(result.IsSuccess);
+        Assert.Collection(
+            result.Value.Entries,
+            entry =>
+            {
+                Assert.Equal(StorageEntryKind.Directory, entry.Kind);
+                Assert.True(entry.IsContainer);
+                Assert.Null(entry.Size);
+            },
+            entry =>
+            {
+                Assert.Equal(StorageEntryKind.File, entry.Kind);
+                Assert.Equal(512, entry.Size);
+            });
+    }
+
+    [Fact]
+    public async Task ListsAnEmptyContainerAsAnEmptyPage()
+    {
+        var service = new FakeStorageService
+        {
+            ListHandler = (_, _, _) => Task.FromResult(Result<CL.Storage.Models.StoragePage>.Success(
+                new CL.Storage.Models.StoragePage([])))
+        };
+        await using var session = CreateSession(service);
+
+        var result = await session.ListAsync(
+            Address(session.ProfileId, RootIdentity, "empty"),
+            new StorageListRequest());
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(result.Value.Entries);
+        Assert.Null(result.Value.ContinuationToken);
+    }
+
+    [Fact]
+    public async Task TreatsNotFoundRootInfoProbeAsHealthy()
+    {
+        // A bucket holding no keys has no root entry to inspect. It is still reachable and
+        // authorized, so the endpoint must report healthy or it can never be browsed at all.
+        var service = new FakeStorageService
+        {
+            GetInfoHandler = (_, _) => Task.FromResult(
+                Result<StorageItem>.Failure(StorageErrors.NotFound("no such key")))
+        };
+        await using var session = CreateSession(service);
+
+        var result = await session.CheckHealthAsync();
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, service.GetInfoCallCount);
+    }
+
+    [Fact]
+    public async Task StillReportsNonNotFoundHealthProbeFailures()
+    {
+        var service = new FakeStorageService
+        {
+            GetInfoHandler = (_, _) => Task.FromResult(
+                Result<StorageItem>.Failure(StorageErrors.Unauthorized("denied")))
+        };
+        await using var session = CreateSession(service);
+
+        var result = await session.CheckHealthAsync();
+
+        Assert.True(result.IsFailure);
+        Assert.Equal(StorageFailureKind.Unauthorized, result.Error.Kind);
+    }
+
     private static CodeLogicStorageEndpointSession CreateSession(
         FakeStorageService service,
         ConnectionProfileId? profileId = null) =>

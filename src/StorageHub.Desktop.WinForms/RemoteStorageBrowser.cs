@@ -281,7 +281,10 @@ public sealed class RemoteBrowserController : IAsyncDisposable
                 return new(RemoteBrowserOperationStatus.Superseded);
             }
 
-            if (listed.Failure is not null)
+            // The root of a bound profile always exists, so a NotFound root listing means the
+            // namespace is empty rather than missing. Refusing selection here would make an empty
+            // bucket impossible to open at all.
+            if (listed.Failure is not null && listed.Failure.Category != StorageIpcFailureCategory.NotFound)
             {
                 return new(
                     RemoteBrowserOperationStatus.Failed,
@@ -290,7 +293,9 @@ public sealed class RemoteBrowserController : IAsyncDisposable
 
             SelectedConnection = connection;
             _history.Reset(string.Empty);
-            CurrentSnapshot = CreateSnapshot(connection, listed);
+            CurrentSnapshot = listed.Failure is null
+                ? CreateSnapshot(connection, listed)
+                : new RemoteBrowserSnapshot(connection, string.Empty, [], null, listed.RootIdentity, 0);
             return new(RemoteBrowserOperationStatus.Succeeded, CurrentSnapshot);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -353,8 +358,17 @@ public sealed class RemoteBrowserController : IAsyncDisposable
 
             if (listed.Failure is not null)
             {
-                if (listed.Failure.Category == StorageIpcFailureCategory.NotFound && target.Length > 0)
+                if (listed.Failure.Category == StorageIpcFailureCategory.NotFound)
                 {
+                    // An object store has no directory entry for a prefix that holds no keys, so a
+                    // NotFound listing normally means "empty", not "deleted". The root of a bound
+                    // profile always exists, and deeper containers are only treated as missing when
+                    // the parent page positively proves their absence.
+                    if (target.Length == 0)
+                    {
+                        return CommitEmptyContainer(kind, target, CurrentSnapshot.RootIdentity);
+                    }
+
                     var missingPath = target;
                     var fallbackPath = RemoteBrowserPath.GetParent(target);
                     for (var depth = 0; depth < 256; depth++)
@@ -372,6 +386,14 @@ public sealed class RemoteBrowserController : IAsyncDisposable
 
                         if (fallback.Failure is null)
                         {
+                            if (depth == 0 && !ContainerIsAbsent(fallback, missingPath))
+                            {
+                                return CommitEmptyContainer(
+                                    kind,
+                                    missingPath,
+                                    fallback.RootIdentity ?? CurrentSnapshot.RootIdentity);
+                            }
+
                             _history.Commit(RemoteBrowserNavigationKind.Navigate, fallbackPath);
                             CurrentSnapshot = CreateSnapshot(SelectedConnection, fallback);
                             return new(
@@ -539,6 +561,49 @@ public sealed class RemoteBrowserController : IAsyncDisposable
             IncludeVersions: false,
             Recursive: false),
         cancellationToken);
+
+    /// <summary>
+    /// Commits a navigation to a container that exists but returned no listing, presenting it as
+    /// an empty folder instead of redirecting the caller elsewhere.
+    /// </summary>
+    private RemoteBrowserNavigationResult CommitEmptyContainer(
+        RemoteBrowserNavigationKind kind,
+        string target,
+        string? rootIdentity)
+    {
+        _history.Commit(kind, target);
+        CurrentSnapshot = new RemoteBrowserSnapshot(
+            SelectedConnection!,
+            target,
+            [],
+            null,
+            rootIdentity,
+            0);
+        return new(RemoteBrowserOperationStatus.Succeeded, CurrentSnapshot);
+    }
+
+    /// <summary>
+    /// Reports whether a parent page proves that a child container no longer exists. Absence is
+    /// only claimed for a complete page; an unread continuation could still hold the child, and
+    /// presenting an empty folder is safer than moving the user somewhere they did not ask for.
+    /// </summary>
+    private static bool ContainerIsAbsent(StorageListPageResponse parent, string missingPath)
+    {
+        if (!string.IsNullOrEmpty(parent.ContinuationToken))
+        {
+            return false;
+        }
+
+        foreach (var entry in parent.Entries)
+        {
+            if (string.Equals(entry.RelativePath, missingPath, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static RemoteBrowserSnapshot CreateSnapshot(
         ConnectionSummary connection,

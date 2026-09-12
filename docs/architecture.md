@@ -50,6 +50,7 @@ remain outside that contract.
 | `StorageHub.Sync` | Three-way classification, deletion policy, immutable plans, execution approvals, and plan execution |
 | `StorageHub.Persistence` | SQLite configuration/migrations and durable profile, trust, scheduler, transfer, sync, execution, and outbox stores |
 | `StorageHub.Security` | Opaque secret references, vault contracts/envelopes, trust contracts |
+| `StorageHub.Application.Credentials` | Shared key/certificate store model, derived non-sensitive summaries, and reference-counted profile bindings |
 | `StorageHub.Infrastructure.Windows` | Windows DPAPI and restricted runtime-secret files |
 | `StorageHub.Agent` | Runtime coordination, named-pipe IPC, schedules, and scheduler contracts |
 | `StorageHub.Agent.Windows` | CodeLogic console host and database/vault/worker composition, storage browsing, profile/transfer/sync/schedule IPC, and dedicated secret IPC |

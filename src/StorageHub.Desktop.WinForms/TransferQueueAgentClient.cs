@@ -48,7 +48,7 @@ public interface ITransferQueueAgentClient : IAsyncDisposable
         CancellationToken cancellationToken = default) => throw new NotSupportedException("This transfer client does not support shell exports.");
 
     Task<ExplorerDropBeginResponse> BeginExplorerDropAsync(
-        ShellExportPrepareRequest request,
+        ExplorerDropBeginRequest request,
         CancellationToken cancellationToken = default) => throw new NotSupportedException("This transfer client does not support Explorer drops.");
 
     Task<ExplorerDropCommitResponse> CommitExplorerDropAsync(
@@ -223,13 +223,13 @@ public sealed class NamedPipeTransferQueueAgentClient : ITransferQueueAgentClien
     }
 
     public Task<ExplorerDropBeginResponse> BeginExplorerDropAsync(
-        ShellExportPrepareRequest request,
+        ExplorerDropBeginRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (!ShellTransferIpcContract.IsSupported(request.ContractVersion) || !request.HasValidBounds)
             throw new ArgumentException("The Explorer drop request is outside the negotiated IPC contract bounds.", nameof(request));
-        return ExecuteAsync<ShellExportPrepareRequest, ExplorerDropBeginResponse>(
+        return ExecuteAsync<ExplorerDropBeginRequest, ExplorerDropBeginResponse>(
             ShellTransferIpcMessageTypes.BeginExplorerDropRequest,
             ShellTransferIpcMessageTypes.BeginExplorerDropResponse,
             request,

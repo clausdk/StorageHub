@@ -189,6 +189,105 @@ public sealed class RemoteStorageBrowserTests
         Assert.DoesNotContain("hunter2", result.ErrorMessage, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task EntersAnEmptyContainerInsteadOfMovingToTheParent()
+    {
+        // An object store has no entry for a prefix holding no keys, so listing one answers
+        // NotFound. The parent still lists the container, which proves it exists and is empty.
+        var connection = CreateConnection("Bucket");
+        var client = CreateSelectableClient(connection, (request, _) => Task.FromResult(
+            request.RelativePath switch
+            {
+                "" => Response(request, [Item("empty", "empty", isContainer: true)], null),
+                _ => NotFound(request)
+            }));
+        await using var controller = new RemoteBrowserController(client);
+
+        await controller.LoadConnectionsAsync();
+        await controller.SelectConnectionAsync(connection.ConnectionId);
+        var opened = await controller.NavigateAsync(RemoteBrowserNavigationKind.Navigate, "empty");
+
+        Assert.Equal(RemoteBrowserOperationStatus.Succeeded, opened.Status);
+        Assert.Null(opened.UnavailablePath);
+        Assert.Equal("empty", controller.CurrentSnapshot!.RelativePath);
+        Assert.Empty(controller.CurrentSnapshot.Entries);
+        Assert.Equal("root-browser", controller.CurrentSnapshot.RootIdentity);
+    }
+
+    [Fact]
+    public async Task StillMovesToTheParentWhenTheContainerIsProvablyGone()
+    {
+        var connection = CreateConnection("Bucket");
+        var client = CreateSelectableClient(connection, (request, _) => Task.FromResult(
+            request.RelativePath switch
+            {
+                "" => Response(request, [Item("other", "other", isContainer: true)], null),
+                _ => NotFound(request)
+            }));
+        await using var controller = new RemoteBrowserController(client);
+
+        await controller.LoadConnectionsAsync();
+        await controller.SelectConnectionAsync(connection.ConnectionId);
+        var opened = await controller.NavigateAsync(RemoteBrowserNavigationKind.Navigate, "removed");
+
+        Assert.Equal(RemoteBrowserOperationStatus.Succeeded, opened.Status);
+        Assert.Equal("removed", opened.UnavailablePath);
+        Assert.False(string.IsNullOrWhiteSpace(opened.ErrorMessage));
+        Assert.Equal(string.Empty, controller.CurrentSnapshot!.RelativePath);
+    }
+
+    [Fact]
+    public async Task DoesNotClaimAContainerIsGoneWhileTheParentPageIsIncomplete()
+    {
+        // The child could still live beyond an unread continuation, so presenting an empty
+        // folder is safer than moving the user somewhere they did not ask to go.
+        var connection = CreateConnection("Bucket");
+        var client = CreateSelectableClient(connection, (request, _) => Task.FromResult(
+            request.RelativePath switch
+            {
+                "" => Response(request, [Item("other", "other", isContainer: true)], "more"),
+                _ => NotFound(request)
+            }));
+        await using var controller = new RemoteBrowserController(client);
+
+        await controller.LoadConnectionsAsync();
+        await controller.SelectConnectionAsync(connection.ConnectionId);
+        var opened = await controller.NavigateAsync(RemoteBrowserNavigationKind.Navigate, "maybe");
+
+        Assert.Equal(RemoteBrowserOperationStatus.Succeeded, opened.Status);
+        Assert.Null(opened.UnavailablePath);
+        Assert.Equal("maybe", controller.CurrentSnapshot!.RelativePath);
+        Assert.Empty(controller.CurrentSnapshot.Entries);
+    }
+
+    [Fact]
+    public async Task SelectsAConnectionWhoseRootListingIsNotFound()
+    {
+        var connection = CreateConnection("Bucket");
+        var client = CreateSelectableClient(connection, (request, _) => Task.FromResult(NotFound(request)));
+        await using var controller = new RemoteBrowserController(client);
+
+        await controller.LoadConnectionsAsync();
+        var selected = await controller.SelectConnectionAsync(connection.ConnectionId);
+
+        Assert.Equal(RemoteBrowserOperationStatus.Succeeded, selected.Status);
+        Assert.Empty(controller.CurrentSnapshot!.Entries);
+        Assert.Equal(string.Empty, controller.CurrentSnapshot.RelativePath);
+    }
+
+    private static StorageListPageResponse NotFound(StorageListPageRequest request) => new(
+        StorageIpcContract.CurrentVersion,
+        request.ConnectionId,
+        request.RelativePath,
+        [],
+        ContinuationToken: null,
+        Failure: new StorageIpcFailure(
+            "storage.not_found",
+            StorageIpcFailureCategory.NotFound,
+            "The object was not found.",
+            IsTransient: false),
+        RootIdentity: "root-browser");
+
     private static FakeRemoteClient CreateSelectableClient(
         ConnectionSummary connection,
         Func<StorageListPageRequest, CancellationToken, Task<StorageListPageResponse>> list) => new()

@@ -1,4 +1,4 @@
-using CL.Storage.Errors;
+﻿using CL.Storage.Errors;
 using CL.Storage.Models;
 using CodeLogic.Core.Results;
 using StorageHub.Contracts.Results;
@@ -177,10 +177,14 @@ internal static class CodeLogicStorageMapper
             _ => StorageEntryKind.Other
         };
 
+        // Container entries must not carry a byte size: StorageEntry.Create rejects them, and a
+        // provider that reports a common prefix with Size = 0 would otherwise fail the whole page.
+        var size = kind is StorageEntryKind.Directory or StorageEntryKind.Prefix ? null : item.Size;
+
         return StorageEntry.Create(
             address.Value,
             kind,
-            item.Size,
+            size,
             item.LastModified,
             item.ContentType,
             item.ETag,

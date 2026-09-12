@@ -10,7 +10,8 @@ namespace StorageHub.Agent.Transfers;
 /// Claims and executes the durable transfer queue with bounded concurrency. All state,
 /// checkpoint, and renewal writes retain the store-issued lease fence and attempt identity.
 /// </summary>
-public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransferCancellation, IAsyncDisposable
+public sealed class TransferQueueAgentSubsystem
+    : IAgentSubsystem, IActiveTransferCancellation, IActiveTransferProgress, IAsyncDisposable
 {
     private readonly ITransferJobStore _store;
     private readonly ITransferEndpointConnector _connector;
@@ -76,6 +77,17 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
     /// Requests cancellation of a currently streaming attempt. The durable transition remains
     /// owned by that attempt and therefore retains its lease fence and revision CAS.
     /// </summary>
+    /// <summary>
+    /// Reads the live byte count for a transfer that is executing in this process, or null when the
+    /// job is not currently running here. Durable checkpoints are written on a slow timer because
+    /// they are a recovery control; reading the in-memory counter lets callers report progress
+    /// immediately without making that timer any faster.
+    /// </summary>
+    public long? TryGetLiveProgressBytes(Domain.Identifiers.TransferJobId transferJobId) =>
+        _activeExecutions.TryGetValue(transferJobId, out var active)
+            ? active.Progress?.BytesTransferred
+            : null;
+
     public ActiveTransferCancellationResult TryRequestActiveCancellation(
         Domain.Identifiers.TransferJobId transferJobId,
         long expectedRevision)
@@ -431,6 +443,7 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
             }
 
             var progress = new LatestTransferProgress();
+            activeControl.Progress = progress;
             var leaseMonitor = MonitorLeaseAsync(context.Lease, executionLifetime);
             var checkpointMonitor = MonitorCheckpointAsync(context, progress, executionLifetime);
             StorageResult<TransferExecutionReport>? executionResult = null;
@@ -995,6 +1008,12 @@ public sealed class TransferQueueAgentSubsystem : IAgentSubsystem, IActiveTransf
 
         public long ExpectedRevision { get; } = expectedRevision;
 
+        /// <summary>
+        /// The live byte counter for this execution, published so that callers can read progress
+        /// without waiting for the next durable checkpoint to be written.
+        /// </summary>
+        public LatestTransferProgress? Progress { get; set; }
+
         public bool IsCancellationRequestedByUser =>
             Volatile.Read(ref _cancellationRequestedByUser) != 0;
 
@@ -1050,4 +1069,14 @@ public interface IActiveTransferCancellation
     ActiveTransferCancellationResult TryRequestActiveCancellation(
         Domain.Identifiers.TransferJobId transferJobId,
         long expectedRevision);
+}
+
+/// <summary>
+/// Reads live byte counts for transfers executing in this process. Durable checkpoints are written
+/// on a deliberately slow timer because they exist for crash recovery; this contract lets status
+/// queries report current progress without making those writes more frequent.
+/// </summary>
+public interface IActiveTransferProgress
+{
+    long? TryGetLiveProgressBytes(Domain.Identifiers.TransferJobId transferJobId);
 }

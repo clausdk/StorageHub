@@ -32,7 +32,8 @@ public sealed class StorageHubDatabaseInitializer
                 new SymmetricSyncSchemaMigration(),
                 new SyncDestinationExistenceSchemaMigration(),
                 new NonAtomicSyncWritesSchemaMigration(),
-                new LocalTransferEndpointsSchemaMigration()
+                new LocalTransferEndpointsSchemaMigration(),
+                new KeyStoreSchemaMigration()
             ],
             timeProvider);
     }

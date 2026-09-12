@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using StorageHub.Agent.Ipc;
 using StorageHub.Agent.Transfers;
@@ -161,6 +162,56 @@ public sealed class ShellTransferIpcCommandServiceTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("short")]
+    [InlineData("../../escape/attempt/aaaaaaaaaaaaaaaa")]
+    [InlineData("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")]
+    public async Task Explorer_drop_rejects_a_token_that_is_not_a_plain_hex_identifier(string token)
+    {
+        // The token names a marker directory, so anything but fixed-length hex is refused before
+        // it can reach path composition.
+        var profileId = ConnectionProfileId.New();
+        var session = new FakeExportSession(profileId, "remote-root");
+        var service = new ShellTransferIpcCommandService(new FakeStore(), new FakeExportConnector(session));
+        var folder = new TransferQueueAddress(profileId.Value, session.RootIdentity, "resource");
+
+        var response = await service.HandleAsync(IpcEnvelope.Create(
+            ShellTransferIpcMessageTypes.BeginExplorerDropRequest, Guid.NewGuid(), 1,
+            new ExplorerDropBeginRequest(ShellTransferIpcContract.CurrentVersion,
+                [new ShellExportSource(folder, true, "resource")], token)));
+
+        var begun = response.Payload.Deserialize<ExplorerDropBeginResponse>();
+        Assert.NotNull(begun);
+        Assert.NotNull(begun.Failure);
+        Assert.Null(begun.DropToken);
+    }
+
+    [Fact]
+    public async Task Explorer_drop_refuses_to_rebind_a_token_that_is_already_in_flight()
+    {
+        var profileId = ConnectionProfileId.New();
+        var session = new FakeExportSession(profileId, "remote-root");
+        var service = new ShellTransferIpcCommandService(new FakeStore(), new FakeExportConnector(session));
+        var folder = new TransferQueueAddress(profileId.Value, session.RootIdentity, "resource");
+        var dropToken = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+
+        var request = new ExplorerDropBeginRequest(
+            ShellTransferIpcContract.CurrentVersion,
+            [new ShellExportSource(folder, true, "resource")],
+            dropToken);
+        var first = (await service.HandleAsync(IpcEnvelope.Create(
+            ShellTransferIpcMessageTypes.BeginExplorerDropRequest, Guid.NewGuid(), 1, request)))
+            .Payload.Deserialize<ExplorerDropBeginResponse>();
+        var second = (await service.HandleAsync(IpcEnvelope.Create(
+            ShellTransferIpcMessageTypes.BeginExplorerDropRequest, Guid.NewGuid(), 1, request)))
+            .Payload.Deserialize<ExplorerDropBeginResponse>();
+
+        Assert.Null(first!.Failure);
+        Assert.NotNull(second!.Failure);
+        if (first.MarkerPath is { } staged && Directory.Exists(staged)) Directory.Delete(staged, recursive: true);
+    }
+
     [Fact]
     public async Task Explorer_drop_only_captures_destination_then_queues_deep_tree_directly()
     {
@@ -171,14 +222,20 @@ public sealed class ShellTransferIpcCommandServiceTests : IDisposable
         var service = new ShellTransferIpcCommandService(store, new FakeExportConnector(session));
         var folder = new TransferQueueAddress(profileId.Value, session.RootIdentity, "resource");
 
+        // The desktop owns the token so that it can stage the marker and start the drag inside
+        // the mouse gesture; the agent derives the marker path from that token rather than
+        // accepting a path from the caller.
+        var dropToken = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         var begunEnvelope = await service.HandleAsync(IpcEnvelope.Create(
             ShellTransferIpcMessageTypes.BeginExplorerDropRequest, Guid.NewGuid(), 1,
-            new ShellExportPrepareRequest(ShellTransferIpcContract.CurrentVersion,
-                [new ShellExportSource(folder, true, "resource")])));
+            new ExplorerDropBeginRequest(ShellTransferIpcContract.CurrentVersion,
+                [new ShellExportSource(folder, true, "resource")], dropToken)));
         var begun = begunEnvelope.Payload.Deserialize<ExplorerDropBeginResponse>();
         Assert.NotNull(begun);
         Assert.Null(begun.Failure);
+        Assert.Equal(dropToken, begun.DropToken);
         Assert.True(Directory.Exists(begun.MarkerPath));
+        Assert.EndsWith("StorageHubDrop-" + dropToken, begun.MarkerPath);
 
         var inbox = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "StorageHub", "ShellDropInbox");
