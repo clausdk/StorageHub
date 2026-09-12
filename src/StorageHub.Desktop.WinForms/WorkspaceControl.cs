@@ -92,7 +92,12 @@ public sealed class WorkspaceControl : UserControl
     public string? FilePath { get; private set; }
     public bool IsDirty { get; private set; } = true;
     public Guid ActivePaneId => _activePaneId;
-    public IReadOnlyList<BrowserPaneControl> Panes => LayoutModel.PaneIds.Select(id => _panes[id]).ToArray();
+    /// <summary>
+    /// The panes in layout order. Skips any id the dictionary no longer holds, which the layout
+    /// can briefly still list while a pane is being closed.
+    /// </summary>
+    public IReadOnlyList<BrowserPaneControl> Panes =>
+        [.. LayoutModel.PaneIds.Select(id => _panes.GetValueOrDefault(id)).OfType<BrowserPaneControl>()];
     public BrowserPaneControl? ActivePane => _panes.GetValueOrDefault(_activePaneId);
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -135,11 +140,19 @@ public sealed class WorkspaceControl : UserControl
     public bool ClosePane(Guid paneId)
     {
         if (!LayoutModel.Close(paneId)) return false;
-        var pane = _panes[paneId];
-        _panes.Remove(paneId);
-        pane.Dispose();
-        if (_activePaneId == paneId) _activePaneId = LayoutModel.PaneIds[0];
+        if (!_panes.Remove(paneId, out var pane)) return false;
+
+        // The active pane is reassigned and the layout rebuilt before the closed pane is disposed.
+        // Disposing it detaches a focused control, and WinForms responds by moving focus, which
+        // raises Enter on a surviving pane and activates it. Doing that while the old layout is
+        // still mounted repaints headers for panes that no longer exist.
+        if (_activePaneId == paneId)
+        {
+            _activePaneId = LayoutModel.PaneIds[0];
+        }
+
         RebuildLayout();
+        pane.Dispose();
         return true;
     }
 
@@ -367,16 +380,35 @@ public sealed class WorkspaceControl : UserControl
 
     private void RenumberHeaders()
     {
+        // Headers belonging to a pane that is being closed can still be mounted while this runs:
+        // disposing the closed pane moves focus, which raises Enter on a surviving pane, which
+        // activates it and repaints the headers before the layout has been rebuilt. Such a header
+        // is skipped rather than indexed, because its pane is already out of the dictionary.
         var order = LayoutModel.PaneIds;
         foreach (var header in Descendants<ToolStrip>(_layoutHost).Where(control => control.Tag is Guid))
-            if (header.Tag is Guid id && header.Items["PaneTitle"] is ToolStripLabel title)
+        {
+            if (header.Tag is not Guid id ||
+                header.Items["PaneTitle"] is not ToolStripLabel title ||
+                !_panes.TryGetValue(id, out var pane))
             {
-                var label = $"Pane {order.ToList().IndexOf(id) + 1}";
-                title.Text = label;
-                header.AccessibleName = $"{label} header";
-                _panes[id].AccessibleName = $"{label} browser pane";
-                if (id == _activePaneId) title.Text += " (Active)";
+                continue;
             }
+
+            var position = order.ToList().IndexOf(id);
+            if (position < 0)
+            {
+                continue;
+            }
+
+            var label = $"Pane {position + 1}";
+            title.Text = label;
+            header.AccessibleName = $"{label} header";
+            pane.AccessibleName = $"{label} browser pane";
+            if (id == _activePaneId)
+            {
+                title.Text += " (Active)";
+            }
+        }
     }
 
     private void RefreshActivePanePresentation()

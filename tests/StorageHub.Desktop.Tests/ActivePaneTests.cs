@@ -31,6 +31,39 @@ public sealed class ActivePaneTests
         });
     }
 
+    [Fact]
+    public void ClosingAPaneLeavesEveryHeaderNumberedFromItsRealPosition()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var main = new MainForm();
+            var page = main.AddWorkspace(4);
+            var workspace = Assert.Single(page.Controls.OfType<WorkspaceControl>());
+            workspace.Size = new Size(1200, 800);
+            main.CreateControl();
+            main.PerformLayout();
+            workspace.PerformLayout();
+
+            var victim = workspace.LayoutModel.PaneIds[1];
+            Assert.True(workspace.ClosePane(victim));
+
+            Assert.Equal(3, workspace.LayoutModel.PaneCount);
+            Assert.Equal(3, workspace.Panes.Count);
+            Assert.DoesNotContain(victim, workspace.LayoutModel.PaneIds);
+            Assert.NotEqual(victim, workspace.ActivePaneId);
+
+            // A header left over from the closed pane numbered itself from a position of -1 and
+            // showed as "Pane 0", which is what made the numbering skip to "Pane 2" afterwards.
+            var labels = workspace.Panes
+                .Select(candidate => Assert.IsType<Panel>(candidate.Parent))
+                .Select(frame => Assert.Single(frame.Controls.OfType<ToolStrip>()))
+                .Select(header => header.Items["PaneTitle"]!.Text!.Replace(" (Active)", string.Empty, StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(["Pane 1", "Pane 2", "Pane 3"], labels);
+        });
+    }
+
     private static void Verify(WorkspaceControl workspace, Guid active)
     {
         Assert.Equal(active, workspace.ActivePaneId);
