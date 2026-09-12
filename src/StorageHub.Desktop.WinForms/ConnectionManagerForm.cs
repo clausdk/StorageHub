@@ -2317,7 +2317,9 @@ public sealed class ConnectionManagerForm : Form
             if (CompanionPassphraseField(field.Key) is { } companionKey &&
                 _secretReferenceBoxes.TryGetValue(companionKey, out var passphraseBox))
             {
-                passphraseBox.Text = chosen.PassphraseReference;
+                // A password-less certificate has no passphrase reference, so the companion field
+                // is cleared rather than left pointing at whatever was there before.
+                passphraseBox.Text = chosen.PassphraseReference ?? string.Empty;
             }
 
             ShowStatus($"Using '{chosen.DisplayName}' from the key store.", StorageHubTheme.Success);

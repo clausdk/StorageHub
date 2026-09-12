@@ -115,6 +115,53 @@ public sealed class KeyStoreIpcCommandServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_password_less_certificate_is_stored_without_any_passphrase()
+    {
+        var fixture = await CreateFixtureAsync();
+        var stored = await fixture.Vault.CreateAsync(CreateCertificate(password: string.Empty));
+
+        var response = await SendAsync<KeyStoreCreateRequest, KeyStoreWriteResponse>(
+            fixture.Service,
+            KeyStoreIpcMessageTypes.CreateRequest,
+            new KeyStoreCreateRequest(
+                KeyStoreIpcContract.CurrentVersion,
+                KeyStoreMaterialKind.Pkcs12Certificate,
+                "Password-less certificate",
+                null,
+                [],
+                stored.Reference.Value,
+                PassphraseReference: null));
+
+        Assert.Equal(KeyStoreWriteOutcome.Applied, response.Outcome);
+        Assert.Null(response.Entry!.PassphraseReference);
+        Assert.Equal("CN=partner.example.test", response.Entry.Summary.Subject);
+    }
+
+    [Fact]
+    public async Task An_ssh_key_without_a_passphrase_is_still_refused()
+    {
+        // The SFTP connector rejects an unprotected key, so storing one would be storing
+        // something StorageHub could never use.
+        var fixture = await CreateFixtureAsync();
+        var stored = await fixture.Vault.CreateAsync(CreateCertificate());
+
+        var response = await SendAsync<KeyStoreCreateRequest, KeyStoreWriteResponse>(
+            fixture.Service,
+            KeyStoreIpcMessageTypes.CreateRequest,
+            new KeyStoreCreateRequest(
+                KeyStoreIpcContract.CurrentVersion,
+                KeyStoreMaterialKind.SshPrivateKey,
+                "Unprotected key",
+                null,
+                [],
+                stored.Reference.Value,
+                PassphraseReference: null,
+                KeyFormat: KeyStorePrivateKeyFormat.OpenSsh));
+
+        Assert.Equal(KeyStoreWriteOutcome.Rejected, response.Outcome);
+    }
+
+    [Fact]
     public async Task No_response_ever_carries_key_material()
     {
         var fixture = await CreateFixtureAsync();
@@ -298,14 +345,14 @@ public sealed class KeyStoreIpcCommandServiceTests : IDisposable
         return (storedMaterial.Reference.Value, storedPassphrase.Reference.Value);
     }
 
-    private static byte[] CreateCertificate()
+    private static byte[] CreateCertificate(string? password = null)
     {
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest(
             "CN=partner.example.test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         using var certificate = request.CreateSelfSigned(
             DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(2));
-        return certificate.Export(X509ContentType.Pkcs12, Secret);
+        return certificate.Export(X509ContentType.Pkcs12, password ?? Secret);
     }
 
     private async Task<Fixture> CreateFixtureAsync()

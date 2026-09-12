@@ -46,6 +46,10 @@ execution as that user.
   fingerprint. Summaries are computed in the agent at import time; the key store
   IPC surface is metadata-only and can never return key material. Material still
   travels exclusively on the dedicated, write-only secret pipe.
+- A stored PKCS#12 entry may have no passphrase reference (schema v14 makes the
+  column nullable). An SSH private key must always have one, enforced by the
+  domain model, the IPC contract, the agent handler, and a table CHECK, because
+  the SFTP connector refuses an unprotected key outright.
 - Store entries are shared. `profile_credentials` binds a profile slot to an
   entry with `ON DELETE RESTRICT`, and deletion is refused with the consuming
   profile names rather than orphaning a reference. Rotation replaces material
@@ -60,8 +64,11 @@ execution as that user.
   than declared by the caller. Saving a profile rebuilds its slot bindings, so a
   slot that no longer points at a store entry is released and the usage counts
   that guard deletion cannot drift.
-- An FTPS client-certificate PFX requires a separate vault-backed password
-  reference. SFTP private-key authentication requires a vault-backed passphrase,
+- An FTPS client-certificate PFX may carry a separate vault-backed password
+  reference, and may equally carry none: PKCS#12 permits a password-less bundle,
+  and nothing is enrolled for the absent password. A password reference without a
+  PFX to unlock is still rejected. SFTP private-key authentication requires a
+  vault-backed passphrase,
   accepts only strict OpenSSH, legacy PEM, or PKCS#8 envelopes, and requires
   SSH.NET to decrypt and parse the actual key with that passphrase before the
   provider receives it.

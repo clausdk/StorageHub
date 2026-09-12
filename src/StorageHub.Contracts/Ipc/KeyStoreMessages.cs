@@ -106,7 +106,7 @@ public sealed record KeyStoreEntryDocument(
     string? Description,
     string[] Tags,
     string MaterialReference,
-    string PassphraseReference,
+    string? PassphraseReference,
     KeyStoreSummaryDocument Summary,
     int Version,
     DateTimeOffset CreatedUtc,
@@ -122,8 +122,9 @@ public sealed record KeyStoreEntryDocument(
         Tags.All(tag => IsSafeRequired(tag, KeyStoreIpcLimits.MaximumTagLength)) &&
         ConnectionEndpointDocument.IsOpaqueSecretReference(MaterialReference) &&
         MaterialReference is not null &&
+        // A certificate may have no password; an SSH key must always have a passphrase.
         ConnectionEndpointDocument.IsOpaqueSecretReference(PassphraseReference) &&
-        PassphraseReference is not null &&
+        (Kind is not KeyStoreMaterialKind.SshPrivateKey || PassphraseReference is not null) &&
         Summary is { } summary && summary.HasValidBounds &&
         Version > 0 &&
         ReferencedByProfiles is { Length: <= KeyStoreIpcLimits.MaximumReferencedProfiles } &&
@@ -165,7 +166,7 @@ public sealed record KeyStoreCreateRequest(
     string? Description,
     string[] Tags,
     string MaterialReference,
-    string PassphraseReference,
+    string? PassphraseReference,
     KeyStorePrivateKeyFormat? KeyFormat = null)
 {
     public bool HasValidBounds =>
@@ -180,8 +181,9 @@ public sealed record KeyStoreCreateRequest(
             tag.Length <= KeyStoreIpcLimits.MaximumTagLength && !tag.Any(char.IsControl)) &&
         MaterialReference is not null &&
         ConnectionEndpointDocument.IsOpaqueSecretReference(MaterialReference) &&
-        PassphraseReference is not null &&
         ConnectionEndpointDocument.IsOpaqueSecretReference(PassphraseReference) &&
+        // A password-less PKCS#12 bundle is legitimate; an unprotected SSH key is not.
+        (Kind is not KeyStoreMaterialKind.SshPrivateKey || PassphraseReference is not null) &&
         // An SSH key must declare its envelope; a certificate must not.
         (Kind is KeyStoreMaterialKind.SshPrivateKey
             ? KeyFormat is { } format && Enum.IsDefined(format)

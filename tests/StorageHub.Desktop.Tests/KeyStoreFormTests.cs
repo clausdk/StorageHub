@@ -14,16 +14,11 @@ public sealed class KeyStoreFormTests
     }
 
     [Fact]
-    public void AnEmptyCertificatePasswordIsRefusedWithAnActionableMessage()
+    public void APasswordLessCertificateIsAccepted()
     {
-        // A password-less .pfx previously reached the vault client and surfaced its raw range
-        // error ("Parameter 'secret'"), which told the user nothing.
-        var message = KeyStoreForm.DescribeMissingPassphrase(KeyStoreMaterialKind.Pkcs12Certificate, "");
-
-        Assert.NotNull(message);
-        Assert.Contains(".pfx", message, StringComparison.Ordinal);
-        Assert.DoesNotContain("Parameter", message, StringComparison.Ordinal);
-        Assert.DoesNotContain("range", message, StringComparison.OrdinalIgnoreCase);
+        // PKCS#12 allows no password. Nothing is enrolled for it, and the import proceeds.
+        Assert.Null(KeyStoreForm.DescribeMissingPassphrase(KeyStoreMaterialKind.Pkcs12Certificate, ""));
+        Assert.Null(KeyStoreForm.DescribeMissingPassphrase(KeyStoreMaterialKind.Pkcs12Certificate, null));
     }
 
     [Fact]
@@ -33,6 +28,8 @@ public sealed class KeyStoreFormTests
 
         Assert.NotNull(message);
         Assert.Contains("passphrase", message, StringComparison.OrdinalIgnoreCase);
+        // Never the raw vault range error the user used to see.
+        Assert.DoesNotContain("Parameter", message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -93,12 +93,24 @@ public sealed class ConnectionProfileTests
             SecretReference.Create());
 
         Assert.Equal(pfx, endpoint.ClientCertificatePfxReference);
+
+        // A PKCS#12 bundle may carry no password, so a PFX without one is valid.
+        var passwordLess = new FtpsEndpoint(
+            "ftps.example.test",
+            21,
+            FtpsTlsMode.Explicit,
+            TlsCertificatePolicy.SystemTrust,
+            pfx);
+        Assert.Equal(pfx, passwordLess.ClientCertificatePfxReference);
+        Assert.Null(passwordLess.ClientCertificatePasswordReference);
+
+        // The reverse remains nonsense: a password with no material to unlock.
         Assert.Throws<ArgumentException>(() => new FtpsEndpoint(
             "ftps.example.test",
             21,
             FtpsTlsMode.Explicit,
             TlsCertificatePolicy.SystemTrust,
-            SecretReference.Create()));
+            clientCertificatePasswordReference: SecretReference.Create()));
     }
 
     [Fact]

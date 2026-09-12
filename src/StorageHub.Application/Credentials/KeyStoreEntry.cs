@@ -127,7 +127,7 @@ public sealed record KeyStoreEntry
         string? description,
         IReadOnlyList<string> tags,
         SecretReference materialReference,
-        SecretReference passphraseReference,
+        SecretReference? passphraseReference,
         KeyMaterialSummary summary,
         int version,
         DateTimeOffset createdUtc,
@@ -159,11 +159,10 @@ public sealed record KeyStoreEntry
     public SecretReference MaterialReference { get; }
 
     /// <summary>
-    /// Always present. A PFX requires a vault-backed password because the FTPS endpoint model
-    /// enforces both-or-neither, and an SSH key requires a passphrase because the SFTP connector
-    /// refuses an unprotected private key outright.
+    /// Required for an SSH private key, because the SFTP connector refuses an unprotected key
+    /// outright. Optional for a PKCS#12 bundle, which may legitimately carry no password.
     /// </summary>
-    public SecretReference PassphraseReference { get; }
+    public SecretReference? PassphraseReference { get; }
 
     public KeyMaterialSummary Summary { get; }
 
@@ -178,7 +177,7 @@ public sealed record KeyStoreEntry
         KeyMaterialKind kind,
         string displayName,
         SecretReference materialReference,
-        SecretReference passphraseReference,
+        SecretReference? passphraseReference,
         KeyMaterialSummary summary,
         DateTimeOffset createdUtc,
         string? description = null,
@@ -201,7 +200,7 @@ public sealed record KeyStoreEntry
         KeyMaterialKind kind,
         string displayName,
         SecretReference materialReference,
-        SecretReference passphraseReference,
+        SecretReference? passphraseReference,
         KeyMaterialSummary summary,
         int version,
         DateTimeOffset createdUtc,
@@ -221,7 +220,19 @@ public sealed record KeyStoreEntry
         }
 
         ValidateReference(materialReference, nameof(materialReference));
-        ValidateReference(passphraseReference, nameof(passphraseReference));
+        if (passphraseReference is { } passphrase)
+        {
+            ValidateReference(passphrase, nameof(passphraseReference));
+        }
+        else if (kind is KeyMaterialKind.SshPrivateKey)
+        {
+            // The SFTP connector rejects an unprotected private key, so storing one would be
+            // storing something StorageHub could never use.
+            throw new ArgumentException(
+                "An SSH private key requires a vault-backed passphrase.",
+                nameof(passphraseReference));
+        }
+
         ArgumentOutOfRangeException.ThrowIfLessThan(version, 1);
 
         var expected = kind is KeyMaterialKind.Pkcs12Certificate

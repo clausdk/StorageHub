@@ -51,6 +51,21 @@ public sealed class KeyMaterialInspectorTests
     }
 
     [Fact]
+    public void DescribesAPasswordLessCertificate()
+    {
+        // A PKCS#12 bundle may legitimately carry no password; PKCS#12 treats empty as "none".
+        var (material, certificate) = CreateCertificate("CN=No Password", password: "");
+        certificate.Dispose();
+
+        var result = KeyMaterialInspector.InspectPkcs12(material, string.Empty);
+
+        Assert.True(result.IsSuccess);
+        var summary = Assert.IsType<Pkcs12CertificateSummary>(result.Value);
+        Assert.Equal("CN=No Password", summary.Subject);
+        Assert.True(summary.HasPrivateKey);
+    }
+
+    [Fact]
     public void RejectsAWrongCertificatePasswordWithoutConfirmingIt()
     {
         var (material, certificate) = CreateCertificate("CN=StorageHub Test Leaf");
@@ -140,7 +155,8 @@ public sealed class KeyMaterialInspectorTests
     private static (byte[] Material, X509Certificate2 Certificate) CreateCertificate(
         string subject,
         DateTimeOffset? notBefore = null,
-        DateTimeOffset? notAfter = null)
+        DateTimeOffset? notAfter = null,
+        string? password = null)
     {
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest(subject, rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -148,7 +164,7 @@ public sealed class KeyMaterialInspectorTests
             notBefore ?? DateTimeOffset.UtcNow.AddMinutes(-5),
             notAfter ?? DateTimeOffset.UtcNow.AddDays(2));
         return (
-            certificate.Export(X509ContentType.Pkcs12, Password),
+            certificate.Export(X509ContentType.Pkcs12, password ?? Password),
             X509CertificateLoader.LoadCertificate(certificate.RawData));
     }
 }

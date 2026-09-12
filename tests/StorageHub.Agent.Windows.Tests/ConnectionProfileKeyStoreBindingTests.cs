@@ -134,7 +134,7 @@ public sealed class ConnectionProfileKeyStoreBindingTests : IDisposable
             new ConnectionProfileCreateRequest(ConnectionProfileIpcContract.CurrentVersion, draft));
 
     private static ConnectionProfileDraft FtpsDraft(KeyStoreEntry entry) =>
-        FtpsDraft(entry.MaterialReference.Value, entry.PassphraseReference.Value, "Nightly FTPS");
+        FtpsDraft(entry.MaterialReference.Value, entry.PassphraseReference!.Value.Value, "Nightly FTPS");
 
     private static ConnectionProfileDraft FtpsDraft(string material, string passphrase, string name) => new(
         new ConnectionProfileMetadataDocument(name, Tags: []),
@@ -160,7 +160,7 @@ public sealed class ConnectionProfileKeyStoreBindingTests : IDisposable
             ConnectionAuthenticationKind.SftpPrivateKey,
             Username: "operator",
             PrivateKeyReference: entry.MaterialReference.Value,
-            PrivateKeyPassphraseReference: entry.PassphraseReference.Value,
+            PrivateKeyPassphraseReference: entry.PassphraseReference!.Value.Value,
             PrivateKeyFormat: ConnectionSftpPrivateKeyFormat.OpenSsh),
         new ConnectionOperationalOptionsDocument());
 

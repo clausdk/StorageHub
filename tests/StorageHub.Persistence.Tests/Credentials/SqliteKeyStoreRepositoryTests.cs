@@ -51,6 +51,44 @@ public sealed class SqliteKeyStoreRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task A_certificate_round_trips_without_a_passphrase()
+    {
+        var repository = Repository();
+        var entry = KeyStoreEntry.Create(
+            KeyStoreEntryId.New(),
+            KeyMaterialKind.Pkcs12Certificate,
+            "Password-less certificate",
+            SecretReference.Create(),
+            passphraseReference: null,
+            Summary("CN=none.example.test"),
+            DateTimeOffset.UtcNow);
+
+        var created = await repository.CreateAsync(entry);
+        var loaded = await repository.GetAsync(entry.Id);
+
+        Assert.Equal(KeyStoreWriteStatus.Succeeded, created.Status);
+        Assert.Null(loaded!.PassphraseReference);
+        Assert.Equal(entry.MaterialReference, loaded.MaterialReference);
+    }
+
+    [Fact]
+    public void An_ssh_key_still_requires_a_passphrase()
+    {
+        Assert.Throws<ArgumentException>(() => KeyStoreEntry.Create(
+            KeyStoreEntryId.New(),
+            KeyMaterialKind.SshPrivateKey,
+            "Unprotected key",
+            SecretReference.Create(),
+            passphraseReference: null,
+            new SshPrivateKeySummary(
+                SftpPrivateKeyFormat.OpenSsh,
+                "ssh-ed25519",
+                "SHA256:3q2+7wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                comment: null),
+            DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
     public async Task Display_names_are_unique_regardless_of_casing()
     {
         var repository = Repository();
@@ -206,7 +244,7 @@ public sealed class SqliteKeyStoreRepositoryTests : IDisposable
         var entry = CertificateEntry("Partner certificate");
         await repository.CreateAsync(entry);
 
-        Assert.Null(await repository.FindByMaterialReferenceAsync(entry.PassphraseReference.Value));
+        Assert.Null(await repository.FindByMaterialReferenceAsync(entry.PassphraseReference!.Value.Value));
     }
 
     [Fact]

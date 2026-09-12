@@ -303,6 +303,8 @@ public sealed class KeyStoreForm : Form
         if (namePrompt.ShowDialog(this) != DialogResult.OK) return;
 
         var material = await File.ReadAllBytesAsync(file.FullName, _lifetime.Token).ConfigureAwait(true);
+        // An empty value means the material carries no password, so nothing is enrolled for it:
+        // the vault stores secrets, not the absence of one.
         var passphrase = Encoding.UTF8.GetBytes(passphrasePrompt.Value);
         string? materialReference = null;
         string? passphraseReference = null;
@@ -319,17 +321,20 @@ public sealed class KeyStoreForm : Form
             }
 
             materialReference = enrolledMaterial.Reference;
-            var enrolledPassphrase = await _secrets
-                .EnrollAsync(passphrasePurpose, passphrase, _lifetime.Token).ConfigureAwait(true);
-            if (!enrolledPassphrase.Succeeded || enrolledPassphrase.Reference is null)
+            if (passphrase.Length > 0)
             {
-                ShowStatus(
-                    enrolledPassphrase.Failure?.Message ?? "The passphrase could not be enrolled.",
-                    StorageHubTheme.Danger);
-                return;
-            }
+                var enrolledPassphrase = await _secrets
+                    .EnrollAsync(passphrasePurpose, passphrase, _lifetime.Token).ConfigureAwait(true);
+                if (!enrolledPassphrase.Succeeded || enrolledPassphrase.Reference is null)
+                {
+                    ShowStatus(
+                        enrolledPassphrase.Failure?.Message ?? "The passphrase could not be enrolled.",
+                        StorageHubTheme.Danger);
+                    return;
+                }
 
-            passphraseReference = enrolledPassphrase.Reference;
+                passphraseReference = enrolledPassphrase.Reference;
+            }
             var created = await _client.CreateAsync(
                 new KeyStoreCreateRequest(
                     KeyStoreIpcContract.CurrentVersion,
@@ -438,19 +443,16 @@ public sealed class KeyStoreForm : Form
     }
 
     /// <summary>
-    /// Explains why unprotected material is refused, or null when the secret is usable.
+    /// Explains why material is refused, or null when it can be stored.
     ///
-    /// StorageHub requires key material to carry its own password. The profile model enforces it
-    /// too: an FTPS client certificate must have a vault-backed password reference, and the SFTP
-    /// connector rejects an unprotected private key outright. Catching it here turns what would
-    /// otherwise surface as a vault range error into something actionable.
+    /// A PKCS#12 bundle may legitimately carry no password, so an empty value is accepted and no
+    /// passphrase is enrolled at all. An SSH private key still requires one: the SFTP connector
+    /// rejects an unprotected key outright, so storing one would store something unusable.
     /// </summary>
     internal static string? DescribeMissingPassphrase(KeyStoreMaterialKind kind, string? value) =>
-        !string.IsNullOrEmpty(value)
+        !string.IsNullOrEmpty(value) || kind is KeyStoreMaterialKind.Pkcs12Certificate
             ? null
-            : kind is KeyStoreMaterialKind.Pkcs12Certificate
-                ? "StorageHub cannot store a certificate without a password. Export the .pfx again with one, then import it."
-                : "StorageHub cannot store an unprotected private key. Add a passphrase to the key, then import it.";
+            : "StorageHub cannot store an unprotected private key. Add a passphrase to the key, then import it.";
 
     internal static string DescribeFailure(KeyStoreWriteResponse response) => response.Outcome switch
     {

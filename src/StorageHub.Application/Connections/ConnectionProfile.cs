@@ -529,12 +529,8 @@ public sealed record FtpsEndpoint : ConnectionEndpoint
                 nameof(clientCertificatePasswordReference));
         }
 
-        if (clientCertificatePfxReference is not null && clientCertificatePasswordReference is null)
-        {
-            throw new ArgumentException(
-                "A client PFX must use a vault-backed password reference.",
-                nameof(clientCertificatePasswordReference));
-        }
+        // A PFX may legitimately carry no password. The reverse is still nonsense: a password
+        // reference without material to unlock describes nothing.
 
         Host = ValidateHost(host);
         Port = ValidatePort(port);

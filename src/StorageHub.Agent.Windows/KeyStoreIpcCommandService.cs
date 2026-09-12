@@ -96,10 +96,27 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
                 "The key store entry is outside the negotiated contract bounds.");
         }
 
-        if (!SecretReference.TryParse(request.MaterialReference, out var material) ||
-            !SecretReference.TryParse(request.PassphraseReference, out var passphrase))
+        if (!SecretReference.TryParse(request.MaterialReference, out var material))
         {
             return WriteFailure(KeyStoreIpcMessageTypes.CreateResponse, "The vault references are malformed.");
+        }
+
+        // A password-less certificate enrolls no passphrase at all, so there is no second reference.
+        SecretReference? passphrase = null;
+        if (request.PassphraseReference is not null)
+        {
+            if (!SecretReference.TryParse(request.PassphraseReference, out var parsed))
+            {
+                return WriteFailure(KeyStoreIpcMessageTypes.CreateResponse, "The vault references are malformed.");
+            }
+
+            passphrase = parsed;
+        }
+        else if (request.Kind is KeyStoreMaterialKind.SshPrivateKey)
+        {
+            return WriteFailure(
+                KeyStoreIpcMessageTypes.CreateResponse,
+                "An SSH private key requires a passphrase.");
         }
 
         var described = await DescribeAsync(request, material, passphrase, cancellationToken).ConfigureAwait(false);
@@ -197,7 +214,10 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
             TryGetVault() is { } vault)
         {
             _ = await vault.DeleteAsync(removed.MaterialReference, cancellationToken).ConfigureAwait(false);
-            _ = await vault.DeleteAsync(removed.PassphraseReference, cancellationToken).ConfigureAwait(false);
+            if (removed.PassphraseReference is { } passphrase)
+            {
+                _ = await vault.DeleteAsync(passphrase, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         return WriteResponse(KeyStoreIpcMessageTypes.DeleteResponse, written);
@@ -210,7 +230,7 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
     private async ValueTask<StorageResult<KeyMaterialSummary>> DescribeAsync(
         KeyStoreCreateRequest request,
         SecretReference material,
-        SecretReference passphrase,
+        SecretReference? passphrase,
         CancellationToken cancellationToken)
     {
         if (TryGetVault() is not { } vault)
@@ -222,7 +242,8 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
         }
 
         if (!await vault.ExistsAsync(material, cancellationToken).ConfigureAwait(false) ||
-            !await vault.ExistsAsync(passphrase, cancellationToken).ConfigureAwait(false))
+            (passphrase is { } declared &&
+             !await vault.ExistsAsync(declared, cancellationToken).ConfigureAwait(false)))
         {
             return StorageResult<KeyMaterialSummary>.Fail(new StorageFailure(
                 "keystore.reference.unresolved",
@@ -231,10 +252,18 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
         }
 
         await using var materialLease = await vault.OpenAsync(material, cancellationToken).ConfigureAwait(false);
-        await using var passphraseLease = await vault.OpenAsync(passphrase, cancellationToken).ConfigureAwait(false);
-        var secret = Encoding.UTF8.GetString(passphraseLease.Memory.Span);
+        // A password-less certificate has no passphrase envelope to open; PKCS#12 treats an empty
+        // password as "no password", which is what the loader expects for such a bundle.
+        SecretLease? passphraseLease = null;
+        var secret = string.Empty;
         try
         {
+            if (passphrase is { } reference)
+            {
+                passphraseLease = await vault.OpenAsync(reference, cancellationToken).ConfigureAwait(false);
+                secret = Encoding.UTF8.GetString(passphraseLease.Memory.Span);
+            }
+
             return request.Kind is KeyStoreMaterialKind.Pkcs12Certificate
                 ? KeyMaterialInspector.InspectPkcs12(materialLease.Memory.Span, secret)
                 : KeyMaterialInspector.InspectSshPrivateKey(
@@ -245,6 +274,10 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
         finally
         {
             secret = string.Empty;
+            if (passphraseLease is not null)
+            {
+                await passphraseLease.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 
@@ -302,7 +335,7 @@ public sealed class KeyStoreIpcCommandService : IAgentIpcCommandHandler
             entry.Description,
             [.. entry.Tags],
             entry.MaterialReference.Value,
-            entry.PassphraseReference.Value,
+            entry.PassphraseReference?.Value,
             Map(entry.Summary),
             entry.Version,
             entry.CreatedUtc,

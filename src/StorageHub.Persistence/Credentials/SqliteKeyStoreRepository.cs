@@ -334,7 +334,9 @@ public sealed class SqliteKeyStoreRepository : IKeyStoreRepository
         command.Parameters.AddWithValue("$description", (object?)entry.Description ?? DBNull.Value);
         command.Parameters.AddWithValue("$tags", JsonSerializer.Serialize(entry.Tags, JsonOptions));
         command.Parameters.AddWithValue("$material", entry.MaterialReference.Value);
-        command.Parameters.AddWithValue("$passphrase", entry.PassphraseReference.Value);
+        command.Parameters.AddWithValue(
+            "$passphrase",
+            (object?)entry.PassphraseReference?.Value ?? DBNull.Value);
         command.Parameters.AddWithValue("$summary", SerializeSummary(entry.Summary));
         command.Parameters.AddWithValue("$version", entry.Version);
         command.Parameters.AddWithValue("$created", Format(entry.CreatedUtc));
@@ -349,7 +351,7 @@ public sealed class SqliteKeyStoreRepository : IKeyStoreRepository
             kind,
             reader.GetString(2),
             SecretReference.Parse(reader.GetString(5)),
-            SecretReference.Parse(reader.GetString(6)),
+            reader.IsDBNull(6) ? null : SecretReference.Parse(reader.GetString(6)),
             DeserializeSummary(kind, reader.GetString(7)),
             reader.GetInt32(8),
             Parse(reader.GetString(9)),

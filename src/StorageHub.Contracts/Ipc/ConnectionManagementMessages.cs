@@ -195,7 +195,8 @@ public sealed record ConnectionEndpointDocument(
         StorageConnectionProvider.Ftps =>
             Present(Host) && Port is not null && Empty(Bucket) && Empty(Region) &&
             Empty(ServiceEndpoint) && !ForcePathStyle && !AllowInsecureTransport &&
-            (Empty(ClientCertificatePfxReference) == Empty(ClientCertificatePasswordReference)) &&
+            // A PFX may carry no password; a password without a PFX describes nothing.
+            (!Empty(ClientCertificatePasswordReference) ? !Empty(ClientCertificatePfxReference) : true) &&
             SshHostKeyPolicy == ConnectionSshHostKeyPolicy.Pinned,
         StorageConnectionProvider.Sftp =>
             Present(Host) && Port is not null && Empty(Bucket) && Empty(Region) &&
