@@ -33,6 +33,12 @@ public sealed class MainForm : Form
     private readonly ExternalEditorController _externalEditor;
     private readonly Icon? _windowIcon;
     private ShellStatusSnapshot _status = ShellStatusSnapshot.Initial;
+
+    /// <summary>
+    /// Drags that have left a pane but have no destination yet. Desktop-local and never durable,
+    /// shared so the queue and the activity log show the same pending gestures.
+    /// </summary>
+    private readonly PendingDropRegistry _pendingDrops = new();
     private BrowserPaneControl? _activePane;
     private PaneClipboardSnapshot? _paneClipboard;
     private bool _changingWorkspaceTabs;
@@ -123,7 +129,7 @@ public sealed class MainForm : Form
         mainSplit.Panel1.BackColor = StorageHubTheme.Canvas;
         mainSplit.Panel2.BackColor = StorageHubTheme.Surface;
         mainSplit.Panel1.Controls.Add(_workspaceTabs);
-        _transferQueue = new TransferQueueControl(_updatePreferencesStore);
+        _transferQueue = new TransferQueueControl(_updatePreferencesStore) { PendingDrops = _pendingDrops };
         _transferQueue.QueueCountsChanged += TransferQueueCountsChanged;
         _manualTransfers.TransfersEnqueued += ManualTransfersEnqueued;
         mainSplit.Panel2.Controls.Add(_transferQueue);
@@ -403,6 +409,8 @@ public sealed class MainForm : Form
             destination.BeginExplorerDropAsync = BeginExplorerDropAsync;
             source.CommitExplorerDropAsync = CommitExplorerDropAsync;
             destination.CommitExplorerDropAsync = CommitExplorerDropAsync;
+            source.PendingDrops = _pendingDrops;
+            destination.PendingDrops = _pendingDrops;
         }
         else
         {
@@ -923,6 +931,7 @@ public sealed class MainForm : Form
         {
             pane.BeginExplorerDropAsync = BeginExplorerDropAsync;
             pane.CommitExplorerDropAsync = CommitExplorerDropAsync;
+            pane.PendingDrops = _pendingDrops;
         }
         else
         {

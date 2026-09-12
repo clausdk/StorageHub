@@ -597,6 +597,13 @@ public sealed class BrowserPaneControl : UserControl
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<bool>? CanPaste { get; set; }
 
+    /// <summary>
+    /// Records drags that have started but have no destination yet, so the gesture is visible while
+    /// it waits. Optional: dragging works without it, it just shows nothing until the agent commits.
+    /// </summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public PendingDropRegistry? PendingDrops { get; set; }
+
     /// <summary>Registers an inert Explorer marker; StorageHub performs the eventual transfer.</summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<PaneSelectionSnapshot, string, CancellationToken, Task<ExplorerDropBeginResponse>>? BeginExplorerDropAsync { get; set; }
@@ -2299,6 +2306,7 @@ public sealed class BrowserPaneControl : UserControl
             }
 
             data.SetData(DataFormats.FileDrop, new[] { markerPath });
+            PendingDrops?.Begin(dropToken, DescribeDragSource(selection.Value), selection.Value.Items.Count);
             registrationTimeout = new CancellationTokenSource(ExplorerDropHandshakeTimeout);
             registration = BeginExplorerDropAsync(selection.Value, dropToken, registrationTimeout.Token);
         }
@@ -2314,6 +2322,7 @@ public sealed class BrowserPaneControl : UserControl
         {
             registrationTimeout?.Dispose();
             TryDiscardExplorerDropMarker(markerPath);
+            if (dropToken is not null) PendingDrops?.MarkFailed(dropToken, "Windows could not start the drag.");
             ShowError($"Windows could not start the drag operation: {error.Message}");
             return;
         }
@@ -2325,6 +2334,13 @@ public sealed class BrowserPaneControl : UserControl
             ShowError(ExplorerDropUnavailableReason);
         }
 
+        if (dropToken is not null && payload.InternalDropHandled)
+        {
+            // The selection was dropped on another StorageHub pane, so the Explorer marker was
+            // never used and the pending row should settle rather than wait for a destination.
+            PendingDrops?.MarkCancelled(dropToken, "Dropped onto a StorageHub pane.");
+        }
+
         if (registration is not null && CommitExplorerDropAsync is not null)
         {
             try
@@ -2333,6 +2349,9 @@ public sealed class BrowserPaneControl : UserControl
                 if (registered.Failure is not null || string.IsNullOrWhiteSpace(registered.DropToken))
                 {
                     TryDiscardExplorerDropMarker(markerPath);
+                    PendingDrops?.MarkFailed(
+                        dropToken!,
+                        registered.Failure?.Message ?? "The drop could not be initialized.");
                     if (!payload.InternalDropHandled)
                     {
                         ShowError(registered.Failure?.Message ?? "StorageHub could not initialize the Explorer drop.");
@@ -2344,6 +2363,18 @@ public sealed class BrowserPaneControl : UserControl
                 using var commitTimeout = new CancellationTokenSource(ExplorerDropHandshakeTimeout);
                 var committed = await CommitExplorerDropAsync(dropToken!, commitTimeout.Token)
                     .ConfigureAwait(true);
+                if (committed.Accepted)
+                {
+                    // The agent now owns it; the durable jobs it creates take over from here.
+                    PendingDrops?.MarkQueued(dropToken!, committed.DestinationPath);
+                }
+                else
+                {
+                    PendingDrops?.MarkCancelled(
+                        dropToken!,
+                        committed.Failure?.Message ?? "No destination was reported.");
+                }
+
                 if (!payload.InternalDropHandled && committed.Accepted)
                 {
                     _errorBanner.Text = $"Queued in StorageHub → {committed.DestinationPath}";
@@ -2354,6 +2385,7 @@ public sealed class BrowserPaneControl : UserControl
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
                 InvalidOperationException or TimeoutException or System.Text.Json.JsonException or OperationCanceledException)
             {
+                PendingDrops?.MarkFailed(dropToken!, error.Message);
                 if (!payload.InternalDropHandled)
                     ShowError($"StorageHub could not queue the Explorer drop: {error.Message}");
             }
@@ -2386,6 +2418,21 @@ public sealed class BrowserPaneControl : UserControl
     /// the copy hook vetoes the copy and StorageHub performs the real transfer, so the folder is
     /// only a handle that lets the drag begin inside the mouse gesture.
     /// </summary>
+    /// <summary>
+    /// Names what is being dragged: a single item by its own name, a multi-selection by the folder
+    /// it came from, so the pending row says something useful before any destination is known.
+    /// </summary>
+    private static string DescribeDragSource(PaneSelectionSnapshot selection)
+    {
+        if (selection.Items.Count == 1 && !string.IsNullOrWhiteSpace(selection.Items[0].Name))
+        {
+            return selection.Items[0].Name;
+        }
+
+        var location = selection.Context.RelativePath;
+        return string.IsNullOrWhiteSpace(location) ? "/" : location;
+    }
+
     private static bool TryStageExplorerDropMarker(string dropToken, out string? markerPath)
     {
         markerPath = null;

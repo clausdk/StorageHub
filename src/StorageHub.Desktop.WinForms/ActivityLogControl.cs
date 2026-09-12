@@ -6,6 +6,14 @@ namespace StorageHub.Desktop;
 /// <summary>Builds a bounded, non-secret activity log from durable Agent transfer and sync records.</summary>
 public sealed class ActivityLogControl : UserControl
 {
+    /// <summary>
+    /// Desktop-local drags that have not yet become durable work. Optional: the log renders durable
+    /// activity correctly without it.
+    /// </summary>
+    [System.ComponentModel.DesignerSerializationVisibility(
+        System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public PendingDropRegistry? PendingDrops { get; set; }
+
     private readonly ITransferQueueAgentClient _transferClient;
     private readonly ISyncManagementAgentClient _syncClient;
     private readonly bool _ownsClients;
@@ -169,8 +177,10 @@ public sealed class ActivityLogControl : UserControl
                 throw new InvalidOperationException(runs.Failure.Message);
             }
 
+            var pending = PendingDrops?.Snapshot() ?? [];
             var entries = transfers.Transfers.Select(ActivityEntry.FromTransfer)
                 .Concat(runs.Runs.Select(ActivityEntry.FromRun))
+                .Concat(pending.Select(ActivityEntry.FromPendingDrop))
                 .OrderByDescending(static entry => entry.UpdatedUtc)
                 .ThenBy(static entry => entry.Area, StringComparer.Ordinal)
                 .Take(100)
@@ -189,7 +199,9 @@ public sealed class ActivityLogControl : UserControl
             _grid.ClearSelection();
             _status.Text = entries.Length == 0
                 ? "No transfer or synchronization activity yet."
-                : $"Showing {entries.Length} recent durable event(s).";
+                : pending.Count == 0
+                    ? $"Showing {entries.Length} recent durable event(s)."
+                    : $"Showing {entries.Length} recent event(s), {pending.Count} still pending.";
             _status.ForeColor = StorageHubTheme.Success;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -235,6 +247,19 @@ public sealed class ActivityLogControl : UserControl
             transfer.TransferId.ToString("N")[..8],
             transfer.State.ToString(),
             transfer.ErrorSummary ?? $"{transfer.Operation}: {DisplayPath(transfer.SourcePath)} → {DisplayPath(transfer.DestinationPath)}");
+
+        /// <summary>
+        /// A drag that has left a pane but has no destination yet. It is shown under its own area so
+        /// it reads as pending rather than as a durable record the agent has committed to.
+        /// </summary>
+        public static ActivityEntry FromPendingDrop(PendingDropEntry drop) => new(
+            drop.UpdatedUtc,
+            "Drop",
+            drop.Token[..8],
+            drop.Describe(),
+            drop.Destination is null
+                ? $"Copy: {drop.DescribeSource()} → File Explorer"
+                : $"Copy: {drop.DescribeSource()} → {drop.Destination}");
 
         public static ActivityEntry FromRun(SyncRunSummary run) => new(
             run.UpdatedUtc,

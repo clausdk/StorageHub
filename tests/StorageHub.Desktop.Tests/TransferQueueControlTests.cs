@@ -5,6 +5,68 @@ namespace StorageHub.Desktop.Tests;
 
 public sealed class TransferQueueControlTests
 {
+    [Fact]
+    public void APendingDropRendersAsAQueueRowWithoutABar()
+    {
+        // There is no destination and therefore no byte total yet, so the row must not paint a
+        // fraction that would imply measured progress.
+        var drop = new PendingDropEntry(
+            "abcdef0123456789",
+            "reports",
+            3,
+            PendingDropState.AwaitingDestination,
+            Destination: null,
+            Detail: null,
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch);
+
+        var row = TransferQueueControl.ToRow(drop);
+
+        Assert.Equal("Copy", row.Operation);
+        Assert.Equal("3 items from reports", row.Source);
+        Assert.Equal("(File Explorer)", row.Destination);
+        Assert.Equal("Waiting for destination", row.Status);
+        Assert.Null(row.Fraction);
+        Assert.Same(drop, row.Payload);
+    }
+
+    [Fact]
+    public void AQueuedDropShowsWhereItWent()
+    {
+        var drop = new PendingDropEntry(
+            "abcdef0123456789",
+            "budget.xlsx",
+            1,
+            PendingDropState.Queued,
+            @"C:\Users\sam\Desktop",
+            Detail: null,
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch);
+
+        var row = TransferQueueControl.ToRow(drop);
+
+        Assert.Equal("budget.xlsx", row.Source);
+        Assert.Equal(@"C:\Users\sam\Desktop", row.Destination);
+        Assert.Equal("Queued", row.Status);
+    }
+
+    [Fact]
+    public void ADurableTransferAndAPendingDropShareTheSameRowShape()
+    {
+        // Both feed one diffing pass, so the grid never needs to know which kind it is showing.
+        var transfer = Summary(TransferQueueState.Transferring, 25, 100);
+
+        var transferRow = TransferQueueControl.ToRow(transfer);
+        var dropRow = TransferQueueControl.ToRow(new PendingDropEntry(
+            "abcdef0123456789", "reports", 1, PendingDropState.AwaitingDestination,
+            null, null, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch));
+
+        Assert.Equal(0.25D, transferRow.Fraction);
+        Assert.Null(dropRow.Fraction);
+        Assert.NotEqual(transferRow.Key, dropRow.Key);
+        Assert.StartsWith("drop:", dropRow.Key, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(TransferQueueState.Transferring, 0L, 100L, 0D)]
     [InlineData(TransferQueueState.Transferring, 25L, 100L, 0.25D)]

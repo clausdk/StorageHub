@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Globalization;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
@@ -8,6 +10,9 @@ namespace StorageHub.Desktop;
 /// </summary>
 public sealed class TransferQueueControl : UserControl
 {
+    private ActivityLogControl? _activityLog;
+    private PendingDropRegistry? _pendingDrops;
+
     private const int ActivePollIntervalMilliseconds = 500;
     private const int IdlePollIntervalMilliseconds = 2_000;
 
@@ -187,6 +192,10 @@ public sealed class TransferQueueControl : UserControl
             _pollTimer.Stop();
             _pollTimer.Tick -= PollTimerTick;
             _tabs.SelectedIndexChanged -= SelectedTabChanged;
+            if (_pendingDrops is not null)
+            {
+                _pendingDrops.Changed -= PendingDropsChanged;
+            }
             _lifetime.Cancel();
             _lifetime.Dispose();
             if (_ownsClient)
@@ -233,7 +242,8 @@ public sealed class TransferQueueControl : UserControl
             AccessibleName = "Durable activity log",
             ImageKey = "Logs"
         };
-        page.Controls.Add(new ActivityLogControl());
+        _activityLog = new ActivityLogControl();
+        page.Controls.Add(_activityLog);
         _tabs.TabPages.Add(page);
     }
 
@@ -548,7 +558,7 @@ public sealed class TransferQueueControl : UserControl
                 return;
             }
 
-            PopulateGrid(_grids[selectedTab], response.Transfers);
+            PopulateGrid(_grids[selectedTab], ComposeRows(definition, response.Transfers));
             AdjustPollInterval(response.Transfers);
             UpdateTabCounters(response, definition);
             PublishQueueCounts(response);
@@ -586,9 +596,37 @@ public sealed class TransferQueueControl : UserControl
     /// every poll discarded the user's selection and made the progress bars restart their paint
     /// each tick, so rows are matched by transfer id and only the changed cells are written.
     /// </summary>
-    private static void PopulateGrid(DataGridView grid, IEnumerable<TransferQueueSummary> transfers)
+    /// <summary>
+    /// Projects a durable transfer into grid cells. Provisional drag entries project into the same
+    /// shape, which is what lets both share one diffing pass without the grid knowing the
+    /// difference.
+    /// </summary>
+    internal static QueueRow ToRow(TransferQueueSummary transfer) => new(
+        transfer.TransferId.ToString("N"),
+        transfer.Operation.ToString(),
+        FormatEndpoint(transfer.SourceConnectionId, transfer.SourcePath),
+        FormatEndpoint(transfer.DestinationConnectionId, transfer.DestinationPath),
+        FormatProgress(transfer.ProgressBytes, transfer.ExpectedBytes),
+        transfer.Attempt.ToString(CultureInfo.CurrentCulture),
+        FormatStatus(transfer),
+        ProgressFraction(transfer),
+        transfer);
+
+    internal static QueueRow ToRow(PendingDropEntry drop) => new(
+        "drop:" + drop.Token,
+        "Copy",
+        drop.DescribeSource(),
+        drop.Destination ?? "(File Explorer)",
+        // No byte total exists yet: the destination, and therefore the work, is still unknown.
+        drop.State is PendingDropState.AwaitingDestination ? "Pending" : "-",
+        "-",
+        drop.Describe(),
+        Fraction: null,
+        drop);
+
+    private static void PopulateGrid(DataGridView grid, IEnumerable<QueueRow> rows)
     {
-        var ordered = transfers as IList<TransferQueueSummary> ?? transfers.ToList();
+        var ordered = rows as IList<QueueRow> ?? rows.ToList();
         var wasEmpty = grid.Rows.Count == 0;
 
         while (grid.Rows.Count > ordered.Count)
@@ -603,26 +641,16 @@ public sealed class TransferQueueControl : UserControl
 
         for (var index = 0; index < ordered.Count; index++)
         {
-            var transfer = ordered[index];
+            var source = ordered[index];
             var row = grid.Rows[index];
-            if (row.Tag is TransferQueueSummary existing && existing == transfer)
-            {
-                continue;
-            }
-
-            var previous = row.Tag as TransferQueueSummary;
-            if (previous?.TransferId != transfer.TransferId)
-            {
-                SetCell(row, 0, transfer.Operation);
-                SetCell(row, 1, FormatEndpoint(transfer.SourceConnectionId, transfer.SourcePath));
-                SetCell(row, 2, FormatEndpoint(transfer.DestinationConnectionId, transfer.DestinationPath));
-            }
-
-            SetCell(row, 3, FormatProgress(transfer.ProgressBytes, transfer.ExpectedBytes));
-            SetCell(row, 4, transfer.Attempt);
-            SetCell(row, 5, FormatStatus(transfer));
-            row.Cells[3].Style.Tag = ProgressFraction(transfer);
-            row.Tag = transfer;
+            SetCell(row, 0, source.Operation);
+            SetCell(row, 1, source.Source);
+            SetCell(row, 2, source.Destination);
+            SetCell(row, 3, source.Progress);
+            SetCell(row, 4, source.Attempt);
+            SetCell(row, 5, source.Status);
+            row.Cells[3].Style.Tag = source.Fraction;
+            row.Tag = source.Payload;
         }
 
         if (wasEmpty)
@@ -763,6 +791,84 @@ public sealed class TransferQueueControl : UserControl
         }
 
         _nextButton.Enabled = _nextCursor is not null;
+    }
+
+    /// <summary>
+    /// Prepends still-pending Explorer drags to the Active view. They are not durable work yet, so
+    /// they appear only there and are replaced by real jobs as soon as the agent enqueues them.
+    /// </summary>
+    private List<QueueRow> ComposeRows(
+        QueueTabDefinition definition,
+        TransferQueueSummary[] transfers)
+    {
+        var rows = new List<QueueRow>(transfers.Length + 4);
+        if (PendingDrops is { } pending &&
+            string.Equals(definition.Name, "Active", StringComparison.Ordinal))
+        {
+            rows.AddRange(pending.Snapshot().Select(ToRow));
+        }
+
+        rows.AddRange(transfers.Select(ToRow));
+        return rows;
+    }
+
+    /// <summary>
+    /// Desktop-local record of drags that have started but have no destination yet. Optional: the
+    /// queue renders durable state correctly without it.
+    /// </summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public PendingDropRegistry? PendingDrops
+    {
+        get => _pendingDrops;
+        set
+        {
+            if (ReferenceEquals(_pendingDrops, value))
+            {
+                return;
+            }
+
+            if (_pendingDrops is not null)
+            {
+                _pendingDrops.Changed -= PendingDropsChanged;
+            }
+
+            _pendingDrops = value;
+            if (_activityLog is not null)
+            {
+                _activityLog.PendingDrops = value;
+            }
+
+            if (value is not null)
+            {
+                value.Changed += PendingDropsChanged;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A drag starting or settling is a user gesture, so the views refresh immediately rather than
+    /// waiting for the next poll tick.
+    /// </summary>
+    private void PendingDropsChanged(object? sender, EventArgs e)
+    {
+        if (_disposed || !IsHandleCreated)
+        {
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(new Action(() =>
+            {
+                if (_disposed) return;
+                _ = RefreshQueueCoreAsync(resetPage: false, _lifetime.Token, background: true);
+                _ = _activityLog?.RefreshActivityAsync(_lifetime.Token);
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+            // The handle can disappear between the guard and BeginInvoke during shutdown.
+        }
     }
 
     /// <summary>
@@ -928,3 +1034,15 @@ public sealed class TransferQueueCountsEventArgs(int queuedJobs, int activeJobs)
 
     public int ActiveJobs { get; } = activeJobs;
 }
+
+/// <summary>One rendered queue row, from either a durable transfer or a still-pending drag.</summary>
+internal sealed record QueueRow(
+    string Key,
+    string Operation,
+    string Source,
+    string Destination,
+    string Progress,
+    string Attempt,
+    string Status,
+    double? Fraction,
+    object Payload);
