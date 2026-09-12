@@ -53,3 +53,6 @@ diagnostics/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Machine-local Claude Code settings
+.claude/settings.local.json
