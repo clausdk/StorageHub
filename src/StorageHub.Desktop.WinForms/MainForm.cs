@@ -779,7 +779,7 @@ public sealed class MainForm : Form
                     }
                     break;
                 case "Check for Updates...":
-                    await CheckForUpdatesManuallyAsync();
+                    ShowUpdateChecker();
                     break;
                 case "About StorageHub":
                     _ = MessageBox.Show(
@@ -2291,95 +2291,13 @@ public sealed class MainForm : Form
         }
     }
 
-    private async void UpdateStatusClicked(object? sender, EventArgs e) =>
-        await CheckForUpdatesManuallyAsync();
+    private void UpdateStatusClicked(object? sender, EventArgs e) => ShowUpdateChecker();
 
-    private async Task CheckForUpdatesManuallyAsync()
+    private void ShowUpdateChecker()
     {
-        if (_updater.Snapshot.State == DesktopUpdateState.ReadyToRestart)
-        {
-            PromptToRestartForUpdate(_updater.Snapshot.Version);
-            return;
-        }
-
-        DesktopUpdateSnapshot snapshot;
-        try
-        {
-            snapshot = await _updater.CheckForUpdatesAsync(_lifetime.Token);
-        }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-        {
-            return;
-        }
-
-        switch (snapshot.State)
-        {
-            case DesktopUpdateState.UpdateAvailable:
-                var download = MessageBox.Show(
-                    this,
-                    $"StorageHub {snapshot.Version} is available. Download it now?",
-                    "StorageHub update",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Information);
-                if (download != DialogResult.Yes)
-                {
-                    return;
-                }
-
-                try
-                {
-                    snapshot = await _updater.DownloadAvailableAsync(_lifetime.Token);
-                }
-                catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-                {
-                    return;
-                }
-
-                if (snapshot.State == DesktopUpdateState.ReadyToRestart)
-                {
-                    PromptToRestartForUpdate(snapshot.Version);
-                }
-                else if (snapshot.State == DesktopUpdateState.Failed)
-                {
-                    ShowUpdateMessage(snapshot.Message, MessageBoxIcon.Warning);
-                }
-
-                break;
-            case DesktopUpdateState.UpToDate:
-                ShowUpdateMessage("You already have the newest release available on your selected channel.", MessageBoxIcon.Information);
-                break;
-            case DesktopUpdateState.Unavailable:
-                ShowUpdateMessage(
-                    "Automatic updates are available only in an installed StorageHub build. Portable and developer builds are never modified.",
-                    MessageBoxIcon.Information);
-                break;
-            case DesktopUpdateState.Failed:
-                ShowUpdateMessage(snapshot.Message, MessageBoxIcon.Warning);
-                break;
-        }
+        using var dialog = new UpdateCheckerForm(_updater);
+        _ = dialog.ShowDialog(this);
     }
-
-    private void PromptToRestartForUpdate(string? version)
-    {
-        var restart = MessageBox.Show(
-            this,
-            $"StorageHub {version ?? "update"} is downloaded and integrity-checked. Restart now to install it silently?\n\nDurable queued work is preserved.",
-            "StorageHub update ready",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Information);
-        if (restart == DialogResult.Yes && !_updater.ApplyAndRestart())
-        {
-            ShowUpdateMessage("StorageHub could not start the updater. Try again after reopening the application.", MessageBoxIcon.Warning);
-        }
-    }
-
-    private void ShowUpdateMessage(string message, MessageBoxIcon icon) =>
-        _ = MessageBox.Show(
-            this,
-            message,
-            "StorageHub updates",
-            MessageBoxButtons.OK,
-            icon);
 
     private void UpdaterStatusChanged(object? sender, DesktopUpdateSnapshot snapshot)
     {
