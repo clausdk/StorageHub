@@ -363,6 +363,143 @@ public sealed class DesktopUpdaterTests
                 property.Name.Contains("Downgrade", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void PinnedAndRecentWorkspacesSurviveRestart()
+    {
+        using var fixture = new SettingsFixture();
+        IReadOnlyList<WorkspaceShortcutEntry> pinned =
+        [
+            new(@"C:\work\nightly.shw", "Nightly", DateTimeOffset.UnixEpoch),
+            new(@"C:\work\audit.shw", null, DateTimeOffset.UnixEpoch)
+        ];
+        IReadOnlyList<WorkspaceShortcutEntry> recent =
+        [
+            new(@"C:\work\scratch.shw", "Scratch", DateTimeOffset.UnixEpoch)
+        ];
+
+        fixture.Store.Save(DesktopUpdatePreferences.Defaults with
+        {
+            PinnedWorkspaces = pinned,
+            RecentWorkspaces = recent
+        });
+
+        var restored = new DesktopUpdatePreferencesStore(fixture.Path).Load();
+
+        Assert.Equal(pinned, restored.PinnedWorkspaces);
+        Assert.Equal(recent, restored.RecentWorkspaces);
+    }
+
+    [Fact]
+    public void SettingsWrittenBeforeWorkspaceShortcutsExistedLoadWithNoLists()
+    {
+        using var fixture = new SettingsFixture();
+        WriteLegacySettings(fixture.Path, schemaVersion: 12, body: string.Empty);
+
+        var restored = fixture.Store.Load();
+
+        Assert.Null(restored.PinnedWorkspaces);
+        Assert.Null(restored.RecentWorkspaces);
+        // The rest of a v12 file still applies; only the new lists are absent.
+        Assert.Equal(DesktopAppearance.Dark, restored.Appearance);
+    }
+
+    [Fact]
+    public void AnOverCapWorkspaceListIsClampedRatherThanDiscarded()
+    {
+        using var fixture = new SettingsFixture();
+        var entries = string.Join(
+            ",",
+            Enumerable.Range(0, WorkspaceShortcutSettings.MaximumPinned + 6).Select(index =>
+                $$"""{"path":"C:\\work\\w{{index}}.shw","name":"W{{index}}","lastOpenedUtc":"2026-01-01T00:00:00+00:00"}"""));
+        WriteLegacySettings(
+            fixture.Path,
+            schemaVersion: 13,
+            body: $$""","pinnedWorkspaces":[{{entries}}]""");
+
+        var restored = fixture.Store.Load();
+
+        Assert.Equal(WorkspaceShortcutSettings.MaximumPinned, restored.PinnedWorkspaces!.Count);
+        Assert.Equal(@"C:\work\w0.shw", restored.PinnedWorkspaces[0].Path);
+        Assert.Equal(DesktopAppearance.Dark, restored.Appearance);
+    }
+
+    [Fact]
+    public void SavingAnInvalidWorkspaceEntryIsRefusedAndLeavesNoLitter()
+    {
+        using var fixture = new SettingsFixture();
+        fixture.Store.Save(DesktopUpdatePreferences.Defaults);
+
+        foreach (var invalid in new[] { @"work\relative.shw", @"C:\work\notes.txt" })
+        {
+            Assert.Throws<ArgumentException>(() => fixture.Store.Save(
+                DesktopUpdatePreferences.Defaults with
+                {
+                    RecentWorkspaces = [new(invalid, "Bad", DateTimeOffset.UnixEpoch)]
+                }));
+        }
+
+        Assert.Empty(Directory.GetFiles(
+            System.IO.Path.GetDirectoryName(fixture.Path)!, "*.tmp", SearchOption.AllDirectories));
+        Assert.Null(fixture.Store.Load().RecentWorkspaces);
+    }
+
+    [Fact]
+    public void AFullWorkspaceListStaysWellInsideTheSizeLoadWillAccept()
+    {
+        // Load discards the whole file past MaximumSettingsBytes, taking appearance, shortcuts and
+        // concurrency with it. The workspace lists are the first state in the file that grows with
+        // what the user does, so the caps have to leave the written document under that ceiling
+        // even when every entry is as long as the resolver will admit.
+        using var fixture = new SettingsFixture();
+
+        fixture.Store.Save(DesktopUpdatePreferences.Defaults with
+        {
+            PinnedWorkspaces = MaximumLengthEntries(0, WorkspaceShortcutSettings.MaximumPinned),
+            RecentWorkspaces = MaximumLengthEntries(1_000, WorkspaceShortcutSettings.MaximumRecent),
+            Shortcuts = ShortcutSettings.Resolve(null),
+            ConnectionDefaults = ConnectionDefaultSettings.Normalize(null)
+        });
+
+        Assert.InRange(
+            new FileInfo(fixture.Path).Length, 1, DesktopUpdatePreferencesStore.MaximumSettingsBytes);
+        Assert.NotEmpty(fixture.Store.Load().PinnedWorkspaces!);
+        Assert.NotEmpty(fixture.Store.Load().RecentWorkspaces!);
+    }
+
+    /// <summary>
+    /// As many maximum-length entries as the resolver will admit, which is what the shell itself
+    /// hands to Save.
+    /// </summary>
+    private static IReadOnlyList<WorkspaceShortcutEntry> MaximumLengthEntries(int seed, int maximum) =>
+        WorkspaceShortcutSettings.Resolve(
+            [.. Enumerable.Range(seed, maximum).Select(index => new WorkspaceShortcutEntry(
+                MaximumLengthPath(index),
+                new string('n', WorkspaceShortcutSettings.MaximumNameLength),
+                DateTimeOffset.UnixEpoch))],
+            maximum);
+
+    /// <summary>A distinct path at the resolver's length limit, so the byte budget is exercised.</summary>
+    private static string MaximumLengthPath(int index)
+    {
+        var prefix = $@"C:\{index:D4}\";
+        return prefix +
+            new string('d', WorkspaceShortcutSettings.MaximumPathLength - prefix.Length - 4) +
+            ".shw";
+    }
+
+    /// <summary>
+    /// Writes a settings file at an older schema version, which the store cannot produce itself.
+    /// Appearance is set to a non-default so a test can tell "the file was honoured" apart from
+    /// "the whole file was discarded and defaults returned".
+    /// </summary>
+    private static void WriteLegacySettings(string path, int schemaVersion, string body)
+    {
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        File.WriteAllText(
+            path,
+            $$"""{"schemaVersion":{{schemaVersion}},"appearance":2,"sshHostKeyDiscovery":2{{body}}}""");
+    }
+
     private sealed class FakeEngineFactory : IDesktopUpdateEngineFactory
     {
         private readonly FakeUpdateEngine? _engine;

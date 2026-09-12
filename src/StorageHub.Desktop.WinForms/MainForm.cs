@@ -106,6 +106,11 @@ public sealed class MainForm : Form
         _overview.NewWorkspaceRequested += (_, _) => ChooseAndAddWorkspace();
         _overview.ConnectionsRequested += (_, _) => ShowConnectionManager();
         _overview.SyncTasksRequested += (_, _) => _workspaceTabs.SelectedIndex = 1;
+        _overview.WorkspaceOpenRequested += async (_, args) =>
+            _ = await OpenWorkspacePathAsync(args.Shortcut.Entry.Path).ConfigureAwait(true);
+        _overview.WorkspacePinToggleRequested += (_, args) =>
+            ToggleWorkspacePin(args.Shortcut.Entry.Path, args.Shortcut.Entry.Name);
+        _overview.WorkspaceRemoveRequested += (_, args) => ForgetWorkspace(args.Shortcut.Entry.Path);
         _syncTasks = new SyncTasksOverviewControl();
         _syncTasks.NewProfileRequested += (_, _) => ShowSyncProfileEditor();
         _syncTasks.SchedulesRequested += (_, _) => ShowSchedules();
@@ -118,6 +123,7 @@ public sealed class MainForm : Form
         });
         _workspaceTabs.Selecting += WorkspaceTabsSelecting;
         _workspaceTabs.SelectedIndexChanged += (_, _) => UpdateWorkspaceCommandState();
+        PublishWorkspaceShortcuts(LoadPreferences());
 
         var mainSplit = new SplitContainer
         {
@@ -315,6 +321,7 @@ public sealed class MainForm : Form
                 root.DropDownItems.Add(item);
             }
 
+            AttachDynamicSection(root, menuName);
             if (root.DropDownItems.Count > 0)
             {
                 menu.Items.Add(root);
@@ -326,6 +333,198 @@ public sealed class MainForm : Form
         }
 
         return menu;
+    }
+
+    /// <summary>
+    /// Tags an item the menu rebuilds on every open. Deliberately not a string: the three loops
+    /// that walk the menus by <see cref="ToolStripItem.Tag"/> — shortcut display, shortcut
+    /// dispatch, and workspace enable state — all compare against a command id, so a non-string
+    /// tag makes them structurally incapable of touching a dynamic entry.
+    /// </summary>
+    private sealed record DynamicMenuItem(string Section, object? Payload);
+
+    /// <summary>
+    /// Subscribes the menus whose contents depend on state that changes while the app runs.
+    ///
+    /// These entries are built here rather than declared in <see cref="UiCommandCatalog"/>: that
+    /// catalog is a static, uniquely-keyed contract which also drives the rebindable-shortcut
+    /// editor, and a variable number of entries — two of which can share a workspace name — would
+    /// both break its uniqueness invariant and inject unbindable rows into that editor.
+    /// </summary>
+    private void AttachDynamicSection(ToolStripMenuItem root, string menuName)
+    {
+        switch (menuName)
+        {
+            case "Workspace":
+                root.DropDownOpening += (_, _) => RebuildWorkspaceSection(root);
+                break;
+            case "Go":
+                root.DropDownOpening += (_, _) => RebuildFavoritesSection(root);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private static void ClearDynamicSection(ToolStripMenuItem root, string section)
+    {
+        for (var index = root.DropDownItems.Count - 1; index >= 0; index--)
+        {
+            if (root.DropDownItems[index].Tag is not DynamicMenuItem tag || tag.Section != section) continue;
+            var stale = root.DropDownItems[index];
+            root.DropDownItems.RemoveAt(index);
+            stale.Dispose();
+        }
+    }
+
+    private void RebuildWorkspaceSection(ToolStripMenuItem root)
+    {
+        const string Section = "workspace";
+        ClearDynamicSection(root, Section);
+
+        // Ahead of Exit, which is the last static entry in this menu.
+        var insertAt = root.DropDownItems.Cast<ToolStripItem>().ToList().FindIndex(item => item.Text == "Exit");
+        if (insertAt < 0) insertAt = root.DropDownItems.Count;
+
+        var workspace = GetActiveWorkspace();
+        var pinned = workspace?.FilePath is { } path &&
+            WorkspaceShortcutSettings.Contains(LoadPreferences().PinnedWorkspaces, path);
+        var toggle = new ToolStripMenuItem(pinned ? "Unpin Workspace" : "Pin Workspace")
+        {
+            Tag = new DynamicMenuItem(Section, null),
+            Enabled = workspace is not null,
+            ToolTipText = pinned
+                ? "Remove this workspace from the pinned list."
+                : "Keep this workspace one click away. An unsaved workspace is saved first.",
+            AccessibleName = pinned ? "Unpin workspace" : "Pin workspace"
+        };
+        toggle.Click += (_, _) => ToggleWorkspacePin(path: null, name: null);
+
+        var items = new List<ToolStripItem>
+        {
+            new ToolStripSeparator { Tag = new DynamicMenuItem(Section, null) },
+            toggle
+        };
+
+        var shortcuts = ComposeWorkspaceShortcuts(LoadPreferences());
+        AppendWorkspaceGroup(items, Section, "Pinned", shortcuts.Where(view => view.IsPinned));
+        AppendWorkspaceGroup(items, Section, "Recent", shortcuts.Where(view => !view.IsPinned));
+        for (var index = 0; index < items.Count; index++)
+        {
+            root.DropDownItems.Insert(insertAt + index, items[index]);
+        }
+    }
+
+    private void AppendWorkspaceGroup(
+        List<ToolStripItem> items,
+        string section,
+        string heading,
+        IEnumerable<WorkspaceShortcutView> shortcuts)
+    {
+        var group = shortcuts.ToArray();
+        if (group.Length == 0) return;
+
+        items.Add(new ToolStripSeparator { Tag = new DynamicMenuItem(section, null) });
+        items.Add(new ToolStripMenuItem(heading)
+        {
+            Tag = new DynamicMenuItem(section, null),
+            Enabled = false,
+            Font = new Font(_menu.Font, FontStyle.Bold)
+        });
+        foreach (var view in group)
+        {
+            var entry = view.Entry;
+            var label = entry.DisplayName.Replace("&", "&&", StringComparison.Ordinal) +
+                (view.LooksPresent ? string.Empty : " (missing)");
+            var item = new ToolStripMenuItem(label)
+            {
+                Tag = new DynamicMenuItem(section, entry),
+                ToolTipText = entry.Path,
+                AccessibleName = entry.DisplayName,
+                AccessibleDescription = view.LooksPresent
+                    ? entry.Path
+                    : $"{entry.Path}. This file is missing.",
+                // Dimmed rather than disabled: a disabled item cannot be clicked, and clicking is
+                // how a missing entry offers to remove itself.
+                ForeColor = view.LooksPresent ? StorageHubTheme.Text : StorageHubTheme.TextMuted
+            };
+            item.Click += async (_, _) => _ = await OpenWorkspacePathAsync(entry.Path).ConfigureAwait(true);
+            items.Add(item);
+        }
+    }
+
+    private void RebuildFavoritesSection(ToolStripMenuItem root)
+    {
+        const string Section = "favorites";
+        ClearDynamicSection(root, Section);
+
+        var favorites = OverviewDashboardControl.SelectFavoriteConnections(_overview.SavedConnections);
+        root.DropDownItems.Add(new ToolStripSeparator { Tag = new DynamicMenuItem(Section, null) });
+        root.DropDownItems.Add(new ToolStripMenuItem("Favorites")
+        {
+            Tag = new DynamicMenuItem(Section, null),
+            Enabled = false,
+            Font = new Font(_menu.Font, FontStyle.Bold)
+        });
+
+        if (favorites.Count == 0)
+        {
+            root.DropDownItems.Add(new ToolStripMenuItem("No favorite connections")
+            {
+                Tag = new DynamicMenuItem(Section, null),
+                Enabled = false
+            });
+            var manage = new ToolStripMenuItem("Connection Manager...")
+            {
+                Tag = new DynamicMenuItem(Section, null),
+                ToolTipText = "Mark a connection as a favorite to list it here."
+            };
+            manage.Click += (_, _) => ShowConnectionManager();
+            root.DropDownItems.Add(manage);
+
+            // The overview is built after the menu, and its cache fills on the first refresh, so a
+            // cold menu kicks one off rather than claiming there are no favourites.
+            _ = _overview.RefreshAsync(_lifetime.Token);
+            return;
+        }
+
+        foreach (var connection in favorites)
+        {
+            var item = new ToolStripMenuItem(
+                connection.DisplayName.Replace("&", "&&", StringComparison.Ordinal))
+            {
+                Tag = new DynamicMenuItem(Section, connection),
+                ToolTipText = connection.FolderPath ?? connection.Provider.ToString(),
+                AccessibleName = connection.DisplayName,
+                AccessibleDescription = $"Open {connection.DisplayName} in the active pane."
+            };
+            item.Click += async (_, _) => await OpenFavoriteConnectionAsync(connection).ConfigureAwait(true);
+            root.DropDownItems.Add(item);
+        }
+    }
+
+    /// <summary>
+    /// Navigates the active pane to a favourite. Go is the pane-navigation menu, so a favourite
+    /// replaces what the current pane is showing rather than opening a tab of its own.
+    /// </summary>
+    private async Task OpenFavoriteConnectionAsync(ConnectionSummary connection)
+    {
+        if (GetActiveWorkspace() is null)
+        {
+            AddWorkspace(2);
+        }
+
+        var pane = GetActivePane();
+        if (pane is null) return;
+        await pane.RestoreStateAsync(
+            new BrowserPaneState(
+                connection.Type == ConnectionProfileType.Client
+                    ? PaneContentKind.SshClient
+                    : PaneContentKind.SavedStorage,
+                connection.ConnectionId,
+                connection.DisplayName),
+            reconnectRemote: true,
+            _lifetime.Token).ConfigureAwait(true);
     }
 
     private ToolStrip BuildToolbar()
@@ -983,11 +1182,49 @@ public sealed class MainForm : Form
             Multiselect = false
         };
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
-        var normalized = Path.GetFullPath(dialog.FileName);
+        _ = await OpenWorkspacePathAsync(dialog.FileName).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Opens a workspace file, whatever route asked for it: the Open dialog, a pinned or recent
+    /// entry, or the Welcome tab. Owning de-duplication, most-recently-used recording and the
+    /// missing-file prompt in one place is what keeps those three routes consistent.
+    /// </summary>
+    /// <returns>Whether a workspace tab for the file is now open and selected.</returns>
+    private async Task<bool> OpenWorkspacePathAsync(string path)
+    {
+        string normalized;
+        try
+        {
+            normalized = Path.GetFullPath(path);
+        }
+        catch (Exception error) when (error is ArgumentException or NotSupportedException or
+            PathTooLongException)
+        {
+            PromptToForgetWorkspace(path);
+            return false;
+        }
+
         var existing = _workspaceTabs.TabPages.Cast<TabPage>()
-            .FirstOrDefault(page => page.Controls.OfType<WorkspaceControl>().SingleOrDefault() is { FilePath: { } path } &&
-                string.Equals(Path.GetFullPath(path), normalized, StringComparison.OrdinalIgnoreCase));
-        if (existing is not null) { _workspaceTabs.SelectedTab = existing; return; }
+            .FirstOrDefault(page => page.Controls.OfType<WorkspaceControl>().SingleOrDefault() is { FilePath: { } open } &&
+                string.Equals(Path.GetFullPath(open), normalized, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            // Re-activating an already-open tab is an open as far as the recent list is concerned.
+            _workspaceTabs.SelectedTab = existing;
+            RecordRecentWorkspace(
+                normalized, existing.Controls.OfType<WorkspaceControl>().Single().WorkspaceName);
+            return true;
+        }
+
+        // Re-checked here rather than trusted from the menu: the file can vanish between the
+        // dropdown opening and the click, and entries on unreachable shares are never probed.
+        if (!File.Exists(normalized))
+        {
+            PromptToForgetWorkspace(normalized);
+            return false;
+        }
+
         try
         {
             var document = WorkspaceFileStore.Load(normalized);
@@ -1002,14 +1239,155 @@ public sealed class MainForm : Form
                 _updatePreferencesStore.Load().ReconnectRemotePanesAutomatically,
                 _lifetime.Token).ConfigureAwait(true);
             workspace.AssociateFile(normalized);
+            RecordRecentWorkspace(normalized, workspace.WorkspaceName);
+            return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
         {
+            // The file is there but will not load: corrupt, oversized, or a newer schema. That is
+            // a recoverable problem, so the bookmark is left alone rather than offered for removal.
             _ = MessageBox.Show(this,
                 $"StorageHub could not open this workspace. {error.Message}",
                 "Open Workspace", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
         }
     }
+
+    /// <summary>
+    /// Offers to drop a remembered workspace whose file is gone. Only an explicit yes removes it —
+    /// a disconnected drive or a file that is about to come back should not silently lose a pin.
+    /// </summary>
+    private void PromptToForgetWorkspace(string path)
+    {
+        var answer = MessageBox.Show(
+            this,
+            $"StorageHub could not find this workspace.{Environment.NewLine}{Environment.NewLine}{path}" +
+            $"{Environment.NewLine}{Environment.NewLine}Remove it from the pinned and recent lists?",
+            "Open Workspace",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (answer != DialogResult.Yes) return;
+
+        MutateWorkspaceShortcuts(preferences => preferences with
+        {
+            PinnedWorkspaces = WorkspaceShortcutSettings.Remove(
+                preferences.PinnedWorkspaces, path, WorkspaceShortcutSettings.MaximumPinned),
+            RecentWorkspaces = WorkspaceShortcutSettings.Remove(
+                preferences.RecentWorkspaces, path, WorkspaceShortcutSettings.MaximumRecent)
+        });
+    }
+
+    /// <summary>
+    /// Moves a workspace to the front of the recent list, refreshing the name stored beside it so
+    /// a renamed workspace does not keep an old label. The pinned list is left alone: a path can
+    /// be in both, and unpinning should not erase the recent entry.
+    /// </summary>
+    private void RecordRecentWorkspace(string path, string name)
+    {
+        var current = LoadPreferences().RecentWorkspaces;
+        if (current is { Count: > 0 } &&
+            string.Equals(current[0].Path, path, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current[0].Name, name, StringComparison.Ordinal))
+        {
+            // Already at the front with the same label, so Ctrl+S does not rewrite settings.
+            return;
+        }
+
+        MutateWorkspaceShortcuts(preferences => preferences with
+        {
+            RecentWorkspaces = WorkspaceShortcutSettings.Promote(
+                preferences.RecentWorkspaces,
+                new WorkspaceShortcutEntry(path, name, DateTimeOffset.UtcNow),
+                WorkspaceShortcutSettings.MaximumRecent)
+        });
+    }
+
+    /// <summary>
+    /// Applies a change to the stored workspace lists and republishes them. Settings are shared
+    /// with the Settings dialog, so the file is re-read immediately before the change rather than
+    /// cached. Failures are swallowed: losing a bookmark must never break the save that caused it.
+    /// </summary>
+    private void MutateWorkspaceShortcuts(Func<DesktopUpdatePreferences, DesktopUpdatePreferences> change)
+    {
+        try
+        {
+            var updated = change(LoadPreferences());
+            _updatePreferencesStore.Save(updated);
+            PublishWorkspaceShortcuts(updated);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // Save validates and throws, and the settings file may be locked or read-only.
+        }
+    }
+
+    private DesktopUpdatePreferences LoadPreferences() => _updatePreferencesStore.Load();
+
+    /// <summary>
+    /// Flattens the two stored lists into the order they are drawn in: pinned first, then recent
+    /// with anything already pinned skipped. A path deliberately lives in both lists so that
+    /// unpinning does not also erase the recent entry, and this is where that overlap collapses.
+    /// </summary>
+    private static List<WorkspaceShortcutView> ComposeWorkspaceShortcuts(
+        DesktopUpdatePreferences preferences)
+    {
+        var pinned = WorkspaceShortcutSettings.Resolve(
+            preferences.PinnedWorkspaces, WorkspaceShortcutSettings.MaximumPinned);
+        var views = new List<WorkspaceShortcutView>(pinned.Count);
+        views.AddRange(pinned.Select(entry => new WorkspaceShortcutView(
+            entry, IsPinned: true, WorkspaceShortcutSettings.LooksPresent(entry.Path))));
+        foreach (var entry in WorkspaceShortcutSettings.Resolve(
+            preferences.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent))
+        {
+            if (WorkspaceShortcutSettings.Contains(pinned, entry.Path)) continue;
+            views.Add(new WorkspaceShortcutView(
+                entry, IsPinned: false, WorkspaceShortcutSettings.LooksPresent(entry.Path)));
+        }
+
+        return views;
+    }
+
+    private void PublishWorkspaceShortcuts(DesktopUpdatePreferences preferences) =>
+        _overview.ShowWorkspaceShortcuts(ComposeWorkspaceShortcuts(preferences));
+
+    /// <summary>
+    /// Pins or unpins a workspace. Pinning one that has never been saved runs Save As first, so a
+    /// pin always refers to a real file.
+    /// </summary>
+    private void ToggleWorkspacePin(string? path, string? name)
+    {
+        if (path is null)
+        {
+            var workspace = GetActiveWorkspace();
+            if (workspace is null) return;
+            if (workspace.FilePath is null && !SaveActiveWorkspace(saveAs: true)) return;
+            if (workspace.FilePath is not { } saved) return;
+            path = saved;
+            name = workspace.WorkspaceName;
+        }
+
+        var pinnedAlready = WorkspaceShortcutSettings.Contains(LoadPreferences().PinnedWorkspaces, path);
+        var target = path;
+        MutateWorkspaceShortcuts(preferences => preferences with
+        {
+            PinnedWorkspaces = pinnedAlready
+                ? WorkspaceShortcutSettings.Remove(
+                    preferences.PinnedWorkspaces, target, WorkspaceShortcutSettings.MaximumPinned)
+                : WorkspaceShortcutSettings.Promote(
+                    preferences.PinnedWorkspaces,
+                    new WorkspaceShortcutEntry(target, name, DateTimeOffset.UtcNow),
+                    WorkspaceShortcutSettings.MaximumPinned)
+        });
+    }
+
+    private void ForgetWorkspace(string path) => MutateWorkspaceShortcuts(preferences => preferences with
+    {
+        PinnedWorkspaces = WorkspaceShortcutSettings.Remove(
+            preferences.PinnedWorkspaces, path, WorkspaceShortcutSettings.MaximumPinned),
+        RecentWorkspaces = WorkspaceShortcutSettings.Remove(
+            preferences.RecentWorkspaces, path, WorkspaceShortcutSettings.MaximumRecent)
+    });
 
     private bool SaveActiveWorkspace(bool saveAs)
     {
@@ -1033,6 +1411,9 @@ public sealed class MainForm : Form
         {
             workspace.Save(path);
             if (_workspaceTabs.SelectedTab is { } page) UpdateWorkspaceTab(page, workspace);
+            // Save normalises the path and forces the .shw extension, so the workspace's own
+            // FilePath is the one to remember, not what the dialog handed back.
+            if (workspace.FilePath is { } saved) RecordRecentWorkspace(saved, workspace.WorkspaceName);
             return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
@@ -1079,6 +1460,11 @@ public sealed class MainForm : Form
         if (root is null) return;
         foreach (ToolStripItem item in root.DropDownItems)
         {
+            // Only the static catalog commands are governed here; they alone carry a string Tag.
+            // The pinned and recent entries are always clickable — at launch, with no workspace
+            // open, they are the most useful thing in the menu — and a missing one is dimmed by
+            // colour rather than disabled, because clicking it is how it gets pruned.
+            if (item.Tag is not string) continue;
             item.Enabled = item.Text is "New Workspace..." or "Open Workspace..." or "Exit" || active;
         }
     }

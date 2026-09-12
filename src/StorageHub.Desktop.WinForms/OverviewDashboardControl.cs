@@ -29,6 +29,10 @@ public sealed class OverviewDashboardControl : UserControl
         TransferQueueState.BlockedTrust
     ];
 
+    /// <summary>How many rows each card shows. Unrelated to the workspace caps.</summary>
+    private const int MaximumListRows = 12;
+
+
     private readonly IRemoteStorageAgentClient _storageClient;
     private readonly ITransferQueueAgentClient _transferClient;
     private readonly CancellationTokenSource _lifetime = new();
@@ -38,6 +42,7 @@ public sealed class OverviewDashboardControl : UserControl
     private readonly Label _attentionValue;
     private readonly ListView _connections;
     private readonly ListView _attention;
+    private readonly ListView _workspaces;
     private readonly Label _status;
     private readonly List<ConnectionSummary> _recentConnections = [];
     private IReadOnlyList<ConnectionSummary> _savedConnections = [];
@@ -118,6 +123,29 @@ public sealed class OverviewDashboardControl : UserControl
         _attentionValue = AddMetric(metrics, 3, "Needs attention", "0", UiGlyph.Warning, StorageHubTheme.Warning);
         content.Controls.Add(metrics);
 
+        // A full-width row of its own rather than a third column beside the two lists: at the
+        // shell's 1120px minimum width, three columns leave each one narrower than the columns
+        // its ListView already declares, so every card would grow a horizontal scrollbar.
+        _workspaces = CreateList(
+            "Workspaces",
+            "Pinned layouts first, then the ones you opened most recently",
+            UiGlyph.Add,
+            out var workspaceCard);
+        _workspaces.Columns[0].Width = 220;
+        _workspaces.Columns[1].Text = "Location";
+        _workspaces.Columns[1].Width = 420;
+        _workspaces.Columns[2].Text = "State";
+        _workspaces.Columns[2].Width = 110;
+        // No ListViewGroups: the rows arrive pinned-first and the State column already says which
+        // list each came from, so grouping would add native-control fragility for no information.
+        _workspaces.MouseDoubleClick += (_, args) => OpenWorkspaceAt(_workspaces.HitTest(args.Location).Item);
+        _workspaces.KeyDown += WorkspaceListKeyDown;
+        _workspaces.ContextMenuStrip = BuildWorkspaceMenu();
+        workspaceCard.Dock = DockStyle.Top;
+        workspaceCard.Height = 214;
+        workspaceCard.Margin = new Padding(0, 0, 0, 18);
+        content.Controls.Add(workspaceCard);
+
         var lists = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -153,6 +181,88 @@ public sealed class OverviewDashboardControl : UserControl
     public event EventHandler? ConnectionsRequested;
 
     public event EventHandler? SyncTasksRequested;
+
+    internal event EventHandler<WorkspaceShortcutEventArgs>? WorkspaceOpenRequested;
+
+    internal event EventHandler<WorkspaceShortcutEventArgs>? WorkspacePinToggleRequested;
+
+    internal event EventHandler<WorkspaceShortcutEventArgs>? WorkspaceRemoveRequested;
+
+    /// <summary>
+    /// The connections read on the last refresh. Exposed so the shell can build a favourites menu
+    /// without opening a second pipe client with its own lifetime and disposal path.
+    /// </summary>
+    internal IReadOnlyList<ConnectionSummary> SavedConnections => _savedConnections;
+
+    /// <summary>
+    /// The favourites worth offering as a navigation target: enabled, marked favourite, and of a
+    /// kind a browser pane can actually open. Without the last filter the menu would list
+    /// connections that do nothing when clicked.
+    /// </summary>
+    internal static IReadOnlyList<ConnectionSummary> SelectFavoriteConnections(
+        IEnumerable<ConnectionSummary>? connections,
+        int maximum = 15) =>
+        connections is null || maximum <= 0
+            ? []
+            : [.. connections
+                .Where(static connection =>
+                    connection.IsFavorite &&
+                    connection.IsEnabled &&
+                    connection is
+                    {
+                        Type: ConnectionProfileType.Storage
+                    } or
+                    {
+                        Type: ConnectionProfileType.Client,
+                        Provider: StorageConnectionProvider.Ssh
+                    })
+                .DistinctBy(static connection => connection.ConnectionId)
+                .OrderBy(static connection => connection.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+                .Take(maximum)];
+
+    /// <summary>
+    /// Replaces the workspace card's contents. The shell supplies the rows already ordered and
+    /// de-duplicated, and decides which files look present: this control performs no IO.
+    /// </summary>
+    internal void ShowWorkspaceShortcuts(IReadOnlyList<WorkspaceShortcutView> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        _workspaces.BeginUpdate();
+        try
+        {
+            _workspaces.Items.Clear();
+            foreach (var entry in entries)
+            {
+                var item = new ListViewItem(
+                    entry.Entry.DisplayName,
+                    entry.LooksPresent ? "connection" : "warning")
+                {
+                    Tag = entry,
+                    ToolTipText = entry.Entry.Path,
+                    // Dimmed, never disabled: clicking a missing entry is how it gets pruned.
+                    ForeColor = entry.LooksPresent ? StorageHubTheme.Text : StorageHubTheme.TextMuted
+                };
+                item.SubItems.Add(entry.Entry.Path);
+                // The State column, not just the colour, is what tells a screen reader the file
+                // is gone.
+                item.SubItems.Add(entry.LooksPresent
+                    ? entry.IsPinned ? "Pinned" : "Recent"
+                    : "Missing");
+                _workspaces.Items.Add(item);
+            }
+
+            if (_workspaces.Items.Count == 0)
+            {
+                var empty = new ListViewItem("No workspaces yet", "empty");
+                empty.SubItems.Add("Save a workspace to pin it here");
+                _workspaces.Items.Add(empty);
+            }
+        }
+        finally
+        {
+            _workspaces.EndUpdate();
+        }
+    }
 
     public void UpdateAgentStatus(ShellStatusSnapshot status)
     {
@@ -468,6 +578,58 @@ public sealed class OverviewDashboardControl : UserControl
         grid.SetColumnSpan(list, 2);
         card.Controls.Add(grid);
         return list;
+    }
+
+    private ContextMenuStrip BuildWorkspaceMenu()
+    {
+        var menu = new ContextMenuStrip { Renderer = DesktopAppearanceService.MenuRenderer };
+        var open = new ToolStripMenuItem("Open");
+        var pin = new ToolStripMenuItem("Pin");
+        var remove = new ToolStripMenuItem("Remove from list");
+        var copy = new ToolStripMenuItem("Copy path");
+        open.Click += (_, _) => OpenWorkspaceAt(SelectedWorkspace());
+        pin.Click += (_, _) => Raise(WorkspacePinToggleRequested, SelectedWorkspace());
+        remove.Click += (_, _) => Raise(WorkspaceRemoveRequested, SelectedWorkspace());
+        copy.Click += (_, _) =>
+        {
+            if (SelectedWorkspace()?.Tag is WorkspaceShortcutView view)
+            {
+                Clipboard.SetText(view.Entry.Path);
+            }
+        };
+        menu.Items.AddRange([open, pin, remove, copy]);
+        menu.Opening += (_, args) =>
+        {
+            if (SelectedWorkspace()?.Tag is not WorkspaceShortcutView view)
+            {
+                args.Cancel = true;
+                return;
+            }
+
+            pin.Text = view.IsPinned ? "Unpin" : "Pin";
+        };
+        return menu;
+    }
+
+    private ListViewItem? SelectedWorkspace() => _workspaces.SelectedItems.Count == 1
+        ? _workspaces.SelectedItems[0]
+        : null;
+
+    private void WorkspaceListKeyDown(object? sender, KeyEventArgs args)
+    {
+        if (args.KeyCode != Keys.Enter) return;
+        args.Handled = true;
+        OpenWorkspaceAt(SelectedWorkspace());
+    }
+
+    private void OpenWorkspaceAt(ListViewItem? item) => Raise(WorkspaceOpenRequested, item);
+
+    private void Raise(EventHandler<WorkspaceShortcutEventArgs>? handler, ListViewItem? item)
+    {
+        if (item?.Tag is WorkspaceShortcutView view)
+        {
+            handler?.Invoke(this, new WorkspaceShortcutEventArgs(view));
+        }
     }
 
     private static Panel CreateCard() => new()

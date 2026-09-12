@@ -101,16 +101,22 @@ internal sealed record DesktopUpdatePreferences(
     bool ReconnectRemotePanesAutomatically = true,
     bool ConfirmBeforeClearingTransferHistory = true,
     bool ConfirmBeforeDeletingItems = true,
-    IReadOnlyDictionary<string, Keys>? Shortcuts = null)
+    IReadOnlyDictionary<string, Keys>? Shortcuts = null,
+    IReadOnlyList<WorkspaceShortcutEntry>? PinnedWorkspaces = null,
+    IReadOnlyList<WorkspaceShortcutEntry>? RecentWorkspaces = null)
 {
-    public const int CurrentSchemaVersion = 12;
+    public const int CurrentSchemaVersion = 13;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
 
 internal sealed class DesktopUpdatePreferencesStore
 {
-    private const int MaximumSettingsBytes = 64 * 1024;
+    /// <summary>
+    /// Load discards any settings file larger than this, so Save refuses to write one.
+    /// Internal so tests can prove the two agree.
+    /// </summary>
+    internal const int MaximumSettingsBytes = 64 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -212,7 +218,15 @@ internal sealed class DesktopUpdatePreferencesStore
                     document.SchemaVersion < 10 || document.ConfirmBeforeClearingTransferHistory,
                     document.SchemaVersion < 11 || document.ConfirmBeforeDeletingItems,
                     document.SchemaVersion >= 12 && document.Shortcuts is not null
-                        ? ShortcutSettings.Resolve(document.Shortcuts) : null)
+                        ? ShortcutSettings.Resolve(document.Shortcuts) : null,
+                    document.SchemaVersion >= 13 && document.PinnedWorkspaces is not null
+                        ? WorkspaceShortcutSettings.Resolve(
+                            document.PinnedWorkspaces, WorkspaceShortcutSettings.MaximumPinned)
+                        : null,
+                    document.SchemaVersion >= 13 && document.RecentWorkspaces is not null
+                        ? WorkspaceShortcutSettings.Resolve(
+                            document.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent)
+                        : null)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -230,6 +244,12 @@ internal sealed class DesktopUpdatePreferencesStore
         ArgumentNullException.ThrowIfNull(preferences);
         if (preferences.Shortcuts is not null && ShortcutSettings.Validate(preferences.Shortcuts) is { } shortcutError)
             throw new ArgumentException(shortcutError, nameof(preferences));
+        if (WorkspaceShortcutSettings.Validate(
+                preferences.PinnedWorkspaces, WorkspaceShortcutSettings.MaximumPinned) is { } pinnedError)
+            throw new ArgumentException(pinnedError, nameof(preferences));
+        if (WorkspaceShortcutSettings.Validate(
+                preferences.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent) is { } recentError)
+            throw new ArgumentException(recentError, nameof(preferences));
         if (!IsValidEditorPath(preferences.ExternalEditorPath) ||
             preferences.MaximumEditableFileBytes is < 1 or > EditableFileIpcContract.MaximumContentBytes ||
             preferences.MinimumConcurrency is < 1 or > 8 ||
@@ -279,7 +299,26 @@ internal sealed class DesktopUpdatePreferencesStore
                 preferences.ReconnectRemotePanesAutomatically,
                 preferences.ConfirmBeforeClearingTransferHistory,
                 preferences.ConfirmBeforeDeletingItems,
-                preferences.Shortcuts is null ? null : ShortcutSettings.Resolve(preferences.Shortcuts));
+                preferences.Shortcuts is null ? null : ShortcutSettings.Resolve(preferences.Shortcuts),
+                preferences.PinnedWorkspaces is null
+                    ? null
+                    : [.. WorkspaceShortcutSettings.Resolve(
+                        preferences.PinnedWorkspaces, WorkspaceShortcutSettings.MaximumPinned)],
+                preferences.RecentWorkspaces is null
+                    ? null
+                    : [.. WorkspaceShortcutSettings.Resolve(
+                        preferences.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent)]);
+
+            // Load discards a file over this size outright, taking every unrelated setting with
+            // it. Serialize into memory first so an oversized document is refused here rather
+            // than written and then silently ignored on the next start.
+            var payload = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
+            if (payload.Length > MaximumSettingsBytes)
+            {
+                throw new ArgumentException(
+                    "The desktop settings exceed the permitted size.", nameof(preferences));
+            }
+
             using (var stream = new FileStream(
                 temporaryPath,
                 FileMode.CreateNew,
@@ -288,7 +327,7 @@ internal sealed class DesktopUpdatePreferencesStore
                 bufferSize: 4096,
                 FileOptions.WriteThrough))
             {
-                JsonSerializer.Serialize(stream, document, JsonOptions);
+                stream.Write(payload);
                 stream.Flush(flushToDisk: true);
             }
 
@@ -355,5 +394,7 @@ internal sealed class DesktopUpdatePreferencesStore
         bool ReconnectRemotePanesAutomatically = true,
         bool ConfirmBeforeClearingTransferHistory = true,
         bool ConfirmBeforeDeletingItems = true,
-        Dictionary<string, Keys>? Shortcuts = null);
+        Dictionary<string, Keys>? Shortcuts = null,
+        List<WorkspaceShortcutEntry>? PinnedWorkspaces = null,
+        List<WorkspaceShortcutEntry>? RecentWorkspaces = null);
 }
