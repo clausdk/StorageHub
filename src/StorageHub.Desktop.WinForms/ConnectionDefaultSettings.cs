@@ -15,6 +15,13 @@ internal static class ConnectionDefaultSettings
     internal const string OperationTimeoutKey = "operationTimeoutSeconds";
     internal const string RetryAttemptsKey = "maximumRetryAttempts";
 
+    /// <summary>
+    /// The one default whose value is a reference into this machine's secret vault rather than a
+    /// portable setting. The settings exporter lifts these out of the connection defaults into the
+    /// machine-specific section, because they resolve to nothing anywhere else.
+    /// </summary>
+    internal const string PrivateKeyReferenceKey = "privateKeyReference";
+
     private static readonly HashSet<string> EditableFieldKeys = new(StringComparer.Ordinal)
     {
         "port",
