@@ -22,6 +22,9 @@
                       Condition="'$(StorageHubPackagedAgent)' != 'true' and '$(ArtifactsPath)' == ''"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\StorageHub.Contracts\StorageHub.Contracts.csproj" />
+    <!-- Reached transitively through the agent, but declared because the settings export format
+         lives here and the desktop uses it directly. -->
+    <ProjectReference Include="..\StorageHub.Security\StorageHub.Security.csproj" />
   </ItemGroup>
 
   <Target Name="StageCurrentDevelopmentAgent"

@@ -248,25 +248,32 @@ internal sealed class DesktopUpdatePreferencesStore
         }
     }
 
-    internal void Save(DesktopUpdatePreferences preferences)
+    /// <summary>
+    /// Reports why these preferences cannot be persisted, or null when they are acceptable.
+    ///
+    /// Separate from <see cref="Save"/> so that settings arriving from outside the app — an
+    /// imported export file — are judged by exactly the same rules as settings the dialog writes.
+    /// Two copies of these bounds would eventually disagree, and the import is the one that would
+    /// be wrong.
+    /// </summary>
+    internal static string? Validate(DesktopUpdatePreferences preferences)
     {
         ArgumentNullException.ThrowIfNull(preferences);
         if (preferences.Shortcuts is not null && ShortcutSettings.Validate(preferences.Shortcuts) is { } shortcutError)
-            throw new ArgumentException(shortcutError, nameof(preferences));
+            return shortcutError;
         if (WorkspaceShortcutSettings.Validate(
                 preferences.PinnedWorkspaces, WorkspaceShortcutSettings.MaximumPinned) is { } pinnedError)
-            throw new ArgumentException(pinnedError, nameof(preferences));
+            return pinnedError;
         if (WorkspaceShortcutSettings.Validate(
                 preferences.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent) is { } recentError)
-            throw new ArgumentException(recentError, nameof(preferences));
+            return recentError;
         if (preferences.DefaultWorkspacePaneCount is { } paneCount &&
             paneCount is < 1 or > WorkspaceLayoutModel.MaximumPanes)
         {
-            throw new ArgumentException(
-                $"A workspace can have between 1 and {WorkspaceLayoutModel.MaximumPanes} panes.",
-                nameof(preferences));
+            return $"A workspace can have between 1 and {WorkspaceLayoutModel.MaximumPanes} panes.";
         }
-        if (!IsValidEditorPath(preferences.ExternalEditorPath) ||
+
+        return !IsValidEditorPath(preferences.ExternalEditorPath) ||
             preferences.MaximumEditableFileBytes is < 1 or > EditableFileIpcContract.MaximumContentBytes ||
             preferences.MinimumConcurrency is < 1 or > 8 ||
             preferences.MaximumTransferConcurrency is < 1 or > 32 ||
@@ -274,9 +281,17 @@ internal sealed class DesktopUpdatePreferencesStore
             preferences.PerConnectionConcurrency is < 1 or > 16 ||
             preferences.MaximumSyncConcurrency is < 1 or > 8 ||
             preferences.MinimumConcurrency > preferences.MaximumSyncConcurrency ||
-            !Enum.IsDefined(preferences.Appearance))
+            !Enum.IsDefined(preferences.Appearance)
+                ? "External editor preferences exceed the permitted bounds."
+                : null;
+    }
+
+    internal void Save(DesktopUpdatePreferences preferences)
+    {
+        ArgumentNullException.ThrowIfNull(preferences);
+        if (Validate(preferences) is { } invalid)
         {
-            throw new ArgumentException("External editor preferences exceed the permitted bounds.", nameof(preferences));
+            throw new ArgumentException(invalid, nameof(preferences));
         }
 
         var parent = Path.GetDirectoryName(_filePath)
@@ -383,7 +398,11 @@ internal sealed class DesktopUpdatePreferencesStore
         }
     }
 
-    private static bool IsValidEditorPath(string? value) => value is null ||
+    /// <summary>
+    /// Whether an external editor path is storable. Internal so the settings importer applies the
+    /// same rule rather than a lookalike of its own.
+    /// </summary>
+    internal static bool IsValidEditorPath(string? value) => value is null ||
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 2_048 &&
         !value.Any(char.IsControl) &&
