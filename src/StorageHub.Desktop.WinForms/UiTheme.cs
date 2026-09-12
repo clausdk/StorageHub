@@ -1,4 +1,4 @@
-using System.Drawing.Drawing2D;
+﻿using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 
 namespace StorageHub.Desktop;
@@ -22,6 +22,26 @@ public static class StorageHubTheme
     public static void SetAppearance(DesktopAppearance appearance) => DesktopAppearanceService.SetAppearance(appearance);
 
     public static Font CreateSectionFont() => new("Segoe UI Semibold", 10F, FontStyle.Regular, GraphicsUnit.Point);
+
+    /// <summary>
+    /// Turns on the double buffering WinForms leaves off for DataGridView. Without it a grid that
+    /// repaints on a timer visibly tears, which reads as the contents blinking even when the rows
+    /// themselves are unchanged. The property is protected, so it is set through its descriptor.
+    /// </summary>
+    public static void ReduceFlicker(Control control)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        if (SystemInformation.TerminalServerSession)
+        {
+            // Double buffering is a pessimisation over a remote desktop connection.
+            return;
+        }
+
+        var property = control.GetType().GetProperty(
+            "DoubleBuffered",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        property?.SetValue(control, true, null);
+    }
 
     public static void ConfigureList(ListView list)
     {

@@ -1,4 +1,4 @@
-using StorageHub.Contracts.Ipc;
+﻿using StorageHub.Contracts.Ipc;
 using System.Globalization;
 
 namespace StorageHub.Desktop;
@@ -79,6 +79,7 @@ public sealed class ActivityLogControl : UserControl
             MultiSelect = false,
             AccessibleName = "Recent durable activity"
         };
+        StorageHubTheme.ReduceFlicker(_grid);
         _grid.Columns.Add("Updated", "Updated");
         _grid.Columns.Add("Area", "Area");
         _grid.Columns.Add("Item", "Item");
@@ -99,6 +100,13 @@ public sealed class ActivityLogControl : UserControl
     public int DisplayedEntryCount => _grid.Rows.Count;
 
     public string StatusText => _status.Text;
+
+    /// <summary>
+    /// Identity of each displayed row. Exposed so a test can prove a refresh reuses the existing
+    /// rows rather than clearing and rebuilding them, which is what caused the visible blink.
+    /// </summary>
+    internal int[] RowIdentities() =>
+        [.. _grid.Rows.Cast<DataGridViewRow>().Select(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode)];
 
     public Task RefreshActivityAsync(CancellationToken cancellationToken = default) =>
         RefreshCoreAsync(cancellationToken);
@@ -145,17 +153,22 @@ public sealed class ActivityLogControl : UserControl
         await RefreshCoreAsync(_lifetime.Token).ConfigureAwait(true);
 
     private async void PollTimerTick(object? sender, EventArgs e) =>
-        await RefreshCoreAsync(_lifetime.Token).ConfigureAwait(true);
+        await RefreshCoreAsync(_lifetime.Token, background: true).ConfigureAwait(true);
 
-    private async Task RefreshCoreAsync(CancellationToken cancellationToken)
+    private async Task RefreshCoreAsync(CancellationToken cancellationToken, bool background = false)
     {
         if (_disposed || Interlocked.Exchange(ref _refreshing, 1) != 0)
         {
             return;
         }
 
-        _status.Text = "Refreshing durable activity…";
-        _status.ForeColor = StorageHubTheme.TextMuted;
+        // A timed poll stays silent. Announcing "refreshing" on every tick made the status
+        // line flicker between two strings for work the user never asked for.
+        if (!background)
+        {
+            _status.Text = "Refreshing durable activity…";
+            _status.ForeColor = StorageHubTheme.TextMuted;
+        }
         try
         {
             var transfersTask = _transferClient.ListAsync(new TransferListRequest(
@@ -185,18 +198,10 @@ public sealed class ActivityLogControl : UserControl
                 .ThenBy(static entry => entry.Area, StringComparer.Ordinal)
                 .Take(100)
                 .ToArray();
-            _grid.Rows.Clear();
-            foreach (var entry in entries)
-            {
-                _grid.Rows.Add(
-                    entry.UpdatedUtc.LocalDateTime.ToString("g", CultureInfo.CurrentCulture),
-                    entry.Area,
-                    entry.Item,
-                    entry.State,
-                    entry.Details);
-            }
-
-            _grid.ClearSelection();
+            // Clearing and rebuilding made every row blink out and back on each poll. Rows are
+            // reconciled in place, so unchanged text is never rewritten and the selection and
+            // scroll position survive a refresh.
+            PopulateActivity(entries);
             _status.Text = entries.Length == 0
                 ? "No transfer or synchronization activity yet."
                 : pending.Count == 0
@@ -231,6 +236,50 @@ public sealed class ActivityLogControl : UserControl
         {
             _pollTimer.Start();
             _ = RefreshCoreAsync(_lifetime.Token);
+        }
+    }
+
+    /// <summary>
+    /// Reconciles the grid against the newest page without clearing it. A row is only written when
+    /// a cell actually differs, so a poll that changes nothing repaints nothing.
+    /// </summary>
+    private void PopulateActivity(ActivityEntry[] entries)
+    {
+        var wasEmpty = _grid.Rows.Count == 0;
+
+        while (_grid.Rows.Count > entries.Length)
+        {
+            _grid.Rows.RemoveAt(_grid.Rows.Count - 1);
+        }
+
+        while (_grid.Rows.Count < entries.Length)
+        {
+            _grid.Rows.Add();
+        }
+
+        for (var index = 0; index < entries.Length; index++)
+        {
+            var entry = entries[index];
+            var row = _grid.Rows[index];
+            SetCell(row, 0, entry.UpdatedUtc.LocalDateTime.ToString("g", CultureInfo.CurrentCulture));
+            SetCell(row, 1, entry.Area);
+            SetCell(row, 2, entry.Item);
+            SetCell(row, 3, entry.State);
+            SetCell(row, 4, entry.Details);
+        }
+
+        if (wasEmpty)
+        {
+            _grid.ClearSelection();
+        }
+    }
+
+    private static void SetCell(DataGridViewRow row, int index, string value)
+    {
+        var cell = row.Cells[index];
+        if (!string.Equals(cell.Value as string, value, StringComparison.Ordinal))
+        {
+            cell.Value = value;
         }
     }
 

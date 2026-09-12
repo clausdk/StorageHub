@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Globalization;
 using StorageHub.Contracts.Ipc;
 
@@ -273,6 +273,7 @@ public sealed class TransferQueueControl : UserControl
         grid.DefaultCellStyle.ForeColor = StorageHubTheme.Text;
         grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(222, 233, 251);
         grid.DefaultCellStyle.SelectionForeColor = StorageHubTheme.Text;
+        StorageHubTheme.ReduceFlicker(grid);
         grid.Columns.Add("Operation", "Operation");
         grid.Columns.Add("Source", "Source");
         grid.Columns.Add("Destination", "Destination");
