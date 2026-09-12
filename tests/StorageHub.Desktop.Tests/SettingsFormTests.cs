@@ -6,6 +6,71 @@ namespace StorageHub.Desktop.Tests;
 public sealed class SettingsFormTests
 {
     [Fact]
+    public void A_field_wrapped_for_help_text_keeps_the_margin_that_aligns_it()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var form = new SettingsForm();
+            form.CreateControl();
+
+            // Rows are laid out as label + field, and a row carrying help text wraps the field in
+            // a panel so the description can sit underneath. Clearing the field's margin during
+            // that wrap made those rows sit higher than the rows without help text, which reads
+            // as the field being a different size. Every wrapped field keeps the top margin a
+            // bare field has.
+            var wrapped = Descendants(form)
+                .OfType<FlowLayoutPanel>()
+                .Where(static host => host.FlowDirection == FlowDirection.TopDown && host.Controls.Count == 2)
+                .Where(static host => host.Controls[0] is TextBox or NumericUpDown or ComboBox)
+                .Where(static host => host.Controls[1] is Label)
+                .Select(static host => host.Controls[0])
+                .ToArray();
+
+            Assert.NotEmpty(wrapped);
+            Assert.All(wrapped, field => Assert.Equal(3, field.Margin.Top));
+        });
+    }
+
+    [Fact]
+    public void Buttons_beside_a_field_match_it_rather_than_towering_over_it()
+    {
+        SyncRunReviewControlTests.RunOnSta(() =>
+        {
+            using var probe = new TextBox();
+            using var host = new Form();
+            host.Controls.Add(probe);
+            host.CreateControl();
+
+            using var inline = new Button { Text = "Import key…" };
+            using var standalone = new Button { Text = "OK" };
+            host.Controls.Add(inline);
+            host.Controls.Add(standalone);
+            StorageHubTheme.StyleInlineButton(inline);
+            StorageHubTheme.StyleSecondaryButton(standalone);
+
+            // An inline button shares a row with a single-line input, which cannot grow past its
+            // font height, so it tracks the field. A standalone dialog button keeps its own
+            // larger click target.
+            Assert.InRange(inline.Height, probe.Height - 2, probe.Height + 2);
+            Assert.True(
+                standalone.MinimumSize.Height > inline.Height,
+                "A standalone button should stay larger than an inline one.");
+        });
+    }
+
+    private static IEnumerable<Control> Descendants(Control root)
+    {
+        foreach (Control child in root.Controls)
+        {
+            yield return child;
+            foreach (var descendant in Descendants(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
+    [Fact]
     public void Settings_cards_keep_readable_width()
     {
         SyncRunReviewControlTests.RunOnSta(() =>

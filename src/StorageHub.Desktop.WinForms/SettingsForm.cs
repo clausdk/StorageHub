@@ -590,8 +590,8 @@ public sealed class SettingsForm : Form
         }, 0, 0);
         layout.SetColumnSpan(layout.Controls[^1], 2);
         layout.Controls.Add(_externalEditor, 0, 1);
-        var browse = new Button { Text = "Browse...", AutoSize = true };
-        StorageHubTheme.StyleSecondaryButton(browse);
+        var browse = new Button { Text = "Browse..." };
+        StorageHubTheme.StyleInlineButton(browse);
         browse.Click += BrowseEditorClicked;
         layout.Controls.Add(browse, 1, 1);
         layout.Controls.Add(new Label
@@ -1325,7 +1325,10 @@ public sealed class SettingsForm : Form
             WrapContents = false,
             Margin = Padding.Empty
         };
-        control.Margin = Padding.Empty;
+        // Keep the vertical margin a field has when it sits in the cell directly. Clearing it
+        // here made every row carrying help text sit higher than the rows without, which reads
+        // as the field itself being a different size.
+        control.Margin = new Padding(0, 3, 0, 0);
         host.Controls.Add(control);
         if (!string.IsNullOrWhiteSpace(description))
         {
@@ -1411,10 +1414,10 @@ public sealed class SettingsForm : Form
             AccessibleDescription = "Opaque encrypted-vault reference; the key file path and contents are not saved in settings."
         };
         value.TextChanged += MarkDirty;
-        var import = new Button { Text = "Import key…", AutoSize = true };
-        var clear = new Button { Text = "Clear default", AutoSize = true };
-        StorageHubTheme.StyleSecondaryButton(import);
-        StorageHubTheme.StyleSecondaryButton(clear);
+        var import = new Button { Text = "Import key…" };
+        var clear = new Button { Text = "Clear default" };
+        StorageHubTheme.StyleInlineButton(import);
+        StorageHubTheme.StyleInlineButton(clear);
         import.Margin = new Padding(6, 0, 0, 0);
         clear.Margin = new Padding(6, 0, 0, 0);
         import.Click += async (_, _) => await ImportDefaultSshPrivateKeyAsync(value);
@@ -1519,7 +1522,10 @@ public sealed class SettingsForm : Form
             WrapContents = false,
             Margin = Padding.Empty
         };
-        control.Margin = Padding.Empty;
+        // Keep the vertical margin a field has when it sits in the cell directly. Clearing it
+        // here made every row carrying help text sit higher than the rows without, which reads
+        // as the field itself being a different size.
+        control.Margin = new Padding(0, 3, 0, 0);
         host.Controls.Add(control);
         host.Controls.Add(UiControlFactory.CreateDescription(description));
         table.Controls.Add(host, 1, row);

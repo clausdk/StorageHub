@@ -158,6 +158,58 @@ public static class StorageHubTheme
         ApplySecondaryButtonState(button);
     }
 
+    /// <summary>
+    /// A secondary button that sits on the same row as an input field.
+    ///
+    /// The standalone minimum of 34 is set for dialog buttons that stand on their own; beside a
+    /// single-line text box or spinner, which cannot grow past their font height, it left the
+    /// button towering over the field it belongs to. This variant matches the field instead.
+    /// </summary>
+    public static void StyleInlineButton(Button button)
+    {
+        ArgumentNullException.ThrowIfNull(button);
+        StyleSecondaryButton(button);
+        button.Padding = new Padding(10, 2, 10, 2);
+        button.AutoSize = false;
+        // The font and DPI are not final until the button has a parent, and the secondary style
+        // leaves AutoSize on, so the height is fixed once the button joins its row and again if
+        // it moves to a display with different scaling.
+        ResizeInlineButton(button);
+        button.ParentChanged -= InlineButtonMetricsChanged;
+        button.ParentChanged += InlineButtonMetricsChanged;
+        button.DpiChangedAfterParent -= InlineButtonMetricsChanged;
+        button.DpiChangedAfterParent += InlineButtonMetricsChanged;
+        button.FontChanged -= InlineButtonMetricsChanged;
+        button.FontChanged += InlineButtonMetricsChanged;
+    }
+
+    private static void InlineButtonMetricsChanged(object? sender, EventArgs e)
+    {
+        if (sender is Button button)
+        {
+            ResizeInlineButton(button);
+        }
+    }
+
+    private static void ResizeInlineButton(Button button)
+    {
+        var height = MeasureInputHeight(button);
+        var width = Math.Max(
+            button.MinimumSize.Width,
+            TextRenderer.MeasureText(button.Text, button.Font).Width + button.Padding.Horizontal + 10);
+        button.MinimumSize = new Size(0, height);
+        button.MaximumSize = new Size(0, height);
+        button.Size = new Size(width, height);
+    }
+
+    /// <summary>
+    /// The height a single-line input settles at beside this control: WinForms sizes a text box
+    /// or spinner from the font plus a fixed border, so measuring the font is what keeps an
+    /// inline button aligned at every DPI rather than at the one it was designed on.
+    /// </summary>
+    private static int MeasureInputHeight(Control control) =>
+        control.Font.Height + (int)Math.Round(6 * control.DeviceDpi / 96D);
+
     /// <summary>A secondary button whose action destroys data, so it reads as dangerous at rest.</summary>
     public static void StyleDangerButton(Button button)
     {

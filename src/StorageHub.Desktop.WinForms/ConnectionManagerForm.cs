@@ -878,8 +878,8 @@ public sealed class ConnectionManagerForm : Form
             Dock = DockStyle.Fill,
             AccessibleDescription = readOnly ? "Stores a vault or certificate reference, not a secret value." : string.Empty
         };
-        var select = new Button { Text = buttonText, AutoSize = true };
-        StorageHubTheme.StyleSecondaryButton(select);
+        var select = new Button { Text = buttonText };
+        StorageHubTheme.StyleInlineButton(select);
         select.Margin = new Padding(6, 0, 0, 0);
         if (!readOnly)
         {
@@ -925,10 +925,10 @@ public sealed class ConnectionManagerForm : Form
             AccessibleDescription = "An opaque vault reference. Secret material is never displayed."
         };
         _secretReferenceBoxes[field.Key] = value;
-        var enroll = new Button { Text = "Enroll / replace…", AutoSize = true };
-        var delete = new Button { Text = "Delete…", AutoSize = true };
-        StorageHubTheme.StyleSecondaryButton(enroll);
-        StorageHubTheme.StyleSecondaryButton(delete);
+        var enroll = new Button { Text = "Enroll / replace…" };
+        var delete = new Button { Text = "Delete…" };
+        StorageHubTheme.StyleInlineButton(enroll);
+        StorageHubTheme.StyleInlineButton(delete);
         enroll.Margin = new Padding(6, 0, 0, 0);
         delete.Margin = new Padding(6, 0, 0, 0);
         enroll.Click += async (_, _) => await EnrollOrUpdateSecretAsync(field, value, _formLifetime.Token);
@@ -940,8 +940,8 @@ public sealed class ConnectionManagerForm : Form
         // Material fields can also borrow an already-imported key instead of enrolling a new copy.
         if (KeyStoreSlotKind(field.Key) is { } kind)
         {
-            var choose = new Button { Text = "Key Store…", AutoSize = true, Margin = new Padding(6, 0, 0, 0) };
-            StorageHubTheme.StyleSecondaryButton(choose);
+            var choose = new Button { Text = "Key Store…", Margin = new Padding(6, 0, 0, 0) };
+            StorageHubTheme.StyleInlineButton(choose);
             choose.Click += async (_, _) => await ChooseFromKeyStoreAsync(field, kind, _formLifetime.Token);
             panel.ColumnCount = 4;
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -977,10 +977,9 @@ public sealed class ConnectionManagerForm : Form
         var reject = new Button
         {
             Text = "Reject…",
-            AutoSize = true,
             AccessibleDescription = "Record this exact fingerprint as rejected for the saved endpoint."
         };
-        StorageHubTheme.StyleSecondaryButton(reject);
+        StorageHubTheme.StyleInlineButton(reject);
         reject.Margin = new Padding(6, 0, 0, 0);
         reject.Click += async (_, _) => await RejectFingerprintAsync(value, _formLifetime.Token);
         panel.Controls.Add(value, 0, 0);
@@ -989,10 +988,9 @@ public sealed class ConnectionManagerForm : Form
             var fetch = new Button
             {
                 Text = "Fetch from host…",
-                AutoSize = true,
                 AccessibleDescription = "Retrieve and display the SSH host key without trusting it."
             };
-            StorageHubTheme.StyleSecondaryButton(fetch);
+            StorageHubTheme.StyleInlineButton(fetch);
             fetch.Margin = new Padding(6, 0, 0, 0);
             fetch.Click += async (_, _) => await FetchSshHostKeyAsync(value, _formLifetime.Token);
             panel.Controls.Add(fetch, 1, 0);
