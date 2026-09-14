@@ -745,6 +745,17 @@ public sealed class SettingsForm : Form
                     {
                         label.MaximumSize = new Size(availableWidth, label.MaximumSize.Height);
                     }
+
+                    // An auto-sizing label still honours its minimum, so a heading authored at the
+                    // 700px content width keeps the page scrolling sideways on a narrower display
+                    // however the maximum above is clamped. Labels are laid out by their maximum
+                    // and their text, so dropping the minimum costs nothing -- unlike the panels
+                    // below, which use it to fill a page wider than their content.
+                    if (label.MinimumSize.Width > availableWidth)
+                    {
+                        label.MinimumSize = new Size(0, label.MinimumSize.Height);
+                    }
+
                     if (!label.AutoSize && label.Width != availableWidth)
                     {
                         label.MinimumSize = new Size(0, label.MinimumSize.Height);
