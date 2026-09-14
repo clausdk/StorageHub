@@ -2,11 +2,26 @@
 
 namespace StorageHub.Desktop;
 
+/// <summary>A per-row affordance on a saved connection.</summary>
+internal enum ConnectionRowAction
+{
+    Edit,
+    Delete
+}
+
+internal sealed record ConnectionRowMenuEventArgs(ConnectionCardModel Connection, Point ScreenLocation);
+
 internal sealed class ConnectionSidebarControl : UserControl
 {
     private readonly FlowLayoutPanel _content;
     private readonly Dictionary<Guid, ConnectionSidebarItem> _items = [];
     private readonly HashSet<string> _collapsedGroups = new(StringComparer.OrdinalIgnoreCase);
+
+    // Registered once for the whole list rather than per row. SetConnections rebuilds every row on
+    // every refresh, so per-row tracking would pile up registrations that only a theme change
+    // prunes. The theme owns these bitmaps; rows borrow them and must not dispose them.
+    private Image _editIcon = null!;
+    private Image _deleteIcon = null!;
 
     internal ConnectionSidebarControl()
     {
@@ -24,9 +39,30 @@ internal sealed class ConnectionSidebarControl : UserControl
         };
         _content.ClientSizeChanged += (_, _) => ResizeRows();
         Controls.Add(_content);
+        _editIcon = StorageHubTheme.TrackIcon(
+            this, image => ReplaceRowIcon(ref _editIcon, image), UiGlyph.Rename, 16, UiIconTone.Text, DeviceDpi / 96F);
+        _deleteIcon = StorageHubTheme.TrackIcon(
+            this, image => ReplaceRowIcon(ref _deleteIcon, image), UiGlyph.Delete, 16, UiIconTone.Danger, DeviceDpi / 96F);
     }
 
     internal event EventHandler<ConnectionCardModel>? ConnectionSelected;
+
+    /// <summary>Raised on double click or Enter: the caller decides what "open" means.</summary>
+    internal event EventHandler<ConnectionCardModel>? ConnectionActivated;
+
+    internal event EventHandler<ConnectionCardModel>? ConnectionEditRequested;
+
+    internal event EventHandler<ConnectionCardModel>? ConnectionDeleteRequested;
+
+    /// <summary>Raised with the screen location to pop a row's context menu at.</summary>
+    internal event EventHandler<ConnectionRowMenuEventArgs>? ConnectionMenuRequested;
+
+    /// <summary>
+    /// Whether rows carry inline edit and delete affordances. Off by default so the control keeps
+    /// behaving as a plain picker wherever it is used only to choose a connection.
+    /// </summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal bool ShowRowActions { get; set; }
 
     internal Guid? SelectedConnectionId { get; private set; }
 
@@ -38,7 +74,7 @@ internal sealed class ConnectionSidebarControl : UserControl
         ArgumentNullException.ThrowIfNull(connections);
         var query = searchText?.Trim() ?? string.Empty;
         var matching = connections
-            .Where(card => Matches(card, query))
+            .Where(card => ConnectionPickerFilter.Matches(card, query))
             .OrderBy(static card => card.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
 
@@ -52,8 +88,15 @@ internal sealed class ConnectionSidebarControl : UserControl
 
             _content.Controls.Clear();
             _items.Clear();
-            AddSection("Storage", matching.Where(static card => card.Type == ConnectionProfileType.Storage));
-            AddSection("Remote clients", matching.Where(static card => card.Type == ConnectionProfileType.Client));
+
+            // A connection appears in exactly one section: the rows are indexed by id, so listing a
+            // favourite twice would leave the first copy unreachable for selection.
+            AddFlatSection("Favorites", "favorites", matching.Where(static card => card.IsEnabled && card.IsFavorite));
+            AddSection("Storage", matching.Where(static card =>
+                card.IsEnabled && !card.IsFavorite && card.Type == ConnectionProfileType.Storage));
+            AddSection("Remote clients", matching.Where(static card =>
+                card.IsEnabled && !card.IsFavorite && card.Type == ConnectionProfileType.Client));
+            AddFlatSection("Disabled", "disabled", matching.Where(static card => !card.IsEnabled));
             if (_content.Controls.Count == 0)
             {
                 _content.Controls.Add(new Label
@@ -76,6 +119,24 @@ internal sealed class ConnectionSidebarControl : UserControl
     }
 
     internal void ClearSelection() => SelectConnection(null, raiseEvent: false);
+
+    /// <summary>
+    /// A section whose membership is a state rather than a place, so it is listed flat: nesting
+    /// favourites under their folders would bury the shortcut the favourite exists to provide.
+    /// </summary>
+    private void AddFlatSection(string title, string key, IEnumerable<ConnectionCardModel> connections)
+    {
+        var cards = connections.ToArray();
+        if (cards.Length == 0)
+        {
+            return;
+        }
+
+        _content.Controls.Add(new ConnectionSidebarSectionHeader(title));
+        var folder = new FolderBuilder(key, title);
+        folder.Connections.AddRange(cards);
+        _content.Controls.Add(CreateGroup(folder, depth: 0));
+    }
 
     private void AddSection(string title, IEnumerable<ConnectionCardModel> connections)
     {
@@ -146,8 +207,35 @@ internal sealed class ConnectionSidebarControl : UserControl
 
         foreach (var card in folder.Connections.OrderBy(static value => value.Name, StringComparer.CurrentCultureIgnoreCase))
         {
-            var item = new ConnectionSidebarItem(card);
+            var item = new ConnectionSidebarItem(card)
+            {
+                ShowActions = ShowRowActions,
+                EditIcon = _editIcon,
+                DeleteIcon = _deleteIcon
+            };
             item.Click += (_, _) => SelectConnection(card.ConnectionId, raiseEvent: true);
+            item.Activated += (_, _) =>
+            {
+                SelectConnection(card.ConnectionId, raiseEvent: true);
+                ConnectionActivated?.Invoke(this, card);
+            };
+            item.ActionInvoked += (_, action) =>
+            {
+                SelectConnection(card.ConnectionId, raiseEvent: true);
+                if (action == ConnectionRowAction.Edit)
+                {
+                    ConnectionEditRequested?.Invoke(this, card);
+                }
+                else
+                {
+                    ConnectionDeleteRequested?.Invoke(this, card);
+                }
+            };
+            item.MenuRequested += (_, location) =>
+            {
+                SelectConnection(card.ConnectionId, raiseEvent: true);
+                ConnectionMenuRequested?.Invoke(this, new ConnectionRowMenuEventArgs(card, location));
+            };
             group.AddChild(item);
             if (card.ConnectionId is { } id)
             {
@@ -189,17 +277,24 @@ internal sealed class ConnectionSidebarControl : UserControl
         }
     }
 
+    /// <summary>
+    /// Re-points every live row at the repainted icon after an appearance change. The rows hold a
+    /// borrowed reference, so they have to be told rather than left pointing at the stale bitmap.
+    /// </summary>
+    private void ReplaceRowIcon(ref Image field, Image image)
+    {
+        field = image;
+        foreach (var item in _items.Values)
+        {
+            item.EditIcon = _editIcon;
+            item.DeleteIcon = _deleteIcon;
+            item.Invalidate();
+        }
+    }
+
     private static string[] SplitFolder(string? folder) => string.IsNullOrWhiteSpace(folder)
         ? []
         : folder.Split(['/', '\\'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-
-    private static bool Matches(ConnectionCardModel card, string query) => query.Length == 0 ||
-        card.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-        card.Endpoint.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-        card.State.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-        (card.FolderPath?.Contains(query, StringComparison.CurrentCultureIgnoreCase) ?? false) ||
-        card.Descriptor.DisplayName.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-        card.DisplayTags.Any(tag => tag.Contains(query, StringComparison.CurrentCultureIgnoreCase));
 
     private sealed class FolderBuilder(string key, string label)
     {
@@ -413,7 +508,13 @@ internal sealed class ConnectionSidebarGroup : Panel
 
 internal sealed class ConnectionSidebarItem : Control
 {
+    private const int ActionSize = 22;
+    private const int ActionGap = 4;
+    private const int ActionInset = 8;
+
     private bool _selected;
+    private bool _hovered;
+    private ConnectionRowAction? _hotAction;
 
     internal ConnectionSidebarItem(ConnectionCardModel connection)
     {
@@ -422,11 +523,47 @@ internal sealed class ConnectionSidebarItem : Control
         Cursor = Cursors.Hand;
         TabStop = true;
         AccessibleName = connection.Name;
-        AccessibleDescription = $"{connection.Descriptor.DisplayName} saved connection. {connection.State}";
+        AccessibleDescription =
+            $"{connection.Descriptor.DisplayName} saved connection. {connection.State}. " +
+            "Press Enter to open, F2 to edit, Delete to remove, Shift+F10 for more.";
+        AccessibleRole = AccessibleRole.ListItem;
         DoubleBuffered = true;
+        // Off by default on a raw Control, so without this the row never sees a double click.
+        SetStyle(ControlStyles.StandardDoubleClick, true);
     }
 
+    /// <summary>Raised when the row is opened: double click, or Enter.</summary>
+    internal event EventHandler? Activated;
+
+    internal event EventHandler<ConnectionRowAction>? ActionInvoked;
+
+    internal event EventHandler<Point>? MenuRequested;
+
     internal ConnectionCardModel Connection { get; }
+
+    /// <summary>Whether to draw the inline edit and delete affordances.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal bool ShowActions { get; init; }
+
+    /// <summary>Borrowed from the list, which keeps them in step with the palette.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Image? EditIcon { get; set; }
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    internal Image? DeleteIcon { get; set; }
+
+    /// <summary>Internal so the hit targets can be driven directly from tests.</summary>
+    internal Rectangle EditBounds => new(
+        Width - (ActionSize * 2) - ActionGap - ActionInset, (Height - ActionSize) / 2, ActionSize, ActionSize);
+
+    internal Rectangle DeleteBounds => new(
+        Width - ActionSize - ActionInset, (Height - ActionSize) / 2, ActionSize, ActionSize);
+
+    /// <summary>
+    /// Reserved whether or not the icons are currently painted, so the name does not reflow under
+    /// the pointer as the row is hovered.
+    /// </summary>
+    private int ActionStripWidth => ShowActions ? (ActionSize * 2) + ActionGap + ActionInset + 4 : 0;
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal bool Selected
@@ -439,24 +576,105 @@ internal sealed class ConnectionSidebarItem : Control
         }
     }
 
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        base.OnMouseEnter(e);
+        _hovered = true;
+        Invalidate();
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        _hovered = false;
+        _hotAction = null;
+        Invalidate();
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        var hot = HitAction(e.Location);
+        if (hot != _hotAction)
+        {
+            _hotAction = hot;
+            Invalidate();
+        }
+    }
+
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
-        if (e.Button == MouseButtons.Left)
+        if (e.Button == MouseButtons.Right)
         {
-            OnClick(EventArgs.Empty);
             Focus();
+            MenuRequested?.Invoke(this, PointToScreen(e.Location));
+            return;
         }
+
+        if (e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        Focus();
+
+        // The second click of a double click lands here too; letting it re-fire an action would
+        // turn an over-eager open into a delete prompt.
+        if (e.Clicks == 1 && HitAction(e.Location) is { } action)
+        {
+            ActionInvoked?.Invoke(this, action);
+            return;
+        }
+
+        OnClick(EventArgs.Empty);
+    }
+
+    protected override void OnDoubleClick(EventArgs e)
+    {
+        base.OnDoubleClick(e);
+        Activated?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.KeyCode is Keys.Enter or Keys.Space)
+        switch (e.KeyCode)
         {
-            e.Handled = true;
-            OnClick(EventArgs.Empty);
+            case Keys.Enter:
+                e.Handled = true;
+                OnClick(EventArgs.Empty);
+                Activated?.Invoke(this, EventArgs.Empty);
+                break;
+            case Keys.Space:
+                e.Handled = true;
+                OnClick(EventArgs.Empty);
+                break;
+            case Keys.F2 when ShowActions:
+                e.Handled = true;
+                ActionInvoked?.Invoke(this, ConnectionRowAction.Edit);
+                break;
+            case Keys.Delete when ShowActions:
+                e.Handled = true;
+                ActionInvoked?.Invoke(this, ConnectionRowAction.Delete);
+                break;
+            case Keys.Apps:
+            case Keys.F10 when e.Shift:
+                e.Handled = true;
+                MenuRequested?.Invoke(this, PointToScreen(new Point(Width / 2, Height / 2)));
+                break;
         }
+    }
+
+    private ConnectionRowAction? HitAction(Point location)
+    {
+        if (!ShowActions)
+        {
+            return null;
+        }
+
+        if (EditBounds.Contains(location)) return ConnectionRowAction.Edit;
+        return DeleteBounds.Contains(location) ? ConnectionRowAction.Delete : null;
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -480,18 +698,92 @@ internal sealed class ConnectionSidebarItem : Control
         using var badgeFont = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold);
         TextRenderer.DrawText(e.Graphics, Connection.Descriptor.ShortName, badgeFont, new Rectangle(9, 10, 36, 36), StorageHubTheme.ContrastText(accent),
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        TextRenderer.DrawText(e.Graphics, Connection.Name, Font, new Rectangle(55, 7, Math.Max(20, Width - 65), 22),
+        var textWidth = Math.Max(20, Width - 65 - ActionStripWidth);
+        TextRenderer.DrawText(e.Graphics, Connection.Name, Font, new Rectangle(55, 7, textWidth, 22),
             StorageHubTheme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         var detail = Connection.IsEnabled
             ? $"{Connection.Endpoint} · {Connection.State}"
             : $"{Connection.Endpoint} · Disabled";
-        TextRenderer.DrawText(e.Graphics, detail, Font, new Rectangle(55, 29, Math.Max(20, Width - 65), 20),
+        TextRenderer.DrawText(e.Graphics, detail, Font, new Rectangle(55, 29, textWidth, 20),
             Connection.IsEnabled ? StorageHubTheme.TextMuted : StorageHubTheme.Warning,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        // Revealed on hover, selection or focus: drawing them on every row at rest turns a long
+        // list into a wall of icons, but a keyboard user never hovers.
+        if (ShowActions && (_hovered || _selected || Focused))
+        {
+            DrawAction(e.Graphics, EditIcon, EditBounds, _hotAction == ConnectionRowAction.Edit, danger: false);
+            DrawAction(e.Graphics, DeleteIcon, DeleteBounds, _hotAction == ConnectionRowAction.Delete, danger: true);
+        }
+
         if (Focused)
         {
             ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(bounds, -4, -4));
         }
+    }
+
+    private static void DrawAction(Graphics graphics, Image? icon, Rectangle bounds, bool hot, bool danger)
+    {
+        if (hot)
+        {
+            using var path = CreatePath(bounds, 6);
+            using var fill = new SolidBrush(danger
+                ? StorageHubTheme.CurrentPalette.DangerTint
+                : StorageHubTheme.CurrentPalette.Elevated);
+            graphics.FillPath(fill, path);
+        }
+
+        if (icon is null)
+        {
+            return;
+        }
+
+        graphics.DrawImage(
+            icon,
+            new Rectangle(
+                bounds.X + ((bounds.Width - 16) / 2),
+                bounds.Y + ((bounds.Height - 16) / 2),
+                16,
+                16));
+    }
+
+    /// <summary>
+    /// The row is one owner-drawn control, so the inline icons have no windows of their own and are
+    /// invisible to assistive technology. Publishing them as accessible children is what makes them
+    /// reachable; the key bindings in <see cref="OnKeyDown"/> are what makes them operable.
+    /// </summary>
+    protected override AccessibleObject CreateAccessibilityInstance() => new RowAccessibleObject(this);
+
+    private sealed class RowAccessibleObject(ConnectionSidebarItem owner)
+        : Control.ControlAccessibleObject(owner)
+    {
+        public override int GetChildCount() => owner.ShowActions ? 2 : 0;
+
+        public override AccessibleObject? GetChild(int index) => (owner.ShowActions, index) switch
+        {
+            (true, 0) => new RowActionAccessibleObject(owner, ConnectionRowAction.Edit),
+            (true, 1) => new RowActionAccessibleObject(owner, ConnectionRowAction.Delete),
+            _ => null
+        };
+    }
+
+    private sealed class RowActionAccessibleObject(ConnectionSidebarItem owner, ConnectionRowAction action)
+        : AccessibleObject
+    {
+        public override string Name => action == ConnectionRowAction.Edit
+            ? $"Edit connection {owner.Connection.Name}"
+            : $"Delete connection {owner.Connection.Name}";
+
+        public override AccessibleRole Role => AccessibleRole.PushButton;
+
+        public override AccessibleObject Parent => owner.AccessibilityObject;
+
+        public override Rectangle Bounds => owner.RectangleToScreen(
+            action == ConnectionRowAction.Edit ? owner.EditBounds : owner.DeleteBounds);
+
+        public override string DefaultAction => action == ConnectionRowAction.Edit ? "Edit" : "Delete";
+
+        public override void DoDefaultAction() => owner.ActionInvoked?.Invoke(owner, action);
     }
 
     private static System.Drawing.Drawing2D.GraphicsPath CreatePath(Rectangle bounds, int radius)

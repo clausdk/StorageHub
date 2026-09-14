@@ -653,6 +653,9 @@ public sealed class BrowserPaneControl : UserControl
 
     public event EventHandler<ConnectionOpenedEventArgs>? ConnectionOpened;
 
+    /// <summary>Raised after this pane's own connection editor has been open, saved or not.</summary>
+    public event EventHandler? ConnectionsChanged;
+
     /// <summary>Raised when persistent pane state (surface, location, filter, or sorting) changes.</summary>
     public event EventHandler? StateChanged;
 
@@ -3655,6 +3658,10 @@ public sealed class BrowserPaneControl : UserControl
         using var dialog = new ConnectionManagerForm();
         _ = dialog.ShowDialog(FindForm());
         _ = LoadRemoteConnectionsAsync(preserveCurrentSurface: !IsAnyConnectionsHomeSelected);
+
+        // The shell's connections panel is always on screen, so an edit started from a pane has to
+        // reach it; this pane refreshing only itself would leave that list stale.
+        ConnectionsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private sealed record RemoteTreeRoot(Guid ConnectionId);

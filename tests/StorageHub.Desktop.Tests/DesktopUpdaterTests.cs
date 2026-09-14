@@ -404,6 +404,61 @@ public sealed class DesktopUpdaterTests
     }
 
     [Fact]
+    public void SettingsWrittenBeforeTheConnectionsPanelExistedLoadWithItShownOnTheLeft()
+    {
+        using var fixture = new SettingsFixture();
+        WriteLegacySettings(fixture.Path, schemaVersion: 14, body: string.Empty);
+
+        var restored = fixture.Store.Load();
+
+        Assert.True(restored.ConnectionsPanelVisible);
+        Assert.Equal(ConnectionsPanelSide.Left, restored.ConnectionsPanelSide);
+        Assert.Equal(DesktopUpdatePreferences.DefaultConnectionsPanelWidth, restored.ConnectionsPanelWidth);
+        // The rest of a v14 file still applies; only the panel geometry is absent.
+        Assert.Equal(DesktopAppearance.Dark, restored.Appearance);
+    }
+
+    [Fact]
+    public void ConnectionsPanelGeometryRoundTripsThroughTheStore()
+    {
+        using var fixture = new SettingsFixture();
+        fixture.Store.Save(DesktopUpdatePreferences.Defaults with
+        {
+            ConnectionsPanelWidth = 420,
+            ConnectionsPanelVisible = false,
+            ConnectionsPanelSide = ConnectionsPanelSide.Right
+        });
+
+        var restored = fixture.Store.Load();
+
+        Assert.Equal(420, restored.ConnectionsPanelWidth);
+        Assert.False(restored.ConnectionsPanelVisible);
+        Assert.Equal(ConnectionsPanelSide.Right, restored.ConnectionsPanelSide);
+    }
+
+    [Theory]
+    [InlineData(40)]
+    [InlineData(4000)]
+    public void AnOutOfRangeStoredPanelWidthFallsBackToTheDefault(int width)
+    {
+        using var fixture = new SettingsFixture();
+        WriteLegacySettings(fixture.Path, schemaVersion: 15, body: $$""","connectionsPanelWidth":{{width}}""");
+
+        var restored = fixture.Store.Load();
+
+        Assert.Equal(DesktopUpdatePreferences.DefaultConnectionsPanelWidth, restored.ConnectionsPanelWidth);
+    }
+
+    [Fact]
+    public void SavingAnOutOfRangePanelWidthIsRefusedRatherThanSilentlyDropped()
+    {
+        using var fixture = new SettingsFixture();
+
+        Assert.Throws<ArgumentException>(() => fixture.Store.Save(
+            DesktopUpdatePreferences.Defaults with { ConnectionsPanelWidth = 4000 }));
+    }
+
+    [Fact]
     public void AnOverCapWorkspaceListIsClampedRatherThanDiscarded()
     {
         using var fixture = new SettingsFixture();

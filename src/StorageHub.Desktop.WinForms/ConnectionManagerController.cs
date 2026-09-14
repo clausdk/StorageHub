@@ -46,13 +46,23 @@ public sealed class ConnectionManagerController
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(current);
-        return _profiles.DeleteAsync(
-            new ConnectionProfileDeleteRequest(
-                ConnectionProfileIpcContract.CurrentVersion,
-                current.ConnectionId,
-                current.Version),
-            cancellationToken);
+        return DeleteAsync(current.ConnectionId, current.Version, cancellationToken);
     }
+
+    /// <summary>
+    /// Deletes by id and expected version, for callers holding a listing rather than a loaded
+    /// profile. Pinning the version the caller actually saw means a profile edited in between
+    /// fails as a conflict instead of being deleted at a revision nobody reviewed.
+    /// </summary>
+    public Task<ConnectionProfileWriteResponse> DeleteAsync(
+        Guid connectionId,
+        long expectedVersion,
+        CancellationToken cancellationToken = default) => _profiles.DeleteAsync(
+        new ConnectionProfileDeleteRequest(
+            ConnectionProfileIpcContract.CurrentVersion,
+            connectionId,
+            expectedVersion),
+        cancellationToken);
 
     public Task<ConnectionTrustGetResponse> GetTrustAsync(
         ConnectionProfileDocument current,

@@ -9,10 +9,11 @@ public sealed class FormConstructionTests
         {
             using var main = new MainForm();
             using var manager = new ConnectionManagerForm();
+            using var editor = new ConnectionManagerForm(connectionId: Guid.NewGuid());
             using var quickConnect = new ConnectionManagerForm(
-                StorageProviderKind.Sftp,
+                initialProvider: StorageProviderKind.Sftp,
                 quickConnectMode: true,
-                "sftp.example.com");
+                initialEndpoint: "sftp.example.com");
             using var settings = new SettingsForm();
             using var sync = new SyncProfileEditorForm();
             using var schedules = new ScheduleManagerForm();

@@ -23,6 +23,13 @@ public enum WorkspaceLayout
     TopAndBottom = 2
 }
 
+/// <summary>Which side of the shell the saved-connections panel is docked to.</summary>
+public enum ConnectionsPanelSide
+{
+    Left = 1,
+    Right = 2
+}
+
 internal sealed record SshTerminalPreferences(
     string TerminalName = "xterm-256color",
     string? StartupCommand = null,
@@ -108,9 +115,20 @@ internal sealed record DesktopUpdatePreferences(
     /// Panes to give a new workspace without asking. Null means ask each time, which is how new
     /// workspaces have always behaved and what Settings calls "Ask every time".
     /// </summary>
-    int? DefaultWorkspacePaneCount = null)
+    int? DefaultWorkspacePaneCount = null,
+    /// <summary>
+    /// Width in pixels of the connections panel, measured on whichever side it is docked to rather
+    /// than as a splitter position, so moving it across keeps its size.
+    /// </summary>
+    int ConnectionsPanelWidth = 300,
+    bool ConnectionsPanelVisible = true,
+    ConnectionsPanelSide ConnectionsPanelSide = ConnectionsPanelSide.Left)
 {
-    public const int CurrentSchemaVersion = 14;
+    public const int CurrentSchemaVersion = 15;
+    /// <summary>Kept in step with the <c>ConnectionsPanelWidth</c> parameter default above.</summary>
+    internal const int DefaultConnectionsPanelWidth = 300;
+    internal const int MinimumConnectionsPanelWidth = 220;
+    internal const int MaximumConnectionsPanelWidth = 640;
 
     public static DesktopUpdatePreferences Defaults { get; } = new();
 }
@@ -241,7 +259,17 @@ internal sealed class DesktopUpdatePreferencesStore
                     document.SchemaVersion >= 14 &&
                         document.DefaultWorkspacePaneCount is >= 1 and <= WorkspaceLayoutModel.MaximumPanes
                             ? document.DefaultWorkspacePaneCount
-                            : null)
+                            : null,
+                    document.SchemaVersion >= 15 &&
+                        document.ConnectionsPanelWidth is
+                            >= DesktopUpdatePreferences.MinimumConnectionsPanelWidth and
+                            <= DesktopUpdatePreferences.MaximumConnectionsPanelWidth
+                                ? document.ConnectionsPanelWidth
+                                : DesktopUpdatePreferences.DefaultConnectionsPanelWidth,
+                    document.SchemaVersion < 15 || document.ConnectionsPanelVisible,
+                    document.SchemaVersion >= 15 && Enum.IsDefined(document.ConnectionsPanelSide)
+                        ? document.ConnectionsPanelSide
+                        : ConnectionsPanelSide.Left)
                 : DesktopUpdatePreferences.Defaults;
         }
         catch (Exception error) when (error is
@@ -277,6 +305,20 @@ internal sealed class DesktopUpdatePreferencesStore
             paneCount is < 1 or > WorkspaceLayoutModel.MaximumPanes)
         {
             return $"A workspace can have between 1 and {WorkspaceLayoutModel.MaximumPanes} panes.";
+        }
+
+        if (preferences.ConnectionsPanelWidth is
+            < DesktopUpdatePreferences.MinimumConnectionsPanelWidth or
+            > DesktopUpdatePreferences.MaximumConnectionsPanelWidth)
+        {
+            return "The connections panel must be between " +
+                $"{DesktopUpdatePreferences.MinimumConnectionsPanelWidth} and " +
+                $"{DesktopUpdatePreferences.MaximumConnectionsPanelWidth} pixels wide.";
+        }
+
+        if (!Enum.IsDefined(preferences.ConnectionsPanelSide))
+        {
+            return "The connections panel must be docked to the left or the right.";
         }
 
         return !IsValidEditorPath(preferences.ExternalEditorPath) ||
@@ -345,7 +387,10 @@ internal sealed class DesktopUpdatePreferencesStore
                     ? null
                     : [.. WorkspaceShortcutSettings.Resolve(
                         preferences.RecentWorkspaces, WorkspaceShortcutSettings.MaximumRecent)],
-                preferences.DefaultWorkspacePaneCount);
+                preferences.DefaultWorkspacePaneCount,
+                preferences.ConnectionsPanelWidth,
+                preferences.ConnectionsPanelVisible,
+                preferences.ConnectionsPanelSide);
 
             // Load discards a file over this size outright, taking every unrelated setting with
             // it. Serialize into memory first so an oversized document is refused here rather
@@ -439,5 +484,8 @@ internal sealed class DesktopUpdatePreferencesStore
         Dictionary<string, Keys>? Shortcuts = null,
         List<WorkspaceShortcutEntry>? PinnedWorkspaces = null,
         List<WorkspaceShortcutEntry>? RecentWorkspaces = null,
-        int? DefaultWorkspacePaneCount = null);
+        int? DefaultWorkspacePaneCount = null,
+        int ConnectionsPanelWidth = 300,
+        bool ConnectionsPanelVisible = true,
+        ConnectionsPanelSide ConnectionsPanelSide = ConnectionsPanelSide.Left);
 }

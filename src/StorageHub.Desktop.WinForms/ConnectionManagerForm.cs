@@ -7,11 +7,6 @@ namespace StorageHub.Desktop;
 public sealed class ConnectionManagerForm : Form
 {
     private readonly List<Image> _ownedImages = [];
-    private readonly TreeView _profileTree;
-    private readonly ConnectionSidebarControl _profileSidebar;
-    private readonly Font _profileSectionFont;
-    private readonly Font _profileTagFont;
-    private readonly TextBox _searchBox;
     private readonly ComboBox _typeSelector;
     private readonly ComboBox _providerSelector;
     private readonly Label _providerSummary;
@@ -21,7 +16,6 @@ public sealed class ConnectionManagerForm : Form
     private readonly TabPage _authenticationPage;
     private readonly TabPage _securityPage;
     private readonly TabControl _settingsTabs;
-    private readonly List<ConnectionCardModel> _allCards;
     private readonly Dictionary<string, Control> _editorFields = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -38,6 +32,8 @@ public sealed class ConnectionManagerForm : Form
     private readonly bool _ownsProfileClient;
     private readonly bool _ownsSecretClient;
     private readonly bool _quickConnectMode;
+    private readonly Guid? _initialConnectionId;
+    private readonly ConnectionEditorTab _initialTab;
     private readonly string _initialEndpoint;
     private readonly SshHostKeyDiscoveryMode _sshHostKeyDiscoveryMode;
     private readonly IReadOnlyDictionary<string, string> _connectionDefaults;
@@ -48,8 +44,14 @@ public sealed class ConnectionManagerForm : Form
     private bool _hostKeyDiscoveryActive;
     private string? _lastHostKeyDiscoveryOffer;
 
+    /// <summary>
+    /// The connection editor. The saved-connection list lives in the shell's connections panel,
+    /// which is what opens this form — on an existing connection, or on nothing for a new one.
+    /// </summary>
     public ConnectionManagerForm(
+        Guid? connectionId = null,
         StorageProviderKind initialProvider = StorageProviderKind.S3,
+        ConnectionEditorTab initialTab = ConnectionEditorTab.General,
         bool quickConnectMode = false,
         string initialEndpoint = "",
         IRemoteStorageAgentClient? storageClient = null,
@@ -58,7 +60,16 @@ public sealed class ConnectionManagerForm : Form
         SshHostKeyDiscoveryMode? sshHostKeyDiscoveryMode = null,
         IReadOnlyDictionary<string, string>? connectionDefaults = null)
     {
+        if (connectionId is not null && quickConnectMode)
+        {
+            throw new ArgumentException(
+                "Quick Connect always starts a new connection, so it cannot open a saved one.",
+                nameof(quickConnectMode));
+        }
+
         _quickConnectMode = quickConnectMode;
+        _initialConnectionId = connectionId;
+        _initialTab = initialTab;
         _initialEndpoint = initialEndpoint;
         _ownsStorageClient = storageClient is null;
         _ownsProfileClient = profileClient is null;
@@ -75,71 +86,14 @@ public sealed class ConnectionManagerForm : Form
         AccessibleName = quickConnectMode ? "Quick Connect" : "Connection Manager";
         AccessibleDescription = "Configure provider endpoints, vault credential references, and explicit server trust.";
         StartPosition = FormStartPosition.CenterParent;
-        MinimumSize = new Size(980, 660);
-        Size = new Size(1160, 780);
+        MinimumSize = new Size(720, 620);
+        Size = new Size(880, 760);
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = StorageHubTheme.Canvas;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
         StorageHubTheme.Register(this);
-        _profileSectionFont = StorageHubTheme.CreateSectionFont();
-        _profileTagFont = new Font("Segoe UI Semibold", 7.5F, FontStyle.Regular, GraphicsUnit.Point);
 
         var toolbar = BuildToolbar();
-        _allCards = [];
-
-        _profileTree = new TreeView
-        {
-            Dock = DockStyle.Fill,
-            BorderStyle = BorderStyle.None,
-            DrawMode = TreeViewDrawMode.OwnerDrawAll,
-            ItemHeight = 58,
-            FullRowSelect = true,
-            HideSelection = false,
-            HotTracking = true,
-            ShowLines = false,
-            ShowPlusMinus = false,
-            ShowRootLines = false,
-            BackColor = StorageHubTheme.Surface,
-            AccessibleName = "Connection profiles",
-            AccessibleDescription = "Saved connection profiles grouped by favorites, folders, provider, and availability."
-        };
-        _profileTree.DrawNode += DrawProfileTreeNode;
-        _profileTree.AfterSelect += ProfileTreeSelected;
-        _profileTree.BeforeSelect += ProfileTreeBeforeSelect;
-        _profileTree.NodeMouseClick += ProfileTreeNodeMouseClick;
-        _profileTree.BeforeCollapse += ProfileTreeBeforeCollapse;
-        _profileSidebar = new ConnectionSidebarControl();
-        _profileSidebar.ConnectionSelected += ProfileSidebarSelected;
-
-        _searchBox = new TextBox
-        {
-            Dock = DockStyle.Top,
-            PlaceholderText = "Search connections…",
-            AccessibleName = "Search connections",
-            Margin = new Padding(0, 0, 0, 8)
-        };
-        _searchBox.TextChanged += SearchTextChanged;
-
-        var leftHeader = new Panel
-        {
-            Dock = DockStyle.Top,
-            Height = 62,
-            Padding = new Padding(0, 0, 0, 8)
-        };
-        var connectionsLabel = UiControlFactory.CreateSectionTitle("Saved connections");
-        connectionsLabel.Dock = DockStyle.Top;
-        _searchBox.Dock = DockStyle.Bottom;
-        leftHeader.Controls.Add(_searchBox);
-        leftHeader.Controls.Add(connectionsLabel);
-
-        var left = new Panel
-        {
-            Dock = DockStyle.Fill,
-            Padding = new Padding(12),
-            BackColor = StorageHubTheme.Surface
-        };
-        left.Controls.Add(_profileSidebar);
-        left.Controls.Add(leftHeader);
 
         _providerAccent = new Panel { Dock = DockStyle.Top, Height = 4, BackColor = StorageHubTheme.Primary };
         _typeSelector = new ComboBox
@@ -190,23 +144,6 @@ public sealed class ConnectionManagerForm : Form
         editor.Controls.Add(editorHeader);
         editor.Controls.Add(_providerAccent);
 
-        var split = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            Size = new Size(1050, 650),
-            SplitterDistance = 310,
-            FixedPanel = FixedPanel.Panel1,
-            Panel1MinSize = 250,
-            Panel2MinSize = 540,
-            BackColor = StorageHubTheme.Border,
-            AccessibleName = "Connections and profile editor"
-        };
-        split.Panel1.Padding = new Padding(0, 0, 3, 0);
-        split.Panel2.Padding = new Padding(3, 0, 0, 0);
-        split.Panel1.Controls.Add(left);
-        split.Panel2.Controls.Add(editor);
-        split.Panel1Collapsed = quickConnectMode;
-
         _testState = new Label
         {
             Text = "Not tested",
@@ -217,7 +154,7 @@ public sealed class ConnectionManagerForm : Form
         };
         var footer = BuildFooter();
 
-        Controls.Add(split);
+        Controls.Add(editor);
         Controls.Add(footer);
         Controls.Add(toolbar);
 
@@ -228,13 +165,6 @@ public sealed class ConnectionManagerForm : Form
     {
         if (disposing)
         {
-            _profileTree.DrawNode -= DrawProfileTreeNode;
-            _profileTree.AfterSelect -= ProfileTreeSelected;
-            _profileTree.BeforeSelect -= ProfileTreeBeforeSelect;
-            _profileTree.NodeMouseClick -= ProfileTreeNodeMouseClick;
-            _profileTree.BeforeCollapse -= ProfileTreeBeforeCollapse;
-            _profileSidebar.ConnectionSelected -= ProfileSidebarSelected;
-            _searchBox.TextChanged -= SearchTextChanged;
             _typeSelector.SelectedIndexChanged -= TypeSelectionChanged;
             _providerSelector.SelectedIndexChanged -= ProviderSelectionChanged;
             _settingsTabs.SelectedIndexChanged -= SettingsTabSelected;
@@ -252,8 +182,6 @@ public sealed class ConnectionManagerForm : Form
             }
 
             _ownedImages.Clear();
-            _profileSectionFont.Dispose();
-            _profileTagFont.Dispose();
             _formLifetime.Dispose();
             _profileLoadCancellation?.Dispose();
             DisposeOwnedClient(_storageClient, _ownsStorageClient);
@@ -262,12 +190,20 @@ public sealed class ConnectionManagerForm : Form
         }
     }
 
+    /// <summary>Raised whenever this editor changes what is saved, so the shell can re-list.</summary>
+    internal event EventHandler? ProfilesChanged;
+
     protected override async void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        if (!_quickConnectMode)
+        _settingsTabs.SelectedIndex = (int)_initialTab;
+        if (_initialConnectionId is { } connectionId)
         {
-            await ReloadProfilesAsync(_formLifetime.Token);
+            await LoadProfileAsync(connectionId, _formLifetime.Token);
+        }
+        else if (!_quickConnectMode)
+        {
+            StartNewProfile();
         }
     }
 
@@ -431,41 +367,6 @@ public sealed class ConnectionManagerForm : Form
         }
     }
 
-    private async void ProfileTreeSelected(object? sender, TreeViewEventArgs e)
-    {
-        if (e.Node?.Tag is ConnectionCardModel card)
-        {
-            await SelectProfileCardAsync(card);
-        }
-    }
-
-    private async void ProfileSidebarSelected(object? sender, ConnectionCardModel card)
-    {
-        if (card.ConnectionId is not { } connectionId || _loadingEditor)
-        {
-            return;
-        }
-
-        // The custom sidebar is the visible selector. The legacy owner-drawn TreeView is kept
-        // only as an internal hierarchy model and may never create a native handle, so relying
-        // on its AfterSelect event leaves card clicks focused but does not load the profile.
-        _loadingEditor = true;
-        try
-        {
-            _profileTree.SelectedNode = _profileTree.Nodes
-                .Cast<TreeNode>()
-                .SelectMany(FlattenTree)
-                .FirstOrDefault(node => node.Tag is ConnectionCardModel candidate &&
-                    candidate.ConnectionId == connectionId);
-        }
-        finally
-        {
-            _loadingEditor = false;
-        }
-
-        await SelectProfileCardAsync(card);
-    }
-
     private async Task SelectProfileCardAsync(ConnectionCardModel card)
     {
         if (_loadingEditor)
@@ -499,12 +400,6 @@ public sealed class ConnectionManagerForm : Form
                 _profileLoading = false;
             }
         }
-    }
-
-    private void SearchTextChanged(object? sender, EventArgs e)
-    {
-        var selectedId = _profileSidebar.SelectedConnectionId ?? _selectedProfile?.ConnectionId;
-        RefreshProfileTree(selectedId);
     }
 
     private void UpdateProviderEditor(ConnectionProviderDescriptor provider)
@@ -1159,348 +1054,10 @@ public sealed class ConnectionManagerForm : Form
         return image;
     }
 
-    private void DrawProfileTreeNode(object? sender, DrawTreeNodeEventArgs e)
-    {
-        if (e.Node is not { } node)
-        {
-            return;
-        }
-
-        var rowBounds = new Rectangle(0, e.Bounds.Top, _profileTree.ClientSize.Width, e.Bounds.Height);
-        var selected = (e.State & TreeNodeStates.Selected) != 0;
-        var background = StorageHubTheme.Surface;
-        var foreground = StorageHubTheme.Text;
-        var muted = StorageHubTheme.TextMuted;
-        using var backgroundBrush = new SolidBrush(StorageHubTheme.Surface);
-        e.Graphics.FillRectangle(backgroundBrush, rowBounds);
-
-        switch (node.Tag)
-        {
-            case ConnectionCardModel card:
-                DrawConnectionTreeNode(e.Graphics, e.Bounds, node, card, foreground, muted, selected);
-                break;
-            case ProfileTreeGroupNode group:
-                DrawProfileGroupNode(e.Graphics, e.Bounds, node, group, foreground, muted, selected);
-                break;
-            case ProfileTreeEmptyNode empty:
-                TextRenderer.DrawText(
-                    e.Graphics,
-                    empty.Label,
-                    Font,
-                    new Rectangle(e.Bounds.Left + 6, e.Bounds.Top, rowBounds.Width - e.Bounds.Left - 12, e.Bounds.Height),
-                    muted,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-                break;
-        }
-
-        var categoryNode = node.Tag is ProfileTreeGroupNode focusGroup &&
-            focusGroup.Key.StartsWith("category:", StringComparison.Ordinal);
-        if ((e.State & TreeNodeStates.Focused) != 0 && !categoryNode)
-        {
-            ControlPaint.DrawFocusRectangle(e.Graphics, rowBounds, foreground, background);
-        }
-    }
-
-    private void DrawConnectionTreeNode(
-        Graphics graphics,
-        Rectangle bounds,
-        TreeNode node,
-        ConnectionCardModel card,
-        Color foreground,
-        Color muted,
-        bool selected)
-    {
-        DrawProfileGroupContainer(graphics, node.Parent, bounds, selected: false);
-        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        var groupLeft = node.Parent?.Bounds.Left + 10 ?? bounds.Left + 2;
-        var cardBounds = new Rectangle(
-            groupLeft,
-            bounds.Top + 4,
-            Math.Max(24, _profileTree.ClientSize.Width - groupLeft - 18),
-            Math.Max(24, bounds.Height - 8));
-        using var cardPath = CreateProfileTreeRoundedRectangle(cardBounds, 9);
-        using var cardFill = new SolidBrush(selected
-            ? StorageHubTheme.CurrentPalette.Selection
-            : StorageHubTheme.Surface);
-        using var cardBorder = new Pen(selected
-            ? StorageHubTheme.ParseAccent(card.AccentHex)
-            : StorageHubTheme.Border,
-            selected ? 1.7F : 1F);
-        graphics.FillPath(cardFill, cardPath);
-        graphics.DrawPath(cardBorder, cardPath);
-
-        var left = cardBounds.Left + 8;
-        var badgeBounds = new Rectangle(left, cardBounds.Top + 7, 34, 34);
-        var badgeAccent = StorageHubTheme.ParseAccent(card.AccentHex);
-        using (var accentBrush = new SolidBrush(badgeAccent))
-        using (var badgePath = CreateProfileTreeRoundedRectangle(badgeBounds, 8))
-        {
-            graphics.FillPath(accentBrush, badgePath);
-        }
-
-        TextRenderer.DrawText(
-            graphics,
-            card.Descriptor.ShortName,
-            _profileTagFont,
-            badgeBounds,
-            StorageHubTheme.ContrastText(badgeAccent),
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-
-        var textLeft = badgeBounds.Right + 9;
-        var right = cardBounds.Right - 8;
-        var tagRight = right;
-        foreach (var tag in card.DisplayTags
-                     .Where(static value => !string.IsNullOrWhiteSpace(value))
-                     .Take(3)
-                     .Reverse())
-        {
-            var label = $"#{tag.Trim()}";
-            var measured = TextRenderer.MeasureText(
-                graphics,
-                label,
-                _profileTagFont,
-                Size.Empty,
-                TextFormatFlags.NoPadding);
-            var width = Math.Min(measured.Width + 10, 74);
-            if (tagRight - width < textLeft + 55)
-            {
-                break;
-            }
-
-            var pill = new Rectangle(tagRight - width, cardBounds.Top + 14, width, 20);
-            using var pillBrush = new SolidBrush(StorageHubTheme.Tint(muted, 0.16));
-            graphics.FillRectangle(pillBrush, pill);
-            TextRenderer.DrawText(
-                graphics,
-                label,
-                _profileTagFont,
-                pill,
-                foreground,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-            tagRight = pill.Left - 5;
-        }
-
-        var favoriteWidth = card.IsFavorite ? 18 : 0;
-        if (card.IsFavorite)
-        {
-            TextRenderer.DrawText(
-                graphics,
-                "★",
-                _profileSectionFont,
-                new Rectangle(textLeft, cardBounds.Top + 4, favoriteWidth, 22),
-                StorageHubTheme.Warning,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-        }
-
-        var availableWidth = Math.Max(20, tagRight - textLeft - favoriteWidth);
-        TextRenderer.DrawText(
-            graphics,
-            card.Name,
-            Font,
-            new Rectangle(textLeft + favoriteWidth, cardBounds.Top + 4, availableWidth, 22),
-            foreground,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        var detail = card.IsEnabled ? card.Endpoint : $"{card.Endpoint} · Disabled";
-        TextRenderer.DrawText(
-            graphics,
-            detail,
-            Font,
-            new Rectangle(textLeft, cardBounds.Top + 25, Math.Max(20, right - textLeft), 20),
-            muted,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-    }
-
-    private void DrawProfileGroupNode(
-        Graphics graphics,
-        Rectangle bounds,
-        TreeNode node,
-        ProfileTreeGroupNode group,
-        Color foreground,
-        Color muted,
-        bool selected)
-    {
-        var category = group.Key.StartsWith("category:", StringComparison.Ordinal);
-        if (category)
-        {
-            var titleBounds = new Rectangle(
-                bounds.Left + 4,
-                bounds.Top,
-                Math.Max(20, _profileTree.ClientSize.Width - bounds.Left - 52),
-                bounds.Height);
-            TextRenderer.DrawText(
-                graphics,
-                group.Label,
-                _profileSectionFont,
-                titleBounds,
-                StorageHubTheme.Text,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-            var labelWidth = TextRenderer.MeasureText(
-                graphics,
-                group.Label,
-                _profileSectionFont,
-                Size.Empty,
-                TextFormatFlags.NoPadding).Width;
-            var categoryCenterY = bounds.Top + (bounds.Height / 2);
-            var lineLeft = Math.Min(_profileTree.ClientSize.Width - 14, titleBounds.Left + labelWidth + 14);
-            using var divider = new Pen(StorageHubTheme.Border);
-            graphics.DrawLine(divider, lineLeft, categoryCenterY, _profileTree.ClientSize.Width - 12, categoryCenterY);
-            return;
-        }
-
-        DrawProfileGroupContainer(graphics, node, bounds, selected);
-        var contentBounds = new Rectangle(
-            bounds.Left + 10,
-            bounds.Top + 4,
-            Math.Max(20, _profileTree.ClientSize.Width - bounds.Left - 10),
-            Math.Max(20, bounds.Height - 8));
-
-        var arrowLeft = contentBounds.Left + 10;
-        var centerY = bounds.Top + (bounds.Height / 2);
-        Point[] arrow = node.IsExpanded
-            ? [new(arrowLeft, centerY - 3), new(arrowLeft + 8, centerY - 3), new(arrowLeft + 4, centerY + 3)]
-            : [new(arrowLeft + 1, centerY - 5), new(arrowLeft + 1, centerY + 5), new(arrowLeft + 7, centerY)];
-        using var arrowBrush = new SolidBrush(muted);
-        graphics.FillPolygon(arrowBrush, arrow);
-
-        var textLeft = arrowLeft + 14;
-        TextRenderer.DrawText(
-            graphics,
-            group.Label,
-            _profileSectionFont,
-            new Rectangle(textLeft, contentBounds.Top, Math.Max(20, contentBounds.Right - textLeft - 40), contentBounds.Height),
-            foreground,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        TextRenderer.DrawText(
-            graphics,
-            group.Count.ToString(System.Globalization.CultureInfo.CurrentCulture),
-            Font,
-            new Rectangle(contentBounds.Right - 36, contentBounds.Top, 28, contentBounds.Height),
-            muted,
-            TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
-
-    }
-
-    private void DrawProfileGroupContainer(
-        Graphics graphics,
-        TreeNode? groupNode,
-        Rectangle currentRowBounds,
-        bool selected)
-    {
-        if (groupNode?.Tag is not ProfileTreeGroupNode group ||
-            group.Key.StartsWith("category:", StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        var lastNode = groupNode.IsExpanded && groupNode.Nodes.Count > 0
-            ? groupNode.Nodes[^1]
-            : groupNode;
-        var groupBounds = new Rectangle(
-            groupNode.Bounds.Left + 2,
-            groupNode.Bounds.Top + 3,
-            Math.Max(24, _profileTree.ClientSize.Width - groupNode.Bounds.Left - 10),
-            Math.Max(24, lastNode.Bounds.Bottom - groupNode.Bounds.Top - 6));
-        var state = graphics.Save();
-        try
-        {
-            graphics.SetClip(new Rectangle(
-                0,
-                currentRowBounds.Top,
-                _profileTree.ClientSize.Width,
-                currentRowBounds.Height));
-            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using var path = CreateProfileTreeRoundedRectangle(groupBounds, 12);
-            using var fill = new SolidBrush(StorageHubTheme.SurfaceMuted);
-            using var outline = new Pen(selected ? StorageHubTheme.Primary : StorageHubTheme.Border, selected ? 1.7F : 1F);
-            graphics.FillPath(fill, path);
-            graphics.DrawPath(outline, path);
-        }
-        finally
-        {
-            graphics.Restore(state);
-        }
-    }
-
-    private static System.Drawing.Drawing2D.GraphicsPath CreateProfileTreeRoundedRectangle(
-        Rectangle bounds,
-        int radius)
-    {
-        var path = new System.Drawing.Drawing2D.GraphicsPath();
-        var diameter = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
-        var arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
-        path.AddArc(arc, 180, 90);
-        arc.X = bounds.Right - diameter;
-        path.AddArc(arc, 270, 90);
-        arc.Y = bounds.Bottom - diameter;
-        path.AddArc(arc, 0, 90);
-        arc.X = bounds.Left;
-        path.AddArc(arc, 90, 90);
-        path.CloseFigure();
-        return path;
-    }
-
-    private void ProfileTreeNodeMouseClick(object? sender, TreeNodeMouseClickEventArgs e)
-    {
-        if (e.Button == MouseButtons.Left &&
-            e.Node?.Tag is ProfileTreeGroupNode group &&
-            !group.Key.StartsWith("category:", StringComparison.Ordinal))
-        {
-            e.Node.Toggle();
-        }
-    }
-
-    private static void ProfileTreeBeforeCollapse(object? sender, TreeViewCancelEventArgs e)
-    {
-        if (e.Node?.Tag is ProfileTreeGroupNode group &&
-            group.Key.StartsWith("category:", StringComparison.Ordinal))
-        {
-            e.Cancel = true;
-        }
-    }
-
-    private static void ProfileTreeBeforeSelect(object? sender, TreeViewCancelEventArgs e)
-    {
-        if (e.Node?.Tag is ProfileTreeGroupNode group &&
-            group.Key.StartsWith("category:", StringComparison.Ordinal))
-        {
-            e.Cancel = true;
-        }
-    }
-
     private void MarkConnectionTested()
     {
         _testState.Text = "Changes not tested";
         _testState.ForeColor = StorageHubTheme.TextMuted;
-    }
-
-    private async Task ReloadProfilesAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            var response = await _storageClient.ListConnectionsAsync(
-                new ConnectionListRequest(
-                    StorageIpcContract.CurrentVersion,
-                    IncludeDisabled: true,
-                    Limit: StorageIpcLimits.MaximumConnectionResults),
-                cancellationToken);
-            if (response.Failure is not null)
-            {
-                ShowStatus(response.Failure.Message, StorageHubTheme.Warning);
-                return;
-            }
-
-            var selectedId = _selectedProfile?.ConnectionId;
-            _allCards.Clear();
-            _allCards.AddRange(response.Connections.Select(CreateSavedConnectionCard));
-            RefreshProfileTree(selectedId);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception)
-        {
-            ShowStatus("The background agent is unavailable; saved connections could not be loaded.", StorageHubTheme.Warning);
-        }
     }
 
     private async Task LoadProfileAsync(Guid connectionId, CancellationToken cancellationToken)
@@ -1520,7 +1077,7 @@ public sealed class ConnectionManagerForm : Form
             try
             {
                 _selectedProfile = response.Profile;
-                var provider = MapProvider(response.Profile.Draft.Endpoint.Provider);
+                var provider = ConnectionCardFactory.MapProvider(response.Profile.Draft.Endpoint.Provider);
                 _typeSelector.SelectedItem = response.Profile.Draft.Type;
                 PopulateProviderSelector(response.Profile.Draft.Type, provider);
                 var values = ConnectionEditorDraftFactory.ToEditorValues(response.Profile);
@@ -1597,7 +1154,7 @@ public sealed class ConnectionManagerForm : Form
                 }
             }
 
-            await ReloadProfilesAsync(cancellationToken);
+            ProfilesChanged?.Invoke(this, EventArgs.Empty);
             ShowStatus($"Saved version {response.Profile.Version}", StorageHubTheme.Success);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1631,8 +1188,8 @@ public sealed class ConnectionManagerForm : Form
 
         if (MessageBox.Show(
                 this,
-                $"Delete '{_selectedProfile.Draft.Metadata.DisplayName}'? Queued work will keep its immutable history, but the connection can no longer be opened.",
-                "Delete saved connection",
+                ConnectionCardFactory.DeleteConfirmationPrompt(_selectedProfile.Draft.Metadata.DisplayName),
+                ConnectionCardFactory.DeleteConfirmationCaption,
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2) != DialogResult.Yes)
@@ -1650,7 +1207,7 @@ public sealed class ConnectionManagerForm : Form
             }
 
             _selectedProfile = null;
-            await ReloadProfilesAsync(cancellationToken);
+            ProfilesChanged?.Invoke(this, EventArgs.Empty);
             StartNewProfile();
             ShowStatus("Profile deleted.", StorageHubTheme.Success);
         }
@@ -1702,7 +1259,7 @@ public sealed class ConnectionManagerForm : Form
             var response = await _storageClient.TestConnectionAsync(
                 new ConnectionTestRequest(StorageIpcContract.CurrentVersion, _selectedProfile.ConnectionId),
                 cancellationToken);
-            await ReloadProfilesAsync(cancellationToken);
+            ProfilesChanged?.Invoke(this, EventArgs.Empty);
             ShowStatus(
                 response.Succeeded
                     ? $"Connection succeeded in {response.ElapsedMilliseconds} ms"
@@ -2004,8 +1561,6 @@ public sealed class ConnectionManagerForm : Form
 
     private void StartNewProfile()
     {
-        _profileTree.SelectedNode = null;
-        _profileSidebar.ClearSelection();
         _selectedProfile = null;
         if (_providerSelector.SelectedItem is ConnectionProviderDescriptor provider)
         {
@@ -2014,200 +1569,6 @@ public sealed class ConnectionManagerForm : Form
 
         ShowStatus("New unsaved profile", StorageHubTheme.TextMuted);
     }
-
-    private void RefreshProfileTree(Guid? selectedId = null)
-    {
-        var expandedGroups = _profileTree.Nodes
-            .Cast<TreeNode>()
-            .SelectMany(FlattenTree)
-            .Where(static node => node.IsExpanded && node.Tag is ProfileTreeGroupNode)
-            .Select(static node => ((ProfileTreeGroupNode)node.Tag!).Key)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var expandAll = _profileTree.Nodes.Count == 0 || !string.IsNullOrWhiteSpace(_searchBox.Text);
-        var sections = ConnectionProfileTree.Build(_allCards, _searchBox.Text);
-
-        _loadingEditor = true;
-        try
-        {
-            _profileTree.BeginUpdate();
-            _profileTree.Nodes.Clear();
-            AddProfileTreeCategory(
-                sections,
-                ConnectionProfileSectionKind.Storage,
-                "category:storage",
-                "Storage",
-                nestSections: true);
-            AddProfileTreeCategory(
-                sections,
-                ConnectionProfileSectionKind.Client,
-                "category:clients",
-                "Remote clients",
-                nestSections: true);
-            AddProfileTreeCategory(
-                sections,
-                ConnectionProfileSectionKind.Disabled,
-                "category:disabled",
-                "Disabled",
-                nestSections: false);
-
-            if (_profileTree.Nodes.Count == 0)
-            {
-                var label = _allCards.Count == 0
-                    ? "No saved connections yet"
-                    : "No connections match this search";
-                _profileTree.Nodes.Add(new TreeNode(label)
-                {
-                    Name = "empty",
-                    Tag = new ProfileTreeEmptyNode(label)
-                });
-            }
-
-            foreach (var node in _profileTree.Nodes.Cast<TreeNode>().SelectMany(FlattenTree))
-            {
-                if (node.Tag is ProfileTreeGroupNode group &&
-                    (group.Key.StartsWith("category:", StringComparison.Ordinal) ||
-                        expandAll ||
-                        expandedGroups.Contains(group.Key)))
-                {
-                    node.Expand();
-                }
-            }
-
-            _profileTree.SelectedNode = selectedId is { } id
-                ? _profileTree.Nodes
-                    .Cast<TreeNode>()
-                    .SelectMany(FlattenTree)
-                    .FirstOrDefault(node => node.Tag is ConnectionCardModel card && card.ConnectionId == id)
-                : null;
-        }
-        finally
-        {
-            _profileTree.EndUpdate();
-            _loadingEditor = false;
-        }
-
-        _profileSidebar.SetConnections(_allCards, _searchBox.Text, selectedId);
-    }
-
-    private void AddProfileTreeCategory(
-        IReadOnlyList<ConnectionProfileTreeSection> sections,
-        ConnectionProfileSectionKind kind,
-        string key,
-        string label,
-        bool nestSections)
-    {
-        var matching = sections.Where(section => section.Kind == kind).ToArray();
-        if (matching.Length == 0)
-        {
-            return;
-        }
-
-        var count = matching.Sum(static section => section.Connections.Count);
-        var root = CreateGroupNode(key, label, count);
-        foreach (var section in matching)
-        {
-            var parent = root;
-            if (nestSections)
-            {
-                parent = CreateGroupNode(
-                    $"{key}:{section.Key}",
-                    section.Label,
-                    section.Connections.Count);
-                root.Nodes.Add(parent);
-            }
-
-            foreach (var connection in section.Connections)
-            {
-                parent.Nodes.Add(CreateConnectionNode(connection));
-            }
-        }
-
-        _profileTree.Nodes.Add(root);
-    }
-
-    private void AddProfileTreeSections(
-        IReadOnlyList<ConnectionProfileTreeSection> sections,
-        ConnectionProfileSectionKind kind,
-        string keyPrefix)
-    {
-        foreach (var section in sections.Where(section => section.Kind == kind))
-        {
-            var root = CreateGroupNode(
-                $"{keyPrefix}:{section.Key}",
-                section.Label,
-                section.Connections.Count);
-            foreach (var connection in section.Connections)
-            {
-                root.Nodes.Add(CreateConnectionNode(connection));
-            }
-
-            _profileTree.Nodes.Add(root);
-        }
-    }
-
-    private static TreeNode CreateGroupNode(string key, string label, int count) => new(label)
-    {
-        Name = key,
-        Tag = new ProfileTreeGroupNode(key, label, count)
-    };
-
-    private static TreeNode CreateConnectionNode(ConnectionCardModel connection)
-    {
-        var tagText = connection.DisplayTags.Count == 0
-            ? string.Empty
-            : $", tags {string.Join(", ", connection.DisplayTags)}";
-        return new TreeNode($"{connection.Name}, {connection.Descriptor.DisplayName}{tagText}")
-        {
-            Name = connection.ConnectionId is { } id ? $"connection:{id:D}" : $"connection:{connection.Name}",
-            Tag = connection
-        };
-    }
-
-    private static IEnumerable<TreeNode> FlattenTree(TreeNode node)
-    {
-        yield return node;
-        foreach (TreeNode child in node.Nodes)
-        {
-            foreach (var descendant in FlattenTree(child))
-            {
-                yield return descendant;
-            }
-        }
-    }
-
-    private static ConnectionCardModel CreateSavedConnectionCard(ConnectionSummary connection)
-    {
-        var provider = MapProvider(connection.Provider);
-        var providerName = ConnectionProviderCatalog.Get(provider).DisplayName;
-        var summary = string.IsNullOrWhiteSpace(connection.FolderPath)
-            ? $"{providerName} saved profile"
-            : $"{providerName} · {connection.FolderPath}";
-        return new ConnectionCardModel(
-            connection.DisplayName,
-            provider,
-            summary,
-            connection.IsEnabled ? DescribeHealth(connection.Health) : "Disabled",
-            connection.IsFavorite,
-            connection.ConnectionId,
-            connection.IsEnabled,
-            connection.AccentColor,
-            connection.FolderPath,
-            connection.Tags);
-    }
-
-    private static string DescribeHealth(ConnectionHealthSnapshot? health) => health switch
-    {
-        null => "Not tested",
-        { State: ConnectionHealthState.Healthy } => $"Healthy · {health.ElapsedMilliseconds:N0} ms",
-        { RequiresCredentialAction: true } => "Credentials need attention",
-        { RequiresTrustAction: true } => "Trust decision required",
-        { State: ConnectionHealthState.Unavailable } => "Unavailable",
-        _ => "Needs attention"
-    };
-
-    private sealed record ProfileTreeGroupNode(string Key, string Label, int Count);
-
-    private sealed record ProfileTreeEmptyNode(string Label);
 
     private void ShowStatus(string message, Color color)
     {
@@ -2347,17 +1708,6 @@ public sealed class ConnectionManagerForm : Form
         "clientCertificatePasswordReference" => SecretMaterialPurpose.ClientCertificatePassword,
         "credentialReference" => SecretMaterialPurpose.ProxyCredential,
         _ => SecretMaterialPurpose.Password
-    };
-
-    private static StorageProviderKind MapProvider(StorageConnectionProvider provider) => provider switch
-    {
-        StorageConnectionProvider.Local => StorageProviderKind.Local,
-        StorageConnectionProvider.S3 => StorageProviderKind.S3,
-        StorageConnectionProvider.Ftp => StorageProviderKind.Ftp,
-        StorageConnectionProvider.Ftps => StorageProviderKind.Ftps,
-        StorageConnectionProvider.Sftp => StorageProviderKind.Sftp,
-        StorageConnectionProvider.Ssh => StorageProviderKind.Ssh,
-        _ => throw new ArgumentOutOfRangeException(nameof(provider))
     };
 
     private static void DisposeOwnedClient(IAsyncDisposable client, bool ownsClient)

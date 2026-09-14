@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop;
@@ -496,7 +496,16 @@ public sealed class SettingsForm : Form
 
             if (_ownsSecretClient)
             {
-                _secretClient.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _secretClient.DisposeAsync().ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                    }
+                });
             }
 
             _categories.Font.Dispose();
@@ -697,11 +706,11 @@ public sealed class SettingsForm : Form
         summary.Padding = new Padding(0, 0, 0, 14);
         page.Controls.Add(heading);
         page.Controls.Add(summary);
-        page.Layout += FitSettingsPageContent;
+        page.ClientSizeChanged += FitSettingsPageContent;
         return page;
     }
 
-    private static void FitSettingsPageContent(object? sender, LayoutEventArgs e)
+    private static void FitSettingsPageContent(object? sender, EventArgs e)
     {
         if (sender is FlowLayoutPanel page)
         {
@@ -711,27 +720,50 @@ public sealed class SettingsForm : Form
 
     private static void FitSettingsPageContent(FlowLayoutPanel page)
     {
-        if (!page.Visible || !page.IsHandleCreated ||
+        if (page.Tag is true || !page.Visible || !page.IsHandleCreated ||
             page.ClientSize.Width <= SystemInformation.VerticalScrollBarWidth + 1)
         {
             return;
         }
 
-        var scrollbarWidth = page.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0;
-        var availableWidth = Math.Max(1, page.ClientSize.Width - scrollbarWidth - 1);
-        foreach (Control control in page.Controls)
+        page.Tag = true;
+        page.SuspendLayout();
+        try
         {
-            if (control is Button or CheckBox || control.Width == availableWidth)
+            var scrollbarWidth = page.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0;
+            var availableWidth = Math.Max(1, page.ClientSize.Width - scrollbarWidth - 1);
+            foreach (Control control in page.Controls)
             {
-                continue;
-            }
+                if (control is Button or CheckBox)
+                {
+                    continue;
+                }
 
-            control.MinimumSize = new Size(0, control.MinimumSize.Height);
-            if (control is Label && control.MaximumSize.Width > 0)
-            {
-                control.MaximumSize = new Size(availableWidth, control.MaximumSize.Height);
+                if (control is Label label)
+                {
+                    if (label.MaximumSize.Width > 0 && label.MaximumSize.Width != availableWidth)
+                    {
+                        label.MaximumSize = new Size(availableWidth, label.MaximumSize.Height);
+                    }
+                    if (!label.AutoSize && label.Width != availableWidth)
+                    {
+                        label.MinimumSize = new Size(0, label.MinimumSize.Height);
+                        label.Width = availableWidth;
+                    }
+                    continue;
+                }
+
+                if (!control.AutoSize && control.Width != availableWidth)
+                {
+                    control.MinimumSize = new Size(0, control.MinimumSize.Height);
+                    control.Width = availableWidth;
+                }
             }
-            control.Width = availableWidth;
+        }
+        finally
+        {
+            page.ResumeLayout(false);
+            page.Tag = null;
         }
     }
 

@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using StorageHub.Contracts.Ipc;
 
 namespace StorageHub.Desktop.Tests;
@@ -59,6 +59,8 @@ public sealed class ShellWiringTests
                 .ToArray();
 
             Assert.Contains("Connection Manager...", labels);
+            Assert.Contains("Connections Panel", labels);
+            Assert.Contains("Move Connections Panel", labels);
             Assert.Contains("Refresh", labels);
             Assert.Contains("Select All", labels);
             Assert.Contains("Settings...", labels);
@@ -78,14 +80,15 @@ public sealed class ShellWiringTests
                 .Select(name => name!)
                 .ToArray();
 
-            // Most toolbar buttons forward to a menu entry; the two shell actions are wired
+            // Most toolbar buttons forward to a menu entry; the shell actions are wired
             // directly. Anything else on the strip would be a button with nothing behind it.
-            string[] directActions = ["New workspace", "Connection Manager"];
+            string[] directActions = ["New workspace", "Connections panel", "New connection"];
             Assert.All(toolbarActions, action => Assert.True(
                 directActions.Contains(action) || labels.Contains(action),
                 $"Toolbar action '{action}' does not match a shell handler or a live menu command."));
             Assert.Contains("New workspace", toolbarActions);
-            Assert.Contains("Connection Manager", toolbarActions);
+            Assert.Contains("Connections panel", toolbarActions);
+            Assert.Contains("New connection", toolbarActions);
             Assert.Contains("Refresh", toolbarActions);
             Assert.Contains("Delete", toolbarActions);
 
@@ -116,13 +119,19 @@ public sealed class ShellWiringTests
     }
 
     [Fact]
-    public void ConnectionManagerStartsWithSavedProfilesOnlyAndNoDeadToolbarActions()
+    public void TheConnectionManagerIsAPureEditorWithNoListOfItsOwn()
     {
         SyncRunReviewControlTests.RunOnSta(() =>
         {
             using var manager = new ConnectionManagerForm();
-            var profiles = GetField<TreeView>(manager, "_profileTree");
-            Assert.Empty(profiles.Nodes.Cast<TreeNode>());
+
+            // The saved-connection list lives in the shell panel now. A second list here is what
+            // used to let the two disagree about what was saved.
+            Assert.Empty(Descendants<ConnectionSidebarControl>(manager));
+            Assert.Empty(Descendants<TreeView>(manager));
+            Assert.DoesNotContain(
+                Descendants<TextBox>(manager),
+                static box => box.AccessibleName == "Search connections");
 
             var toolbar = Assert.Single(
                 manager.Controls.OfType<ToolStrip>(),
@@ -139,92 +148,41 @@ public sealed class ShellWiringTests
     }
 
     [Fact]
-    public void ReloadingConnectionManagerNeverAddsProviderExamplesAsProfiles()
+    public void OpeningTheEditorOnAConnectionLoadsThatProfile()
     {
         SyncRunReviewControlTests.RunOnSta(() =>
         {
             var connectionId = Guid.NewGuid();
-            using var manager = new ConnectionManagerForm(storageClient: new FakeStorageClient(connectionId));
+            var profile = new ConnectionProfileDocument(
+                connectionId,
+                3,
+                new ConnectionProfileDraft(
+                    new ConnectionProfileMetadataDocument("Loaded archive", Tags: []),
+                    new ConnectionEndpointDocument(StorageConnectionProvider.S3, Host: "s3.loaded.test"),
+                    new ConnectionAuthenticationDocument(ConnectionAuthenticationKind.None),
+                    new ConnectionOperationalOptionsDocument()),
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow);
+            using var manager = new ConnectionManagerForm(
+                connectionId: connectionId,
+                profileClient: new FakeProfileClient(profile));
 
-            InvokeReloadProfiles(manager);
+            InvokeLoadProfile(manager, connectionId);
 
-            var profiles = GetField<TreeView>(manager, "_profileTree");
-            var profileNodes = profiles.Nodes
-                .Cast<TreeNode>()
-                .SelectMany(FlattenTree)
-                .Where(node => node.Tag is ConnectionCardModel)
-                .ToArray();
-            var card = Assert.IsType<ConnectionCardModel>(Assert.Single(profileNodes).Tag);
-            Assert.Equal(connectionId, card.ConnectionId);
-            Assert.Equal("Saved archive", card.Name);
-            Assert.Equal("S3 / Object Storage saved profile", card.Endpoint);
-            Assert.Equal(["archive", "production"], card.DisplayTags);
-            Assert.DoesNotContain("example", card.Endpoint, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(profileNodes, node => ((ConnectionCardModel)node.Tag!).ConnectionId is null);
-            Assert.Equal("Storage", Assert.Single(profiles.Nodes.Cast<TreeNode>()).Text);
+            var selected = GetField<ConnectionProfileDocument>(manager, "_selectedProfile");
+            Assert.Equal(connectionId, selected.ConnectionId);
+            Assert.Equal("Loaded archive", selected.Draft.Metadata.DisplayName);
         });
     }
 
     [Fact]
-    public void ConnectionManagerBuildsAndSearchesTheGroupedProfileTree()
+    public void TheEditorCannotBeAskedToQuickConnectToASavedConnection()
     {
-        SyncRunReviewControlTests.RunOnSta(() =>
-        {
-            var connections = new[]
-            {
-                Summary(
-                    "Favorite",
-                    StorageConnectionProvider.S3,
-                    folder: "Team",
-                    tags: ["production"],
-                    favorite: true,
-                    health: new ConnectionHealthSnapshot(
-                        ConnectionHealthState.Healthy,
-                        DateTimeOffset.UtcNow,
-                        42,
-                        "Connection healthy")),
-                Summary("Foldered", StorageConnectionProvider.Sftp, folder: "Team"),
-                Summary("Provider only", StorageConnectionProvider.Ftp),
-                Summary("Shell", StorageConnectionProvider.Ssh, folder: "Team", type: ConnectionProfileType.Client),
-                Summary("Offline", StorageConnectionProvider.Ftps, folder: "Team", favorite: true, enabled: false)
-            };
-            using var manager = new ConnectionManagerForm(storageClient: new FakeStorageClient(connections));
-
-            InvokeReloadProfiles(manager);
-
-            var tree = GetField<TreeView>(manager, "_profileTree");
-            Assert.Equal(
-                ["Storage", "Remote clients", "Disabled"],
-                tree.Nodes.Cast<TreeNode>().Select(static node => node.Text));
-            var storage = tree.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Storage");
-            Assert.Single(storage.Nodes.Cast<TreeNode>(), static node => node.Text == "Unsorted");
-            var folder = storage.Nodes.Cast<TreeNode>().Single(static node => node.Text == "Team");
-            Assert.Equal(
-                "Foldered",
-                Assert.IsType<ConnectionCardModel>(Assert.Single(folder.Nodes.Cast<TreeNode>()).Tag).Name);
-            Assert.DoesNotContain(
-                tree.Nodes.Cast<TreeNode>(),
-                static node => node.Text == "Folders");
-            var cards = tree.Nodes
-                .Cast<TreeNode>()
-                .SelectMany(FlattenTree)
-                .Where(static node => node.Tag is ConnectionCardModel)
-                .Select(static node => (ConnectionCardModel)node.Tag!)
-                .ToArray();
-            Assert.Equal(5, cards.Length);
-            Assert.Equal(5, cards.Select(static card => card.ConnectionId).Distinct().Count());
-            Assert.Equal("Healthy · 42 ms", cards.Single(static card => card.Name == "Favorite").State);
-
-            GetField<TextBox>(manager, "_searchBox").Text = "production";
-
-            var filteredRoot = Assert.Single(tree.Nodes.Cast<TreeNode>());
-            Assert.Equal("Storage", filteredRoot.Text);
-            var favorites = Assert.Single(filteredRoot.Nodes.Cast<TreeNode>());
-            Assert.Equal("Favorites", favorites.Text);
-            Assert.Equal(
-                "Favorite",
-                Assert.IsType<ConnectionCardModel>(Assert.Single(favorites.Nodes.Cast<TreeNode>()).Tag).Name);
-        });
+        // Quick Connect always creates; pointing it at a saved connection is a caller mistake
+        // rather than something to silently resolve one way or the other.
+        Assert.Throws<ArgumentException>(() => new ConnectionManagerForm(
+            connectionId: Guid.NewGuid(),
+            quickConnectMode: true));
     }
 
     [Fact]
@@ -233,6 +191,7 @@ public sealed class ShellWiringTests
         SyncRunReviewControlTests.RunOnSta(() =>
         {
             using var settings = new SettingsForm();
+            settings.Size = new Size(1080, 720);
             settings.Show();
             System.Windows.Forms.Application.DoEvents();
             var categories = GetField<TreeView>(settings, "_categories");
@@ -271,7 +230,7 @@ public sealed class ShellWiringTests
         SyncRunReviewControlTests.RunOnSta(() =>
         {
             using var manager = new ConnectionManagerForm(
-                StorageProviderKind.Sftp,
+                initialProvider: StorageProviderKind.Sftp,
                 sshHostKeyDiscoveryMode: SshHostKeyDiscoveryMode.Manual);
             var fields = GetField<Dictionary<string, Control>>(manager, "_editorFields");
             var fingerprint = fields["hostKeyFingerprint"];
@@ -311,44 +270,11 @@ public sealed class ShellWiringTests
     }
 
     [Fact]
-    public void ClickingCustomSidebarCardLoadsThatSavedProfileIntoEditor()
-    {
-        SyncRunReviewControlTests.RunOnSta(() =>
-        {
-            var connectionId = Guid.NewGuid();
-            var profile = new ConnectionProfileDocument(
-                connectionId,
-                3,
-                new ConnectionProfileDraft(
-                    new ConnectionProfileMetadataDocument("Loaded archive", Tags: []),
-                    new ConnectionEndpointDocument(StorageConnectionProvider.S3, Host: "s3.loaded.test"),
-                    new ConnectionAuthenticationDocument(ConnectionAuthenticationKind.None),
-                    new ConnectionOperationalOptionsDocument()),
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow);
-            using var manager = new ConnectionManagerForm(
-                storageClient: new FakeStorageClient(connectionId),
-                profileClient: new FakeProfileClient(profile));
-            InvokeReloadProfiles(manager);
-            var sidebar = GetField<ConnectionSidebarControl>(manager, "_profileSidebar");
-            var item = Assert.Single(Descendants<ConnectionSidebarItem>(sidebar));
-
-            typeof(Control).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(item, [EventArgs.Empty]);
-            System.Windows.Forms.Application.DoEvents();
-
-            var selected = GetField<ConnectionProfileDocument>(manager, "_selectedProfile");
-            Assert.Equal(connectionId, selected.ConnectionId);
-            Assert.Equal("Loaded archive", selected.Draft.Metadata.DisplayName);
-        });
-    }
-
-    [Fact]
     public void SshMfaModeEnablesPasswordAndPrivateKeyVaultFieldsTogether()
     {
         SyncRunReviewControlTests.RunOnSta(() =>
         {
-            using var manager = new ConnectionManagerForm(StorageProviderKind.Ssh);
+            using var manager = new ConnectionManagerForm(initialProvider: StorageProviderKind.Ssh);
             var fields = GetField<Dictionary<string, Control>>(manager, "_editorFields");
             var mode = Assert.IsType<ComboBox>(fields["authenticationMode"]);
 
@@ -360,28 +286,6 @@ public sealed class ShellWiringTests
             Assert.Contains("public-key", mode.AccessibleDescription, StringComparison.OrdinalIgnoreCase);
         });
     }
-
-    private static ConnectionSummary Summary(
-        string name,
-        StorageConnectionProvider provider,
-        string? folder = null,
-        string[]? tags = null,
-        bool favorite = false,
-        bool enabled = true,
-        ConnectionProfileType type = ConnectionProfileType.Storage,
-        ConnectionHealthSnapshot? health = null) => new(
-            Guid.NewGuid(),
-            name,
-            provider,
-            folder,
-            tags ?? [],
-            favorite,
-            enabled,
-            provider.ToString(),
-            AccentColor: null,
-            Version: 1,
-            Type: type,
-            Health: health);
 
     private static IEnumerable<TreeNode> FlattenTree(TreeNode node)
     {
@@ -411,13 +315,13 @@ public sealed class ShellWiringTests
         _ = method.Invoke(control, [new MouseEventArgs(MouseButtons.Left, 1, location.X, location.Y, 0)]);
     }
 
-    private static void InvokeReloadProfiles(ConnectionManagerForm manager)
+    private static void InvokeLoadProfile(ConnectionManagerForm manager, Guid connectionId)
     {
         var method = typeof(ConnectionManagerForm).GetMethod(
-            "ReloadProfilesAsync",
+            "LoadProfileAsync",
             BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
-        var task = Assert.IsAssignableFrom<Task>(method.Invoke(manager, [CancellationToken.None]));
+        var task = Assert.IsAssignableFrom<Task>(method.Invoke(manager, [connectionId, CancellationToken.None]));
         task.GetAwaiter().GetResult();
     }
 
@@ -429,64 +333,5 @@ public sealed class ShellWiringTests
         // Assignable rather than exact: the shell swaps in themed subclasses of the stock
         // controls, and this helper only cares that the field holds one.
         return Assert.IsAssignableFrom<T>(field.GetValue(instance));
-    }
-
-    private sealed class FakeStorageClient : IRemoteStorageAgentClient
-    {
-        private readonly ConnectionSummary[] _connections;
-
-        internal FakeStorageClient(Guid connectionId)
-            : this(
-                [new ConnectionSummary(
-                    connectionId,
-                    "Saved archive",
-                    StorageConnectionProvider.S3,
-                    FolderPath: null,
-                    Tags: ["archive", "production"],
-                    IsFavorite: false,
-                    IsEnabled: true,
-                    IconKey: "s3",
-                    AccentColor: null,
-                    Version: 1)])
-        {
-        }
-
-        internal FakeStorageClient(ConnectionSummary[] connections)
-        {
-            _connections = connections;
-        }
-
-        public Task<ConnectionListResponse> ListConnectionsAsync(
-            ConnectionListRequest request,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ConnectionListResponse(
-                request.ContractVersion,
-                _connections));
-
-        public Task<ConnectionTestResponse> TestConnectionAsync(
-            ConnectionTestRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StorageListPageResponse> ListStorageAsync(
-            StorageListPageRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-
-    private sealed class FakeProfileClient(ConnectionProfileDocument profile) : IRemoteConnectionProfileClient
-    {
-        public Task<ConnectionProfileGetResponse> GetAsync(ConnectionProfileGetRequest request, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ConnectionProfileGetResponse(ConnectionProfileIpcContract.CurrentVersion, profile));
-        public Task<ConnectionProfileWriteResponse> CreateAsync(ConnectionProfileCreateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<ConnectionProfileWriteResponse> UpdateAsync(ConnectionProfileUpdateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<ConnectionProfileWriteResponse> DeleteAsync(ConnectionProfileDeleteRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<ConnectionTrustGetResponse> GetTrustAsync(ConnectionTrustGetRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<ConnectionTrustMutationResponse> DecideTrustAsync(ConnectionTrustDecisionRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<ConnectionTrustMutationResponse> RolloverTrustAsync(ConnectionTrustRolloverRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

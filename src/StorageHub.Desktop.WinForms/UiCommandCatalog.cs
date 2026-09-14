@@ -29,7 +29,7 @@ public static class UiCommandCatalog
         {
             ["Workspace"] = ["New Workspace...", "Open Workspace...", "Save Workspace", "Save Workspace As...", "Rename Workspace...", "Close Workspace", "Exit"],
             ["Edit"] = ["New Folder", "New Empty File...", "Cut", "Copy", "Paste", "Rename", "Batch Rename...", "Delete", "Select All", "Invert Selection", "Properties"],
-            ["View"] = ["Refresh", "Directory Tree", "Transfer Queue", "Session Log", "Hidden Files", "Theme"],
+            ["View"] = ["Refresh", "Connections Panel", "Move Connections Panel", "Directory Tree", "Transfer Queue", "Session Log", "Hidden Files", "Theme"],
             ["Go"] = ["Back", "Forward", "Up", "Focus Address", "Next Pane", "Home", "History", "Favorites"],
             ["Connections"] = ["Connection Manager...", "Key Store...", "Quick Connect...", "Reconnect", "Disconnect", "Test Connection"],
             ["Transfer"] = ["Start Queue", "Pause All", "Resume All", "Cancel Selected", "Speed Limits..."],
@@ -66,6 +66,8 @@ public static class UiCommandCatalog
             ["Select All"] = (Keys.Control | Keys.A, UiGlyph.SelectAll, UiIconTone.Text, "Select every visible item."),
             ["Refresh"] = (Keys.F5, UiGlyph.Refresh, UiIconTone.Text, "Refresh the focused pane."),
             ["Directory Tree"] = (Keys.None, UiGlyph.Tree, UiIconTone.Text, "Show or hide the directory tree beside the file list."),
+            ["Connections Panel"] = (Keys.Control | Keys.B, UiGlyph.Connections, UiIconTone.Text, "Show or hide the saved-connections panel."),
+            ["Move Connections Panel"] = (Keys.None, UiGlyph.Layers, UiIconTone.Text, "Dock the connections panel to the other side of the window."),
             ["Transfer Queue"] = (Keys.None, UiGlyph.Queue, UiIconTone.Text, "Show or hide the transfer queue."),
             ["Session Log"] = (Keys.None, UiGlyph.Log, UiIconTone.Text, "Show or hide the session activity log."),
             ["Hidden Files"] = (Keys.None, UiGlyph.Hidden, UiIconTone.Text, "Show or hide items the provider marks as hidden."),

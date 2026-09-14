@@ -17,7 +17,12 @@ public sealed class DesktopPreferenceSectionMapperTests
         [nameof(DesktopUpdatePreferences.ConnectionDefaults)] = "its own section",
         [nameof(DesktopUpdatePreferences.ExternalEditorPath)] = "machine-specific section",
         [nameof(DesktopUpdatePreferences.PinnedWorkspaces)] = "machine-specific section",
-        [nameof(DesktopUpdatePreferences.RecentWorkspaces)] = "machine-specific section"
+        [nameof(DesktopUpdatePreferences.RecentWorkspaces)] = "machine-specific section",
+
+        // Window layout belongs to the machine it was sized on, exactly as the workspace lists do.
+        [nameof(DesktopUpdatePreferences.ConnectionsPanelWidth)] = "machine-specific window layout",
+        [nameof(DesktopUpdatePreferences.ConnectionsPanelVisible)] = "machine-specific window layout",
+        [nameof(DesktopUpdatePreferences.ConnectionsPanelSide)] = "machine-specific window layout"
     };
 
     [Fact]

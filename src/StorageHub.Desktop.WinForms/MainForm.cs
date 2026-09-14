@@ -29,6 +29,12 @@ public sealed class MainForm : Form
     private AgentMonitorStatus? _lastAgentStatus;
     private readonly bool _explorerDropBrokerAvailable;
     private readonly TabControl _workspaceTabs;
+    private readonly ConnectionsPanelControl _connectionsPanel;
+    private ToolStripButton? _connectionsPanelButton;
+    private readonly SplitContainer _shellSplit;
+    private readonly SplitContainer _workspaceSplit;
+    private ConnectionsPanelSide _connectionsPanelSide = ConnectionsPanelSide.Left;
+    private bool _restoringPanelLayout;
     private readonly TransferQueueControl _transferQueue;
     private readonly OverviewDashboardControl _overview;
     private readonly SyncTasksOverviewControl _syncTasks;
@@ -142,8 +148,31 @@ public sealed class MainForm : Form
         _manualTransfers.TransfersEnqueued += ManualTransfersEnqueued;
         mainSplit.Panel2.Controls.Add(_transferQueue);
 
+        _workspaceSplit = mainSplit;
+        _connectionsPanel = new ConnectionsPanelControl();
+        _connectionsPanel.ConnectionActivated += async (_, args) =>
+            await OpenConnectionInWorkspaceAsync(args.Connection, args.InNewPane).ConfigureAwait(true);
+        _connectionsPanel.EditRequested += (_, request) => ShowConnectionManager(request.ConnectionId, request.Tab);
+        _connectionsPanel.ConnectionsChanged += (_, _) => _ = _overview.RefreshAsync(_lifetime.Token);
+        _connectionsPanel.MoveSideRequested += (_, _) => ToggleConnectionsPanelSide();
+        _connectionsPanel.HideRequested += (_, _) => SetConnectionsPanelVisible(false);
+
+        _shellSplit = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical,
+            Size = new Size(1500, 760),
+            BackColor = StorageHubTheme.Border,
+            AccessibleName = "Connections and workspaces"
+        };
+        ApplyConnectionsPanelSide(
+            ConnectionsPanelSide.Left,
+            DesktopUpdatePreferences.DefaultConnectionsPanelWidth,
+            visible: true);
+        _shellSplit.SplitterMoved += ShellSplitterMoved;
+
         var statusStrip = BuildStatusStrip();
-        Controls.Add(mainSplit);
+        Controls.Add(_shellSplit);
         Controls.Add(statusStrip);
         Controls.Add(toolbar);
         Controls.Add(_menu);
@@ -161,6 +190,8 @@ public sealed class MainForm : Form
     {
         base.OnShown(e);
         _menu.Renderer = DesktopAppearanceService.MenuRenderer;
+        RestoreConnectionsPanelLayout();
+        _ = _connectionsPanel.RefreshAsync(_lifetime.Token);
         if (!_monitorStarted)
         {
             _monitorStarted = true;
@@ -496,24 +527,47 @@ public sealed class MainForm : Form
     /// Navigates the active pane to a favourite. Go is the pane-navigation menu, so a favourite
     /// replaces what the current pane is showing rather than opening a tab of its own.
     /// </summary>
-    private async Task OpenFavoriteConnectionAsync(ConnectionSummary connection)
+    private Task OpenFavoriteConnectionAsync(ConnectionSummary connection) =>
+        OpenConnectionInWorkspaceAsync(connection, inNewPane: false);
+
+    /// <summary>
+    /// Navigates a pane to a saved connection. Welcome and Sync tasks are not workspaces, so
+    /// opening from one of those creates a workspace to open into.
+    /// </summary>
+    private async Task OpenConnectionInWorkspaceAsync(ConnectionSummary connection, bool inNewPane)
     {
         if (GetActiveWorkspace() is null)
         {
             AddWorkspace(2);
         }
 
+        // SplitPane makes the new pane active, so the connection lands in the new one.
+        if (inNewPane && GetActiveWorkspace() is { } workspace)
+        {
+            _ = workspace.SplitPane(workspace.ActivePaneId, WorkspaceDockEdge.Right);
+        }
+
         var pane = GetActivePane();
         if (pane is null) return;
         await pane.RestoreStateAsync(
-            new BrowserPaneState(
-                connection.Type == ConnectionProfileType.Client
-                    ? PaneContentKind.SshClient
-                    : PaneContentKind.SavedStorage,
-                connection.ConnectionId,
-                connection.DisplayName),
+            StateFor(connection),
             reconnectRemote: true,
             _lifetime.Token).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// The one place that decides what kind of pane a saved connection opens into, so the panel
+    /// and the favourites menu cannot drift apart on it.
+    /// </summary>
+    internal static BrowserPaneState StateFor(ConnectionSummary connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        return new BrowserPaneState(
+            connection.Type == ConnectionProfileType.Client
+                ? PaneContentKind.SshClient
+                : PaneContentKind.SavedStorage,
+            connection.ConnectionId,
+            connection.DisplayName);
     }
 
     private ToolStrip BuildToolbar()
@@ -547,7 +601,12 @@ public sealed class MainForm : Form
         toolbar.Items.Add(CreateCommandButton(UiGlyph.Rename, "edit.rename"));
         toolbar.Items.Add(CreateCommandButton(UiGlyph.Delete, "edit.delete", UiIconTone.Danger));
         toolbar.Items.Add(new ToolStripSeparator());
-        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Connections, "Connection Manager", (_, _) => ShowConnectionManager()));
+        _connectionsPanelButton = CreateToolbarButton(
+            UiGlyph.Connections, "Connections panel", (_, _) => ToggleConnectionsPanel());
+        _connectionsPanelButton.CheckOnClick = false;
+        _connectionsPanelButton.AccessibleDescription = "Show or hide the saved-connections panel.";
+        toolbar.Items.Add(_connectionsPanelButton);
+        toolbar.Items.Add(CreateToolbarButton(UiGlyph.Add, "New connection", (_, _) => ShowConnectionManager()));
         toolbar.Items.Add(CreateCommandButton(UiGlyph.Key, "connections.key-store"));
         toolbar.Items.Add(new ToolStripSeparator());
         toolbar.Items.Add(CreateCommandButton(UiGlyph.Compare, "sync.compare-panes"));
@@ -976,6 +1035,12 @@ public sealed class MainForm : Form
                 case "Refresh":
                     NavigateActivePane(PaneNavigation.Refresh);
                     break;
+                case "Connections Panel":
+                    ToggleConnectionsPanel();
+                    break;
+                case "Move Connections Panel":
+                    ToggleConnectionsPanelSide();
+                    break;
                 case "Back":
                     NavigateActivePane(PaneNavigation.Back);
                     break;
@@ -1017,12 +1082,18 @@ public sealed class MainForm : Form
                     {
                         await ApplyConcurrencySettingsAsync();
                     }
+
+                    // Settings can open the connection editor from its provider list.
+                    RefreshConnectionSurfaces();
                     break;
                 case "Export Settings...":
                     ShowSettingsExport();
                     break;
                 case "Import Settings...":
                     await ShowSettingsImportAsync();
+
+                    // Connections are one of the importable sections.
+                    RefreshConnectionSurfaces();
                     break;
                 case "Check for Updates...":
                     ShowUpdateChecker();
@@ -1253,6 +1324,7 @@ public sealed class MainForm : Form
         pane.EditRequested += (_, _) => EditSelectedFile(pane);
         pane.ObjectInspectionRequested += (_, _) => ShowObjectInspector(pane);
         pane.ConnectionOpened += (_, args) => _overview.RecordRecentConnection(args.Connection);
+        pane.ConnectionsChanged += (_, _) => RefreshConnectionSurfaces();
     }
 
     private static void UpdateWorkspaceTab(TabPage page, WorkspaceControl workspace)
@@ -1418,6 +1490,171 @@ public sealed class MainForm : Form
     }
 
     private DesktopUpdatePreferences LoadPreferences() => _updatePreferencesStore.Load();
+
+    internal const string ConnectionsPanelCommandId = "view.connections-panel";
+    private const int ConnectionsPanelMinimum = 220;
+    private const int WorkspaceMinimum = 560;
+
+    internal bool IsConnectionsPanelVisible => _connectionsPanelSide == ConnectionsPanelSide.Left
+        ? !_shellSplit.Panel1Collapsed
+        : !_shellSplit.Panel2Collapsed;
+
+    /// <summary>
+    /// Docks the connections panel to one side and the workspace area to the other.
+    ///
+    /// Every property that depends on the side is set here together. A SplitContainer's
+    /// SplitterDistance is always Panel1's width, so which panel holds what, which one is fixed
+    /// while the window resizes, which minimum applies to which side, and which one the hide
+    /// toggle collapses all have to flip as one; splitting them across methods is how they drift.
+    /// </summary>
+    private void ApplyConnectionsPanelSide(ConnectionsPanelSide side, int width, bool visible)
+    {
+        _restoringPanelLayout = true;
+        _shellSplit.SuspendLayout();
+        try
+        {
+            _shellSplit.Panel1Collapsed = false;
+            _shellSplit.Panel2Collapsed = false;
+            _shellSplit.Panel1.Controls.Clear();
+            _shellSplit.Panel2.Controls.Clear();
+
+            var left = side == ConnectionsPanelSide.Left;
+            _shellSplit.Panel1.Controls.Add(left ? _connectionsPanel : _workspaceSplit);
+            _shellSplit.Panel2.Controls.Add(left ? _workspaceSplit : _connectionsPanel);
+            _shellSplit.Panel1MinSize = left ? ConnectionsPanelMinimum : WorkspaceMinimum;
+            _shellSplit.Panel2MinSize = left ? WorkspaceMinimum : ConnectionsPanelMinimum;
+            _shellSplit.FixedPanel = left ? FixedPanel.Panel1 : FixedPanel.Panel2;
+            _shellSplit.Panel1.BackColor = left ? StorageHubTheme.Surface : StorageHubTheme.Canvas;
+            _shellSplit.Panel2.BackColor = left ? StorageHubTheme.Canvas : StorageHubTheme.Surface;
+            _connectionsPanelSide = side;
+
+            SetConnectionsPanelWidth(width);
+            if (left)
+            {
+                _shellSplit.Panel1Collapsed = !visible;
+            }
+            else
+            {
+                _shellSplit.Panel2Collapsed = !visible;
+            }
+        }
+        finally
+        {
+            _shellSplit.ResumeLayout(true);
+            _restoringPanelLayout = false;
+        }
+    }
+
+    /// <summary>
+    /// Sets the panel's width in pixels whichever side it is on. SplitterDistance throws when it
+    /// would violate either minimum, so every write goes through here: clamped, and given up on
+    /// rather than crashing the shell when the window is too narrow to honour it at all.
+    /// </summary>
+    private void SetConnectionsPanelWidth(int width)
+    {
+        var available = _shellSplit.Width - _shellSplit.SplitterWidth;
+        if (available <= _shellSplit.Panel1MinSize + _shellSplit.Panel2MinSize)
+        {
+            return;
+        }
+
+        var distance = _connectionsPanelSide == ConnectionsPanelSide.Left ? width : available - width;
+        distance = Math.Clamp(
+            distance,
+            _shellSplit.Panel1MinSize,
+            available - _shellSplit.Panel2MinSize);
+        try
+        {
+            _shellSplit.SplitterDistance = distance;
+        }
+        catch (InvalidOperationException)
+        {
+            // The window is too small to honour the stored width; the default split stands.
+        }
+    }
+
+    internal int CurrentConnectionsPanelWidth() => _connectionsPanelSide == ConnectionsPanelSide.Left
+        ? _shellSplit.SplitterDistance
+        : _shellSplit.Width - _shellSplit.SplitterWidth - _shellSplit.SplitterDistance;
+
+    private void RestoreConnectionsPanelLayout()
+    {
+        var preferences = LoadPreferences();
+        ApplyConnectionsPanelSide(
+            preferences.ConnectionsPanelSide,
+            preferences.ConnectionsPanelWidth,
+            preferences.ConnectionsPanelVisible);
+        SyncConnectionsPanelCommandState();
+    }
+
+    private void ShellSplitterMoved(object? sender, SplitterEventArgs e)
+    {
+        if (!IsHandleCreated || _restoringPanelLayout || !IsConnectionsPanelVisible)
+        {
+            return;
+        }
+
+        var width = CurrentConnectionsPanelWidth();
+        if (width is < ConnectionsPanelMinimum or > DesktopUpdatePreferences.MaximumConnectionsPanelWidth)
+        {
+            return;
+        }
+
+        MutatePreferences(current => current with { ConnectionsPanelWidth = width });
+    }
+
+    internal void ToggleConnectionsPanelSide()
+    {
+        var side = _connectionsPanelSide == ConnectionsPanelSide.Left
+            ? ConnectionsPanelSide.Right
+            : ConnectionsPanelSide.Left;
+
+        // Carried across as a width rather than a splitter position, so the panel is the same size
+        // after the move instead of jumping to the mirror of where the splitter happened to be.
+        var width = IsConnectionsPanelVisible
+            ? CurrentConnectionsPanelWidth()
+            : LoadPreferences().ConnectionsPanelWidth;
+        ApplyConnectionsPanelSide(side, width, IsConnectionsPanelVisible);
+        MutatePreferences(current => current with { ConnectionsPanelSide = side });
+    }
+
+    internal void SetConnectionsPanelVisible(bool visible)
+    {
+        if (_connectionsPanelSide == ConnectionsPanelSide.Left)
+        {
+            _shellSplit.Panel1Collapsed = !visible;
+        }
+        else
+        {
+            _shellSplit.Panel2Collapsed = !visible;
+        }
+
+        SyncConnectionsPanelCommandState();
+        MutatePreferences(current => current with { ConnectionsPanelVisible = visible });
+        if (visible)
+        {
+            _ = _connectionsPanel.RefreshAsync(_lifetime.Token);
+        }
+    }
+
+    private void ToggleConnectionsPanel() => SetConnectionsPanelVisible(!IsConnectionsPanelVisible);
+
+    /// <summary>Mirrors the panel's visibility onto the two places that offer to change it.</summary>
+    private void SyncConnectionsPanelCommandState()
+    {
+        var visible = IsConnectionsPanelVisible;
+        if (_connectionsPanelButton is not null)
+        {
+            _connectionsPanelButton.Checked = visible;
+        }
+
+        foreach (var item in _menu.Items.OfType<ToolStripMenuItem>()
+            .SelectMany(root => root.DropDownItems.OfType<ToolStripMenuItem>())
+            .Where(item => item.Tag is string id && string.Equals(id, ConnectionsPanelCommandId, StringComparison.Ordinal)))
+        {
+            item.Checked = visible;
+        }
+    }
 
     /// <summary>
     /// Flattens the two stored lists into the order they are drawn in: pinned first, then recent
@@ -1622,10 +1859,36 @@ public sealed class MainForm : Form
         return saved;
     }
 
-    private void ShowConnectionManager()
+    private void ShowConnectionManager(
+        Guid? connectionId = null,
+        ConnectionEditorTab tab = ConnectionEditorTab.General)
     {
-        using var dialog = new ConnectionManagerForm();
-        _ = dialog.ShowDialog(this);
+        using var dialog = new ConnectionManagerForm(connectionId, initialTab: tab);
+
+        // Subscribed rather than only refreshing on close, so saving in the editor updates the
+        // panel behind it while the dialog is still open.
+        void ProfilesChanged(object? sender, EventArgs args) => RefreshConnectionSurfaces();
+        dialog.ProfilesChanged += ProfilesChanged;
+        try
+        {
+            _ = dialog.ShowDialog(this);
+        }
+        finally
+        {
+            dialog.ProfilesChanged -= ProfilesChanged;
+        }
+
+        RefreshConnectionSurfaces();
+    }
+
+    /// <summary>
+    /// Re-lists the two surfaces that show saved connections. There is no change bus: the routes
+    /// that can alter a connection call this instead, which keeps the subscription lifetime tied
+    /// to this window rather than to a static event that would outlive it.
+    /// </summary>
+    private void RefreshConnectionSurfaces()
+    {
+        _ = _connectionsPanel.RefreshAsync(_lifetime.Token);
         _ = _overview.RefreshAsync(_lifetime.Token);
     }
 
@@ -1805,6 +2068,8 @@ public sealed class MainForm : Form
         "Invert Selection" or
         "Properties" or
         "Refresh" or
+        "Connections Panel" or
+        "Move Connections Panel" or
         "Back" or
         "Forward" or
         "Up" or

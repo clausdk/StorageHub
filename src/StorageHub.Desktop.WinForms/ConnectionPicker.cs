@@ -49,6 +49,7 @@ internal static class ConnectionPickerFilter
         Contains(card.FolderPath, term) ||
         Contains(card.State, term) ||
         Contains(card.Provider.ToString(), term) ||
+        Contains(card.Descriptor.DisplayName, term) ||
         Contains(card.Type.ToString(), term) ||
         card.DisplayTags.Any(tag => Contains(tag, term));
 
